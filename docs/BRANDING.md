@@ -1,6 +1,8 @@
 # CSV Contract Workbench branding
 
-The CSV Contract Workbench mark combines a table frame, one column division, and row divisions with an open lower-right corner that resolves into a validation check. It uses the same Incursa indigo family and rounded construction as SpecTrace while remaining a distinct product symbol.
+The CSV Contract Workbench mark combines a table frame, one column division, and row divisions with an open lower-right corner that leads into a validation check. Deliberate negative space keeps the check distinct from the grid, including at 16px. It uses the same Incursa indigo family and rounded construction as SpecTrace while remaining a distinct product symbol.
+
+The approved before/after study and true-size checks are preserved in the [CSV Contract Figma design file](https://www.figma.com/design/342HejE612xMMeL30zAscf?node-id=5-2).
 
 ## Asset inventory
 

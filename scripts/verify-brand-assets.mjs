@@ -59,6 +59,22 @@ const iconSource = await readFile(resolve(root, "images/csv-contract-icon.svg"),
 requireText(iconSource, "#4459C6", "Icon source");
 requireText(iconSource, "#FFFFFF", "Icon source");
 
+const refinedMarkFragments = [
+  "M31 52H18a6 6 0 0 1-6-6V18a6 6 0 0 1 6-6H46a6 6 0 0 1 6 6V24",
+  "M12 27H42M12 40H29M28 12V52",
+  "M37 41L43 47L56 30"
+];
+for (const relativePath of [
+  "images/csv-contract-icon.svg",
+  "images/csv-contract-readme-banner.svg",
+  "images/csv-contract-wordmark-vscode.svg",
+  "resources/csv-contract.svg",
+  "artifacts/brand/csv-contract-brand-sheet.svg"
+]) {
+  const source = await readFile(resolve(root, relativePath), "utf8");
+  for (const fragment of refinedMarkFragments) requireText(source, fragment, relativePath);
+}
+
 const brandTerms = await readFile(resolve(root, "BRAND-ASSET-LICENSE.md"), "utf8");
 for (const relativePath of [
   "images/icon.png",

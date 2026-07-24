@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
   <title id="title">CSV Contract Workbench icon</title>
-  <desc id="desc">A white CSV table and validation check on an Incursa indigo rounded square.</desc>
+  <desc id="desc">A white CSV table and validation check separated by clear negative space on an Incursa indigo rounded square.</desc>
   <rect width="256" height="256" rx="52" fill="#4459C6"/>
-  <g transform="translate(20 20) scale(3.4)" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M31 52H17a5 5 0 0 1-5-5V17a5 5 0 0 1 5-5H47a5 5 0 0 1 5 5V29" stroke-width="7"/>
-    <path d="M12 26H52M12 39H30M28 12V52" stroke-width="6"/>
-    <path d="M34 42L41 49L55 31" stroke-width="7"/>
+  <g transform="translate(-8 0) scale(4)" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M31 52H18a6 6 0 0 1-6-6V18a6 6 0 0 1 6-6H46a6 6 0 0 1 6 6V24" stroke-width="6.5"/>
+    <path d="M12 27H42M12 40H29M28 12V52" stroke-width="5.5"/>
+    <path d="M37 41L43 47L56 30" stroke-width="6.5"/>
   </g>
 </svg>
