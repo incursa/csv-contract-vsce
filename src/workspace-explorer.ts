@@ -3,6 +3,8 @@ import { parseContract, validateCsv } from "./core/contract";
 import type { CsvContract, ValidationIssue, ValidationResult } from "./core/model";
 import {
   configuredTargets,
+  openTargetExternally,
+  openTargetInVsCode,
   readTargetText,
   targetKey,
   type ResolvedTarget
@@ -14,6 +16,8 @@ export const openExplorerCommand = "csv-contract-vsce.openExplorer";
 export const refreshExplorerCommand = "csv-contract-vsce.refreshExplorer";
 export const runSelectedCommand = "csv-contract-vsce.runSelectedContracts";
 export const showWorkspaceReportCommand = "csv-contract-vsce.showWorkspaceReport";
+export const openTargetInVsCodeCommand = "csv-contract-vsce.openTargetInVsCode";
+export const openTargetExternallyCommand = "csv-contract-vsce.openTargetExternally";
 
 const checkedContractsKey = "csvContractExplorer.checkedContracts";
 const contractPattern = "**/*.csvtest.{yaml,yml}";
@@ -24,6 +28,7 @@ interface ContractSnapshot {
   folder: vscode.WorkspaceFolder;
   relativePath: string;
   targetCount: number;
+  targets: ResolvedTarget[];
   parseError?: string;
 }
 
@@ -57,6 +62,7 @@ type ExplorerNodeData =
   | { kind: "report"; report: WorkspaceReport }
   | { kind: "workspace"; folder: vscode.WorkspaceFolder }
   | { kind: "contract"; snapshot: ContractSnapshot }
+  | { kind: "target"; target: ResolvedTarget }
   | { kind: "reportEntry"; entry: WorkspaceReportEntry }
   | { kind: "issue"; issue: ValidationIssue };
 
@@ -89,7 +95,13 @@ export function registerWorkspaceExplorer(
     ),
     vscode.commands.registerCommand(refreshExplorerCommand, () => provider.refresh()),
     vscode.commands.registerCommand(runSelectedCommand, () => provider.runSelected()),
-    vscode.commands.registerCommand(showWorkspaceReportCommand, () => provider.showReport())
+    vscode.commands.registerCommand(showWorkspaceReportCommand, () => provider.showReport()),
+    vscode.commands.registerCommand(openTargetInVsCodeCommand, (argument: ResolvedTarget | CsvContractTreeItem) =>
+      openExplorerTarget(argument, openTargetInVsCode)
+    ),
+    vscode.commands.registerCommand(openTargetExternallyCommand, (argument: ResolvedTarget | CsvContractTreeItem) =>
+      openExplorerTarget(argument, openTargetExternally)
+    )
   );
   return provider;
 }
@@ -152,6 +164,9 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
       return contracts
         .filter((contract) => contract.folder.uri.toString() === folder.uri.toString())
         .map((contract) => this.createContractNode(contract));
+    }
+    if (element.data.kind === "contract") {
+      return element.data.snapshot.targets.map((target) => this.createTargetNode(target));
     }
     if (element.data.kind === "reportEntry" && element.data.entry.result) {
       return element.data.entry.result.issues.map((issue) => this.createIssueNode(issue));
@@ -321,13 +336,15 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
         const relativePath = uri.path.slice(folder.uri.path.length).replace(/^\/+/, "");
         try {
           const contract = parseContract(new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)));
-          snapshots.push({ uri, folder, relativePath, targetCount: contract.targets?.length ?? 0 });
+          const targets = configuredTargets(uri, contract);
+          snapshots.push({ uri, folder, relativePath, targetCount: targets.length, targets });
         } catch (error) {
           snapshots.push({
             uri,
             folder,
             relativePath,
             targetCount: 0,
+            targets: [],
             parseError: error instanceof Error ? error.message : String(error)
           });
         }
@@ -369,7 +386,11 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
 
   private createContractNode(snapshot: ContractSnapshot): CsvContractTreeItem {
     const label = snapshot.relativePath.split("/").pop() ?? snapshot.relativePath;
-    const item = new CsvContractTreeItem(label, vscode.TreeItemCollapsibleState.None, { kind: "contract", snapshot });
+    const item = new CsvContractTreeItem(
+      label,
+      snapshot.targets.length > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+      { kind: "contract", snapshot }
+    );
     const reportEntries = this.lastReport?.entries.filter((entry) => entry.contractUri.toString() === snapshot.uri.toString()) ?? [];
     const failed = reportEntries.some((entry) => entry.result?.valid !== true);
     const passed = reportEntries.length > 0 && !failed;
@@ -390,6 +411,22 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
       command: "csv-contract-vsce.openWorkbench",
       title: "Open CSV Contract Workbench",
       arguments: [snapshot.uri]
+    };
+    return item;
+  }
+
+  private createTargetNode(target: ResolvedTarget): CsvContractTreeItem {
+    const isUrl = typeof target.source === "string";
+    const label = targetLabel(target);
+    const item = new CsvContractTreeItem(label, vscode.TreeItemCollapsibleState.None, { kind: "target", target });
+    item.description = isUrl ? "URL" : "File";
+    item.tooltip = `${target.label}\nClick to open in VS Code.`;
+    item.iconPath = new vscode.ThemeIcon(isUrl ? "link" : "file");
+    item.contextValue = "csvContractTarget";
+    item.command = {
+      command: openTargetInVsCodeCommand,
+      title: "Open Target in VS Code",
+      arguments: [target]
     };
     return item;
   }
@@ -419,4 +456,30 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
     item.iconPath = new vscode.ThemeIcon("error", new vscode.ThemeColor("testing.iconFailed"));
     return item;
   }
+}
+
+async function openExplorerTarget(
+  argument: ResolvedTarget | CsvContractTreeItem,
+  opener: (target: ResolvedTarget) => Promise<void>
+): Promise<void> {
+  const target = argument instanceof CsvContractTreeItem && argument.data.kind === "target"
+    ? argument.data.target
+    : argument as ResolvedTarget;
+  if (!target?.source) {
+    void vscode.window.showWarningMessage("That CSV target is no longer available.");
+    return;
+  }
+  try {
+    await opener(target);
+  } catch (error) {
+    void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function targetLabel(target: ResolvedTarget): string {
+  if (typeof target.source === "string") {
+    const parsed = new URL(target.source);
+    return parsed.pathname.split("/").filter(Boolean).pop() ?? parsed.hostname;
+  }
+  return target.label.split(/[\\/]/).filter(Boolean).pop() ?? target.label;
 }

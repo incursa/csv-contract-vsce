@@ -10,8 +10,8 @@ const expectedPngs = new Map([
   ["images/icon-32.png", [32, 32]],
   ["images/icon-16.png", [16, 16]],
   ["images/csv-contract-readme-banner.png", [960, 220]],
-  ["images/workbench-column-rules.png", [1440, 1760]],
-  ["images/workbench-results.png", [1440, 1873]],
+  ["images/workbench-column-rules.png", [1440, 1887]],
+  ["images/workbench-results.png", [1440, 2078]],
   ["artifacts/brand/csv-contract-brand-sheet.png", [1200, 720]]
 ]);
 

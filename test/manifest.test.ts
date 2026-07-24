@@ -8,11 +8,16 @@ test("contributes the workspace test Activity Bar view and commands", async () =
   assert.ok(commands.has("csv-contract-vsce.runSelectedContracts"));
   assert.ok(commands.has("csv-contract-vsce.showWorkspaceReport"));
   assert.ok(commands.has("csv-contract-vsce.refreshExplorer"));
+  assert.ok(commands.has("csv-contract-vsce.openTargetInVsCode"));
+  assert.ok(commands.has("csv-contract-vsce.openTargetExternally"));
   assert.equal(manifest.contributes.viewsContainers.activitybar[0].id, "csvContractExplorer");
   assert.equal(manifest.contributes.views.csvContractExplorer[0].id, "csvContractExplorer.contracts");
   assert.ok(manifest.activationEvents.includes("onView:csvContractExplorer.contracts"));
   const titleCommands = manifest.contributes.menus["view/title"].map((entry: { command: string }) => entry.command);
   assert.ok(titleCommands.includes("csv-contract-vsce.runSelectedContracts"));
+  const itemCommands = manifest.contributes.menus["view/item/context"].map((entry: { command: string }) => entry.command);
+  assert.ok(itemCommands.includes("csv-contract-vsce.openTargetInVsCode"));
+  assert.ok(itemCommands.includes("csv-contract-vsce.openTargetExternally"));
 });
 
 test("Marketplace README explains how to run the installed PowerShell wrapper", async () => {

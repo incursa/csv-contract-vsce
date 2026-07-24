@@ -6,7 +6,7 @@ Define reusable YAML contracts for CSV files, edit them visually in VS Code, and
 
 ## Build contracts visually
 
-Create a contract from a CSV to start with its real column names, then set presence and data-quality rules from the workbench. Save one or more local paths or HTTP/HTTPS URLs as test targets when the same contract should run without prompting. The YAML file remains the source of truth and can always be edited directly with schema-aware IntelliSense.
+Create a contract from a CSV to start with its real column names, then set presence and data-quality rules from the workbench. Save one or more local paths or HTTP/HTTPS URLs as test targets when the same contract should run without prompting. Each configured target can be opened in VS Code or with its registered external application; URL targets open in a read-only VS Code document or in the browser. The YAML file remains the source of truth and can always be edited directly with schema-aware IntelliSense.
 
 ![Configure column rules in CSV Contract Workbench](images/workbench-column-rules.png)
 
@@ -14,7 +14,7 @@ Create a contract from a CSV to start with its real column names, then set prese
 
 ## See failures in context
 
-Run a contract against a CSV and review file, column, row, and cell failures alongside the rules that produced them.
+Run a contract against a CSV and review file, column, row, and cell failures directly below the run summary, before the column and row-test editors.
 
 ![Review CSV validation results in CSV Contract Workbench](images/workbench-results.png)
 
@@ -22,7 +22,7 @@ Run a contract against a CSV and review file, column, row, and cell failures alo
 
 ## Run workspace test suites
 
-Open **CSV Contract** in the Activity Bar to see every `*.csvtest.yaml` and `*.csvtest.yml` file in the workspace. Check the contracts you want, select **Run Selected**, and review the consolidated pass/fail report. Contracts that share a target reuse the same loaded CSV, and the selection remains checked for the workspace.
+Open **CSV Contract** in the Activity Bar to see every `*.csvtest.yaml` and `*.csvtest.yml` file in the workspace. Expand a contract to inspect and open its local or URL targets. Check the contracts you want, select **Run Selected**, and review the consolidated pass/fail report. Contracts that share a target reuse the same loaded CSV, and the selection remains checked for the workspace.
 
 ## What you can validate
 

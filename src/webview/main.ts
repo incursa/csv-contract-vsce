@@ -154,6 +154,8 @@ function render(): void {
       <div class="workbench-actions">
         <button class="inc-btn inc-btn--outline-secondary" data-action="choose-csv">Select test CSV</button>
         ${configuredTargetCount > 0 && !usingConfiguredTargets ? `<button class="inc-btn inc-btn--outline-secondary" data-action="use-configured-targets">Use configured CSVs</button>` : ""}
+        ${targetNames.length > 0 ? `<button class="inc-btn inc-btn--outline-secondary" data-action="open-active-target-vscode">Open CSV in VS Code</button>
+        <button class="inc-btn inc-btn--outline-secondary" data-action="open-active-target-external">Open CSV externally</button>` : ""}
         <button class="inc-btn inc-btn--outline-secondary" data-action="open-yaml">Open YAML</button>
         <button class="inc-btn inc-btn--primary" data-action="run">Run tests</button>
       </div>
@@ -172,6 +174,10 @@ function render(): void {
             return `<div class="configured-target-row">
               <span class="target-type">${type}</span>
               <code title="${escape(value)}">${escape(value)}</code>
+              <div class="configured-target-row__actions">
+                <button type="button" class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="open-target-vscode" data-index="${index}">Open in VS Code</button>
+                <button type="button" class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="open-target-external" data-index="${index}">Open externally</button>
+              </div>
               <button type="button" class="icon-button" data-action="remove-target" data-index="${index}" aria-label="Remove ${type.toLowerCase()} target">×</button>
             </div>`;
           }).join("") || `<p class="empty compact-empty">No saved targets. You can still select CSVs for this session.</p>`}
@@ -186,6 +192,21 @@ function render(): void {
         ["Rules", names.length + (contract.rowTests?.length ?? 0)],
         ["Failures", runs.length > 0 ? issueCount : "—"]
       ].map(([label, value]) => `<article class="inc-card metric"><span>${label}</span><strong>${escape(value)}</strong></article>`).join("")}
+    </section>
+    <section class="inc-card pane results-pane">
+      <div class="pane-heading"><div><h2>Latest results</h2><p>${runs.length > 0 ? `${runs.filter((run) => run.result.valid).length} of ${runs.length} targets passed` : "Run the contract to see results."}</p></div></div>
+      <div class="results">
+        ${runs.map((run) => `<section class="target-result">
+          <div class="target-result__heading">
+            <span class="${run.result.valid ? "target-result__pass" : "target-result__fail"}">${run.result.valid ? "PASS" : "FAIL"}</span>
+            <code title="${escape(run.target)}">${escape(run.target)}</code>
+            <small>${run.result.rowCount.toLocaleString()} rows · ${run.result.issueCount.toLocaleString()} issues</small>
+          </div>
+          ${run.result.issues.length
+            ? run.result.issues.slice(0, 10).map((issue) => `<div class="result result--fail"><span>FAIL</span><code>${escape(issue.testId ?? issue.code)}</code><p>${escape(issue.message)}</p></div>`).join("")
+            : `<div class="result result--pass"><span>PASS</span><code>all-tests</code><p>All configured checks passed.</p></div>`}
+        </section>`).join("") || `<p class="empty compact-empty">No test results yet.</p>`}
+      </div>
     </section>
     <section class="split">
       <article class="inc-card pane columns-pane">
@@ -224,7 +245,7 @@ function render(): void {
         <label>Regex pattern<input id="matches" class="form-control" value="${escape(constraints.matches ?? "")}" placeholder="^\\d+$"></label>
       </article>
     </section>
-    <section class="split lower">
+    <section class="lower">
       <article class="inc-card pane row-tests-pane">
         <div class="pane-heading"><div><h2>Row &amp; cell tests</h2><p>Selectors use declared columns and exact raw string values.</p></div><button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="add-row-test">Add test</button></div>
         <div class="row-test-layout">
@@ -235,21 +256,6 @@ function render(): void {
             </button>`).join("") || `<p class="empty">No row tests yet.</p>`}
           </div>
           ${renderRowTestEditor(names)}
-        </div>
-      </article>
-      <article class="inc-card pane">
-        <div class="pane-heading"><div><h2>Latest results</h2><p>${runs.length > 0 ? `${runs.filter((run) => run.result.valid).length} of ${runs.length} targets passed` : "Run the contract to see results."}</p></div></div>
-        <div class="results">
-          ${runs.map((run) => `<section class="target-result">
-            <div class="target-result__heading">
-              <span class="${run.result.valid ? "target-result__pass" : "target-result__fail"}">${run.result.valid ? "PASS" : "FAIL"}</span>
-              <code title="${escape(run.target)}">${escape(run.target)}</code>
-              <small>${run.result.rowCount.toLocaleString()} rows · ${run.result.issueCount.toLocaleString()} issues</small>
-            </div>
-            ${run.result.issues.length
-              ? run.result.issues.slice(0, 10).map((issue) => `<div class="result result--fail"><span>FAIL</span><code>${escape(issue.testId ?? issue.code)}</code><p>${escape(issue.message)}</p></div>`).join("")
-              : `<div class="result result--pass"><span>PASS</span><code>all-tests</code><p>All configured checks passed.</p></div>`}
-          </section>`).join("")}
         </div>
       </article>
     </section>`;
@@ -340,8 +346,20 @@ function bind(): void {
   );
   app.querySelector('[data-action="choose-csv"]')?.addEventListener("click", () => vscode.postMessage({ type: "chooseCsv" }));
   app.querySelector('[data-action="use-configured-targets"]')?.addEventListener("click", () => vscode.postMessage({ type: "useConfiguredTargets" }));
+  app.querySelector('[data-action="open-active-target-vscode"]')?.addEventListener("click", () =>
+    vscode.postMessage({ type: "openActiveTargetInVsCode" })
+  );
+  app.querySelector('[data-action="open-active-target-external"]')?.addEventListener("click", () =>
+    vscode.postMessage({ type: "openActiveTargetExternally" })
+  );
   app.querySelector('[data-action="add-target-files"]')?.addEventListener("click", () => vscode.postMessage({ type: "addTargetFiles" }));
   app.querySelector('[data-action="add-target-url"]')?.addEventListener("click", () => vscode.postMessage({ type: "addTargetUrl" }));
+  app.querySelectorAll<HTMLElement>('[data-action="open-target-vscode"]').forEach((button) => button.addEventListener("click", () =>
+    vscode.postMessage({ type: "openTargetInVsCode", index: Number(button.dataset.index) })
+  ));
+  app.querySelectorAll<HTMLElement>('[data-action="open-target-external"]').forEach((button) => button.addEventListener("click", () =>
+    vscode.postMessage({ type: "openTargetExternally", index: Number(button.dataset.index) })
+  ));
   app.querySelectorAll<HTMLElement>('[data-action="remove-target"]').forEach((button) => button.addEventListener("click", () => {
     if (!contract?.targets) return;
     contract.targets.splice(Number(button.dataset.index), 1);

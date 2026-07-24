@@ -87,12 +87,43 @@ if ((await page.locator(".configured-target-row").count()) !== 3) throw new Erro
 if ((await page.locator(".target-type").allTextContents()).join(",") !== "PATH,PATH,URL") {
   throw new Error("Configured target types did not render correctly.");
 }
+if ((await page.locator('[data-action="open-target-vscode"]').count()) !== 3
+  || (await page.locator('[data-action="open-target-external"]').count()) !== 3) {
+  throw new Error("Configured targets do not expose both open actions.");
+}
+await page.locator('[data-action="open-target-vscode"]').first().click();
+let openMessage = await page.evaluate(() => window.__messages.at(-1));
+if (openMessage?.type !== "openTargetInVsCode" || openMessage.index !== 0) {
+  throw new Error("Open in VS Code did not send the expected host message.");
+}
+await page.locator('[data-action="open-target-external"]').last().click();
+openMessage = await page.evaluate(() => window.__messages.at(-1));
+if (openMessage?.type !== "openTargetExternally" || openMessage.index !== 2) {
+  throw new Error("Open externally did not send the expected host message.");
+}
+await page.locator('[data-action="open-active-target-vscode"]').click();
+openMessage = await page.evaluate(() => window.__messages.at(-1));
+if (openMessage?.type !== "openActiveTargetInVsCode") {
+  throw new Error("Opening the active test CSV in VS Code did not send the expected host message.");
+}
+await page.locator('[data-action="open-active-target-external"]').click();
+openMessage = await page.evaluate(() => window.__messages.at(-1));
+if (openMessage?.type !== "openActiveTargetExternally") {
+  throw new Error("Opening the active test CSV externally did not send the expected host message.");
+}
 await mkdir("artifacts/runtime", { recursive: true });
 await mkdir("images", { recursive: true });
 await page.screenshot({ path: "images/workbench-column-rules.png", fullPage: true });
 
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), failedState);
-await page.locator("text=Status").first().click();
+const resultsPosition = await page.evaluate(() => ({
+  resultsTop: document.querySelector(".results-pane").getBoundingClientRect().top,
+  columnsTop: document.querySelector(".columns-pane").getBoundingClientRect().top
+}));
+if (resultsPosition.resultsTop >= resultsPosition.columnsTop) {
+  throw new Error(`Latest results must appear above the column editor: ${JSON.stringify(resultsPosition)}`);
+}
+await page.locator('[data-column="Status"]').click();
 if ((await page.locator("#allowedValues").inputValue()) !== "Active\nInactive") {
   throw new Error("Column selection did not update the inspector.");
 }
@@ -210,6 +241,17 @@ await page.setViewportSize({ width: 600, height: 900 });
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), state);
 const mobileOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
 if (mobileOverflow > 1) throw new Error(`Workbench has ${mobileOverflow}px of page-level horizontal overflow at 600px.`);
+await page.setViewportSize({ width: 1170, height: 900 });
+await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), failedState);
+const compactOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+if (compactOverflow > 1) throw new Error(`Workbench has ${compactOverflow}px of page-level horizontal overflow at 1170px.`);
+const compactLayout = await page.evaluate(() => ({
+  targetColumns: getComputedStyle(document.querySelector(".workbench-target")).gridTemplateColumns,
+  rowTestColumns: getComputedStyle(document.querySelector(".row-test-layout")).gridTemplateColumns
+}));
+if (compactLayout.targetColumns.split(" ").length !== 1 || compactLayout.rowTestColumns.split(" ").length !== 1) {
+  throw new Error(`Workbench did not stack crowded controls at 1170px: ${JSON.stringify(compactLayout)}`);
+}
 if (qaScreenshotDir) await page.screenshot({ path: `${qaScreenshotDir}/mobile-row-test-editor.png`, fullPage: false });
 if (consoleProblems.length > 0) throw new Error(`Webview console problems:\n${consoleProblems.join("\n")}`);
 await browser.close();

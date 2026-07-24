@@ -3,7 +3,10 @@ import { createContractFromCsv, parseContract, serializeContract, validateCsv } 
 import type { CsvContract, ValidationResult } from "./core/model";
 import {
   configuredTargets,
+  openTargetExternally,
+  openTargetInVsCode,
   readTargetText,
+  registerTargetContentProvider,
   relativeTargetPath,
   type ResolvedTarget
 } from "./vscode-targets";
@@ -19,6 +22,7 @@ interface TargetRun {
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("CSV Contract");
   const provider = new ContractEditorProvider(context);
+  registerTargetContentProvider(context);
   context.subscriptions.push(
     output,
     vscode.window.registerCustomEditorProvider(viewType, provider, {
@@ -165,6 +169,30 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         contract.targets ??= [];
         if (!contract.targets.some((target) => target.url === url)) contract.targets.push({ url });
         await this.replaceDocument(document, serializeContract(contract));
+      } else if (message.type === "openTargetInVsCode" || message.type === "openTargetExternally") {
+        const contract = parseContract(document.getText());
+        const target = configuredTargets(document.uri, contract)[Number(message.index)];
+        if (!target) {
+          void vscode.window.showWarningMessage("That configured CSV target is no longer available.");
+          return;
+        }
+        try {
+          if (message.type === "openTargetInVsCode") await openTargetInVsCode(target);
+          else await openTargetExternally(target);
+        } catch (error) {
+          void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+        }
+      } else if (message.type === "openActiveTargetInVsCode" || message.type === "openActiveTargetExternally") {
+        const contract = parseContract(document.getText());
+        const targets = manualTargets ?? configuredTargets(document.uri, contract);
+        const target = await selectTargetToOpen(targets);
+        if (!target) return;
+        try {
+          if (message.type === "openActiveTargetInVsCode") await openTargetInVsCode(target);
+          else await openTargetExternally(target);
+        } catch (error) {
+          void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+        }
       } else if (message.type === "run") {
         const contract = parseContract(document.getText());
         const targets = manualTargets ?? configuredTargets(document.uri, contract);
@@ -217,4 +245,23 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
 </body>
 </html>`;
   }
+}
+
+async function selectTargetToOpen(targets: ResolvedTarget[]): Promise<ResolvedTarget | undefined> {
+  if (targets.length === 0) {
+    void vscode.window.showWarningMessage("Select a test CSV or add a configured target first.");
+    return undefined;
+  }
+  if (targets.length === 1) return targets[0];
+  return (await vscode.window.showQuickPick(
+    targets.map((target) => ({
+      label: target.label,
+      description: typeof target.source === "string" ? "URL" : "File",
+      target
+    })),
+    {
+      title: "Open test CSV",
+      placeHolder: "Choose a test target"
+    }
+  ))?.target;
 }

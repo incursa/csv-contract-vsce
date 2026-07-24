@@ -2,7 +2,7 @@
   "name": "csv-contract-vsce",
   "displayName": "CSV Contract Workbench",
   "description": "Design and run reusable YAML contracts for CSV files in VS Code, PowerShell, or Node.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "incursa",
   "license": "Apache-2.0",
   "engines": {
@@ -76,6 +76,18 @@
         "title": "CSV Contract: Refresh Workspace Tests",
         "category": "CSV Contract",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "csv-contract-vsce.openTargetInVsCode",
+        "title": "CSV Contract: Open Target in VS Code",
+        "category": "CSV Contract",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "csv-contract-vsce.openTargetExternally",
+        "title": "CSV Contract: Open Target Externally",
+        "category": "CSV Contract",
+        "icon": "$(link-external)"
       }
     ],
     "viewsContainers": {
@@ -111,6 +123,18 @@
           "command": "csv-contract-vsce.refreshExplorer",
           "when": "view == csvContractExplorer.contracts",
           "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "csv-contract-vsce.openTargetInVsCode",
+          "when": "view == csvContractExplorer.contracts && viewItem == csvContractTarget",
+          "group": "inline@1"
+        },
+        {
+          "command": "csv-contract-vsce.openTargetExternally",
+          "when": "view == csvContractExplorer.contracts && viewItem == csvContractTarget",
+          "group": "inline@2"
         }
       ]
     },
@@ -163,7 +187,9 @@
     "onCommand:csv-contract-vsce.openExplorer",
     "onCommand:csv-contract-vsce.runSelectedContracts",
     "onCommand:csv-contract-vsce.showWorkspaceReport",
-    "onCommand:csv-contract-vsce.refreshExplorer"
+    "onCommand:csv-contract-vsce.refreshExplorer",
+    "onCommand:csv-contract-vsce.openTargetInVsCode",
+    "onCommand:csv-contract-vsce.openTargetExternally"
   ],
   "scripts": {
     "clean": "node scripts/clean.mjs",

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- Added **Open in VS Code** and **Open externally** actions for every configured CSV target in the Workbench.
+- Added expandable target nodes with the same actions to the Workspace Tests Activity Bar view.
+- Opened local files with the registered desktop application and remote URLs in the browser when using the external action.
+- Opened URL targets as read-only CSV documents inside VS Code without requiring a local download.
+- Moved the latest test results directly below the summary metrics so failures remain visible above long column lists.
+- Improved responsive wrapping for target controls, results, and row/cell test editing at narrower editor widths.
+
 ## 0.3.0
 
 - Added a native CSV Contract Activity Bar view that discovers contract files across every workspace folder.
