@@ -142,7 +142,7 @@ function render(): void {
         <code>${escape(contractName)}</code>
       </div>
       <div class="workbench-actions">
-        <button class="inc-btn inc-btn--outline-secondary" data-action="choose-csv">Import CSV</button>
+        <button class="inc-btn inc-btn--outline-secondary" data-action="choose-csv">Select test CSV</button>
         <button class="inc-btn inc-btn--outline-secondary" data-action="open-yaml">Open YAML</button>
         <button class="inc-btn inc-btn--primary" data-action="run">Run tests</button>
       </div>

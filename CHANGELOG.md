@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.5
+
+- Renamed the Workbench CSV picker to **Select test CSV** to make clear that selecting a validation target does not replace the existing contract or its tests.
+- Updated the Marketplace instructions and screenshots to match the clearer workflow.
+
 ## 0.1.4
 
 - Replaced low-contrast presence badges with readable required and optional labels.
