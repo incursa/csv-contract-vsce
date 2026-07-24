@@ -17,7 +17,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $generator = Join-Path $PSScriptRoot 'generate-large-csv.mjs'
-$nodeCommand = Get-Command -Name $NodeExecutable -CommandType Application -ErrorAction Stop
+$nodeCommand = @(Get-Command -Name $NodeExecutable -CommandType Application -ErrorAction Stop)[0]
 $outputPath = [System.IO.Path]::GetFullPath($Output)
 if ((Test-Path -LiteralPath $outputPath) -and -not $Force) {
     throw "Output already exists: $outputPath. Use -Force to replace it."

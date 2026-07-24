@@ -27,7 +27,7 @@ $csvPath = Join-Path $outputRoot ("benchmark-{0}-rows-{1}-cols.csv" -f $Rows, $C
 $contractPath = Join-Path $repoRoot 'test\fixtures\powershell\contracts\performance.csvtest.yaml'
 $generator = Join-Path $PSScriptRoot 'New-LargeCsvFixture.ps1'
 $testScript = Join-Path $PSScriptRoot 'Test-CsvContract.ps1'
-$nodeCommand = Get-Command -Name $NodeExecutable -CommandType Application -ErrorAction Stop
+$nodeCommand = @(Get-Command -Name $NodeExecutable -CommandType Application -ErrorAction Stop)[0]
 $hostExecutable = (Get-Process -Id $PID).Path
 $errorFile = Join-Path $outputRoot 'benchmark.stderr.txt'
 

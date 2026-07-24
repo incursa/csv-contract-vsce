@@ -26,7 +26,7 @@ if (-not (Test-Path -LiteralPath $cliPath -PathType Leaf)) {
     throw "CLI bundle not found at '$cliPath'. Run 'npm run build:production' first."
 }
 
-$nodeCommand = Get-Command -Name $NodeExecutable -CommandType Application -ErrorAction Stop
+$nodeCommand = @(Get-Command -Name $NodeExecutable -CommandType Application -ErrorAction Stop)[0]
 $outputPath = [System.IO.Path]::GetFullPath($Output)
 if ((Test-Path -LiteralPath $outputPath) -and -not $Force) {
     throw "Output already exists: $outputPath. Use -Force to replace it."

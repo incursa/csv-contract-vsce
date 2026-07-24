@@ -16,7 +16,7 @@ if (-not (Test-Path -LiteralPath $cliPath -PathType Leaf)) {
     throw "CLI bundle not found. Run 'npm run build:production' before the PowerShell suite."
 }
 
-$nodeCommand = Get-Command -Name $NodeExecutable -CommandType Application -ErrorAction Stop
+$nodeCommand = @(Get-Command -Name $NodeExecutable -CommandType Application -ErrorAction Stop)[0]
 $hostExecutable = (Get-Process -Id $PID).Path
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('csv-contract-powershell-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $temporaryRoot -Force | Out-Null
