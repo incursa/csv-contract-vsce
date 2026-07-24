@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3
+
+- Refined and enlarged the table-and-check mark for cleaner balance and stronger small-size legibility.
+- Added deliberate negative space between the CSV grid and validation check across Marketplace, banner, wordmark, monochrome, and compact assets.
+- Documented the approved refinement in the CSV Contract Figma design file and verified it at 256, 64, 32, and 16 pixels.
+
 ## 0.1.2
 
 - Reworked the Marketplace overview around end-user workflows and validation capabilities.

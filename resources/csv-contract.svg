@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
   <title id="title">CSV Contract mark — VS Code activity bar</title>
-  <desc id="desc">A compact CSV table frame with column and row divisions, completed by a validation check.</desc>
+  <desc id="desc">A compact CSV table frame with column and row divisions, separated from a validation check by clear negative space.</desc>
   <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M31 52H17a5 5 0 0 1-5-5V17a5 5 0 0 1 5-5H47a5 5 0 0 1 5 5V29" stroke-width="7"/>
-    <path d="M12 26H52M12 39H30M28 12V52" stroke-width="6"/>
-    <path d="M34 42L41 49L55 31" stroke-width="7"/>
+    <path d="M31 52H18a6 6 0 0 1-6-6V18a6 6 0 0 1 6-6H46a6 6 0 0 1 6 6V24" stroke-width="6.5"/>
+    <path d="M12 27H42M12 40H29M28 12V52" stroke-width="5.5"/>
+    <path d="M37 41L43 47L56 30" stroke-width="6.5"/>
   </g>
 </svg>
