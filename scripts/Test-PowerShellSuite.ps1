@@ -178,6 +178,7 @@ try {
     }
     Write-Host ''
     Write-Host "PowerShell suite passed: $passes checks under $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)." -ForegroundColor Green
+    exit 0
 }
 finally {
     if ($KeepTemporaryFiles) {
