@@ -1,0 +1,23 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+
+test("contributes the workspace test Activity Bar view and commands", async () => {
+  const manifest = JSON.parse(await readFile("package.json", "utf8"));
+  const commands = new Set(manifest.contributes.commands.map((entry: { command: string }) => entry.command));
+  assert.ok(commands.has("csv-contract-vsce.runSelectedContracts"));
+  assert.ok(commands.has("csv-contract-vsce.showWorkspaceReport"));
+  assert.ok(commands.has("csv-contract-vsce.refreshExplorer"));
+  assert.equal(manifest.contributes.viewsContainers.activitybar[0].id, "csvContractExplorer");
+  assert.equal(manifest.contributes.views.csvContractExplorer[0].id, "csvContractExplorer.contracts");
+  assert.ok(manifest.activationEvents.includes("onView:csvContractExplorer.contracts"));
+  const titleCommands = manifest.contributes.menus["view/title"].map((entry: { command: string }) => entry.command);
+  assert.ok(titleCommands.includes("csv-contract-vsce.runSelectedContracts"));
+});
+
+test("Marketplace README explains how to run the installed PowerShell wrapper", async () => {
+  const readme = await readFile("README.md", "utf8");
+  assert.match(readme, /code --locate-extension incursa\.csv-contract-vsce/);
+  assert.match(readme, /scripts\\Test-CsvContract\.ps1/);
+  assert.match(readme, /Run workspace test suites/);
+});

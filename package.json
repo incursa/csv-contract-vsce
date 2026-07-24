@@ -2,7 +2,7 @@
   "name": "csv-contract-vsce",
   "displayName": "CSV Contract Workbench",
   "description": "Design and run reusable YAML contracts for CSV files in VS Code, PowerShell, or Node.",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "incursa",
   "license": "Apache-2.0",
   "engines": {
@@ -53,8 +53,67 @@
         "command": "csv-contract-vsce.openWorkbench",
         "title": "CSV Contract: Open Workbench",
         "category": "CSV Contract"
+      },
+      {
+        "command": "csv-contract-vsce.openExplorer",
+        "title": "CSV Contract: Open Workspace Tests",
+        "category": "CSV Contract"
+      },
+      {
+        "command": "csv-contract-vsce.runSelectedContracts",
+        "title": "CSV Contract: Run Selected Workspace Contracts",
+        "category": "CSV Contract",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "csv-contract-vsce.showWorkspaceReport",
+        "title": "CSV Contract: Show Workspace Report",
+        "category": "CSV Contract",
+        "icon": "$(output)"
+      },
+      {
+        "command": "csv-contract-vsce.refreshExplorer",
+        "title": "CSV Contract: Refresh Workspace Tests",
+        "category": "CSV Contract",
+        "icon": "$(refresh)"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "csvContractExplorer",
+          "title": "CSV Contract",
+          "icon": "resources/csv-contract.svg"
+        }
+      ]
+    },
+    "views": {
+      "csvContractExplorer": [
+        {
+          "id": "csvContractExplorer.contracts",
+          "name": "Workspace Tests"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "csv-contract-vsce.runSelectedContracts",
+          "when": "view == csvContractExplorer.contracts",
+          "group": "navigation@1"
+        },
+        {
+          "command": "csv-contract-vsce.showWorkspaceReport",
+          "when": "view == csvContractExplorer.contracts",
+          "group": "navigation@2"
+        },
+        {
+          "command": "csv-contract-vsce.refreshExplorer",
+          "when": "view == csvContractExplorer.contracts",
+          "group": "navigation@3"
+        }
+      ]
+    },
     "customEditors": [
       {
         "viewType": "csv-contract-vsce.contractEditor",
@@ -99,7 +158,12 @@
     "onCustomEditor:csv-contract-vsce.contractEditor",
     "onCommand:csv-contract-vsce.createFromCsv",
     "onCommand:csv-contract-vsce.runContract",
-    "onCommand:csv-contract-vsce.openWorkbench"
+    "onCommand:csv-contract-vsce.openWorkbench",
+    "onView:csvContractExplorer.contracts",
+    "onCommand:csv-contract-vsce.openExplorer",
+    "onCommand:csv-contract-vsce.runSelectedContracts",
+    "onCommand:csv-contract-vsce.showWorkspaceReport",
+    "onCommand:csv-contract-vsce.refreshExplorer"
   ],
   "scripts": {
     "clean": "node scripts/clean.mjs",

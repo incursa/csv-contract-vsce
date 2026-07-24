@@ -20,6 +20,10 @@ Run a contract against a CSV and review file, column, row, and cell failures alo
 
 *Inspect the selected column and the latest validation result in one workspace.*
 
+## Run workspace test suites
+
+Open **CSV Contract** in the Activity Bar to see every `*.csvtest.yaml` and `*.csvtest.yml` file in the workspace. Check the contracts you want, select **Run Selected**, and review the consolidated pass/fail report. Contracts that share a target reuse the same loaded CSV, and the selection remains checked for the workspace.
+
 ## What you can validate
 
 - Expected and optional columns, with control over undeclared extras
@@ -54,3 +58,29 @@ CSV contents and contracts are processed locally. CSV Contract Workbench does no
 ## License
 
 The extension code and documentation are licensed under Apache-2.0. CSV Contract Workbench and its product marks are Incursa brand assets and are not granted under that license.
+
+## Run from PowerShell
+
+The installed extension includes the PowerShell wrapper and its bundled validation engine. Node must be available on `PATH`, but no separate tooling download is required.
+
+Locate the currently installed extension and run every target configured in a contract:
+
+```powershell
+$extensionRoot = (& code --locate-extension incursa.csv-contract-vsce).Trim()
+$testScript = Join-Path $extensionRoot 'scripts\Test-CsvContract.ps1'
+
+& $testScript `
+  -Contract 'C:\path\to\customers.csvtest.yaml'
+```
+
+Run several contracts together:
+
+```powershell
+& $testScript `
+  -Contract @(
+    'C:\path\to\customers-general.csvtest.yaml',
+    'C:\path\to\customers-spot-checks.csvtest.yaml'
+  )
+```
+
+Configured file paths and URLs are used automatically. Supply `-Csv` only when you want to override them for a particular run.

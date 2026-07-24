@@ -1,13 +1,15 @@
 import * as vscode from "vscode";
 import { createContractFromCsv, parseContract, serializeContract, validateCsv } from "./core/contract";
-import type { CsvContract, CsvTarget, ValidationResult } from "./core/model";
+import type { CsvContract, ValidationResult } from "./core/model";
+import {
+  configuredTargets,
+  readTargetText,
+  relativeTargetPath,
+  type ResolvedTarget
+} from "./vscode-targets";
+import { registerWorkspaceExplorer } from "./workspace-explorer";
 
 const viewType = "csv-contract-vsce.contractEditor";
-
-interface ResolvedTarget {
-  label: string;
-  source: vscode.Uri | string;
-}
 
 interface TargetRun {
   target: string;
@@ -25,8 +27,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("csv-contract-vsce.createFromCsv", () => createFromCsv()),
     vscode.commands.registerCommand("csv-contract-vsce.runContract", () => runContract(output)),
-    vscode.commands.registerCommand("csv-contract-vsce.openWorkbench", () => openWorkbench())
+    vscode.commands.registerCommand("csv-contract-vsce.openWorkbench", (uri?: vscode.Uri) => openWorkbench(uri))
   );
+  registerWorkspaceExplorer(context, output);
 }
 
 export function deactivate(): void {}
@@ -37,64 +40,6 @@ async function pickFile(filters: Record<string, string[]>): Promise<vscode.Uri |
 
 async function pickFiles(filters: Record<string, string[]>, canSelectMany = true): Promise<vscode.Uri[] | undefined> {
   return vscode.window.showOpenDialog({ canSelectMany, filters });
-}
-
-function relativeTargetPath(contractUri: vscode.Uri, targetUri: vscode.Uri): string {
-  if (contractUri.scheme !== targetUri.scheme || contractUri.authority !== targetUri.authority) {
-    return targetUri.fsPath || targetUri.path;
-  }
-  const contractParts = contractUri.path.split("/").filter(Boolean);
-  const targetParts = targetUri.path.split("/").filter(Boolean);
-  contractParts.pop();
-  if (
-    contractUri.scheme === "file"
-    && contractParts[0]?.endsWith(":")
-    && targetParts[0]?.endsWith(":")
-    && contractParts[0].toLowerCase() !== targetParts[0].toLowerCase()
-  ) {
-    return targetUri.fsPath;
-  }
-  let common = 0;
-  while (
-    common < contractParts.length
-    && common < targetParts.length
-    && (contractUri.scheme === "file"
-      ? contractParts[common].toLowerCase() === targetParts[common].toLowerCase()
-      : contractParts[common] === targetParts[common])
-  ) {
-    common += 1;
-  }
-  const value = [
-    ...Array.from({ length: contractParts.length - common }, () => ".."),
-    ...targetParts.slice(common)
-  ].join("/");
-  return value.startsWith(".") ? value : `./${value}`;
-}
-
-function resolveConfiguredTarget(contractUri: vscode.Uri, target: CsvTarget): ResolvedTarget {
-  if (target.url !== undefined) return { label: target.url, source: target.url };
-  const path = target.path;
-  if (/^[a-z]:[\\/]/i.test(path) || path.startsWith("/")) {
-    const uri = contractUri.scheme === "file"
-      ? vscode.Uri.file(path)
-      : contractUri.with({ path: path.replaceAll("\\", "/") });
-    return { label: path, source: uri };
-  }
-  const uri = vscode.Uri.joinPath(contractUri, "..", ...path.split(/[\\/]+/));
-  return { label: path, source: uri };
-}
-
-function configuredTargets(contractUri: vscode.Uri, contract: CsvContract): ResolvedTarget[] {
-  return (contract.targets ?? []).map((target) => resolveConfiguredTarget(contractUri, target));
-}
-
-async function readTargetText(target: ResolvedTarget): Promise<string> {
-  if (typeof target.source !== "string") {
-    return new TextDecoder("utf-8").decode(await vscode.workspace.fs.readFile(target.source));
-  }
-  const response = await fetch(target.source, { redirect: "follow" });
-  if (!response.ok) throw new Error(`Unable to download ${target.label}: HTTP ${response.status} ${response.statusText}.`);
-  return response.text();
 }
 
 async function createFromCsv(): Promise<void> {
@@ -140,7 +85,11 @@ async function runContract(output: vscode.OutputChannel): Promise<void> {
   );
 }
 
-async function openWorkbench(): Promise<void> {
+async function openWorkbench(requestedUri?: vscode.Uri): Promise<void> {
+  if (requestedUri?.path.match(/\.csvtest\.ya?ml$/i)) {
+    await vscode.commands.executeCommand("vscode.openWith", requestedUri, viewType);
+    return;
+  }
   const active = vscode.window.activeTextEditor?.document.uri;
   const uri = active?.path.match(/\.csvtest\.ya?ml$/i)
     ? active

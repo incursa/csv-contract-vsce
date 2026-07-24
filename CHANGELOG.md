@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0
+
+- Added a native CSV Contract Activity Bar view that discovers contract files across every workspace folder.
+- Added persistent checkboxes for selecting several contracts and a **Run Selected** workspace action.
+- Grouped selected contracts by resolved target so shared CSV files are loaded once per workspace run.
+- Added consolidated pass/fail reporting in the tree and CSV Contract output channel, including expandable diagnostics.
+- Reported invalid contracts, missing configured targets, inaccessible files, and failed URL downloads alongside validation failures.
+- Added installed-extension PowerShell usage to the end of the Marketplace README.
+
 ## 0.2.1
 
 - Preserved an absolute Windows target path when a generated contract and its source CSV are on different drives.

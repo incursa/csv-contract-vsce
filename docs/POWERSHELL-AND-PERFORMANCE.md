@@ -1,5 +1,18 @@
 # PowerShell and performance
 
+## Run from an installed extension
+
+The Marketplace extension includes `scripts\Test-CsvContract.ps1`, `scripts\New-CsvContract.ps1`, and the bundled Node validation engine. Locate the current version dynamically so extension upgrades do not break a versioned path:
+
+```powershell
+$extensionRoot = (& code --locate-extension incursa.csv-contract-vsce).Trim()
+$testScript = Join-Path $extensionRoot 'scripts\Test-CsvContract.ps1'
+
+& $testScript -Contract 'C:\path\to\employees.csvtest.yaml'
+```
+
+Node must be available on `PATH`. The installed bundle does not require a repository checkout or dependency installation.
+
 ## Ready-to-run validation
 
 Build the bundled CLI once:
