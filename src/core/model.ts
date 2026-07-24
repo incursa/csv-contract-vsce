@@ -45,8 +45,13 @@ export interface RowTest {
   expect: RowExpectation;
 }
 
+export type CsvTarget =
+  | { path: string; url?: never }
+  | { url: string; path?: never };
+
 export interface CsvContract {
   version: 1;
+  targets?: CsvTarget[];
   csv?: CsvOptions;
   identity?: {
     columns: string[];

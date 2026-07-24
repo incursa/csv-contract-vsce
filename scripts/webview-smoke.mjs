@@ -5,10 +5,21 @@ import { chromium } from "playwright";
 const state = {
   type: "state",
   contractName: "contracts/customers.csvtest.yaml",
-  csvName: "samples/customers.csv",
-  csv: { headers: ["CustomerId", "CustomerName", "Email", "Status", "Notes"], rowCount: 12480 },
+  targetNames: [
+    "../exports/customers-east.csv",
+    "../exports/customers-west.csv",
+    "https://example.com/exports/customers.csv"
+  ],
+  configuredTargetCount: 3,
+  usingConfiguredTargets: true,
+  runs: [],
   contract: {
     version: 1,
+    targets: [
+      { path: "../exports/customers-east.csv" },
+      { path: "../exports/customers-west.csv" },
+      { url: "https://example.com/exports/customers.csv" }
+    ],
     csv: { nullValues: [""], trimValues: false, caseSensitive: true },
     schema: {
       allowAdditionalColumns: true,
@@ -30,15 +41,18 @@ const state = {
 
 const failedState = {
   ...state,
-  result: {
-    valid: false,
-    rowCount: 12480,
-    columnCount: 5,
-    testCount: 7,
-    issueCount: 1,
-    truncated: false,
-    issues: [{ level: "cell", code: "CELL_NOT_EQUAL", testId: "expected-customer-status", message: "Expected Active; found Inactive." }]
-  }
+  runs: [{
+    target: "../exports/customers-east.csv",
+    result: {
+      valid: false,
+      rowCount: 12480,
+      columnCount: 5,
+      testCount: 7,
+      issueCount: 1,
+      truncated: false,
+      issues: [{ level: "cell", code: "CELL_NOT_EQUAL", testId: "expected-customer-status", message: "Expected Active; found Inactive." }]
+    }
+  }]
 };
 
 const server = createServer(async (request, response) => {
@@ -69,6 +83,10 @@ await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message"
 await page.locator("text=CSV Contract Workbench").waitFor();
 await page.locator("text=CustomerId").first().click();
 if (await page.locator(".metrics").count() !== 1) throw new Error("Metric layout did not render.");
+if ((await page.locator(".configured-target-row").count()) !== 3) throw new Error("Configured path and URL targets did not render.");
+if ((await page.locator(".target-type").allTextContents()).join(",") !== "PATH,PATH,URL") {
+  throw new Error("Configured target types did not render correctly.");
+}
 await mkdir("artifacts/runtime", { recursive: true });
 await mkdir("images", { recursive: true });
 await page.screenshot({ path: "images/workbench-column-rules.png", fullPage: true });
@@ -106,20 +124,26 @@ const editedContract = await page.evaluate(() =>
 const editedFailedState = {
   ...failedState,
   contract: editedContract,
-  result: {
-    ...failedState.result,
-    issues: [{
-      level: "cell",
-      code: "CELL_NOT_EQUAL",
-      testId: "expected-customer-status",
-      message: "Expected Inactive; found Active."
-    }]
-  }
+  runs: [{
+    target: "../exports/customers-east.csv",
+    result: {
+      ...failedState.runs[0].result,
+      issues: [{
+        level: "cell",
+        code: "CELL_NOT_EQUAL",
+        testId: "expected-customer-status",
+        message: "Expected Inactive; found Active."
+      }]
+    }
+  }]
 };
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), editedFailedState);
 await page.locator('[data-action="run"]').click();
 const lastMessage = await page.evaluate(() => window.__messages.at(-1));
 if (lastMessage?.type !== "run") throw new Error("Run tests did not send the expected host message.");
+await page.locator('[data-action="add-target-url"]').click();
+const addUrlMessage = await page.evaluate(() => window.__messages.at(-1));
+if (addUrlMessage?.type !== "addTargetUrl") throw new Error("Add URL did not send the expected host message.");
 await page.screenshot({ path: "images/workbench-results.png", fullPage: true });
 await page.screenshot({ path: "artifacts/runtime/webview-workbench.png", fullPage: true });
 

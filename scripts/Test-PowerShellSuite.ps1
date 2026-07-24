@@ -119,6 +119,29 @@ try {
         }
     }
 
+    $multiTargetError = Join-Path $temporaryRoot 'multi-target.stderr.txt'
+    $multiTargetArguments = @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', $testScript,
+        '-Contract', (Join-Path $fixtureRoot 'contracts\comprehensive.csvtest.yaml'),
+        '-Format', 'json',
+        '-ProgressInterval', '0',
+        '-UniquePartitions', '8',
+        '-NodeExecutable', $nodeCommand.Source
+    )
+    $multiTarget = Invoke-ChildPowerShell -Arguments $multiTargetArguments -ErrorFile $multiTargetError
+    $multiTargetJson = $null
+    try { $multiTargetJson = $multiTarget.StandardOutput | ConvertFrom-Json }
+    catch { $failures.Add("multi-target stdout was not valid JSON: $($_.Exception.Message)") }
+    if ($multiTarget.ExitCode -ne 0 -or $null -eq $multiTargetJson -or @($multiTargetJson.files).Count -ne 2 -or -not [bool]$multiTargetJson.valid) {
+        $failures.Add("configured multi-target validation failed: exit $($multiTarget.ExitCode), $($multiTarget.StandardError.Trim())")
+    }
+    else {
+        $passes += 1
+        Write-Host 'PASS [TARGETS] configured files run without -Csv' -ForegroundColor Green
+    }
+
     $generatedPath = Join-Path $temporaryRoot 'generated.csvtest.yaml'
     $generationError = Join-Path $temporaryRoot 'generator.stderr.txt'
     $generationArguments = @(
@@ -136,7 +159,7 @@ try {
     }
     else {
         $generatedText = Get-Content -Raw -LiteralPath $generatedPath
-        foreach ($expectedText in @('Company:', 'EmployeeId:', 'sample-row-exists', 'sample-cell-value')) {
+        foreach ($expectedText in @('targets:', 'path:', 'Company:', 'EmployeeId:', 'sample-row-exists', 'sample-cell-value')) {
             if ($generatedText -notmatch [regex]::Escape($expectedText)) {
                 $failures.Add("generated outline is missing '$expectedText'")
             }
@@ -146,7 +169,6 @@ try {
             '-NoProfile',
             '-ExecutionPolicy', 'Bypass',
             '-File', $testScript,
-            '-Csv', (Join-Path $fixtureRoot 'csv\pass.csv'),
             '-Contract', $generatedPath,
             '-Format', 'json',
             '-ProgressInterval', '0',

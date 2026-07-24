@@ -8,9 +8,10 @@ const vscode = acquireVsCodeApi();
 const app = document.querySelector<HTMLElement>("#app")!;
 let contract: CsvContract | undefined;
 let contractName = "contract.csvtest.yaml";
-let csvName = "Choose a CSV file";
-let csv: { headers: string[]; rowCount: number } | undefined;
-let result: ValidationResult | undefined;
+let targetNames: string[] = [];
+let configuredTargetCount = 0;
+let usingConfiguredTargets = false;
+let runs: Array<{ target: string; result: ValidationResult }> = [];
 let selectedColumn = "";
 let selectedRowTestIndex = -1;
 let columnsScrollTop = 0;
@@ -125,7 +126,16 @@ function render(): void {
   }
   const selected = contract.schema.columns[selectedColumn];
   const constraints = selected?.constraints ?? {};
-  const issues = result?.issues ?? [];
+  const configuredTargets = contract.targets ?? [];
+  const issueCount = runs.reduce((total, run) => total + run.result.issueCount, 0);
+  const rowCount = runs.length > 0
+    ? runs.reduce((total, run) => total + run.result.rowCount, 0)
+    : "—";
+  const sourceLabel = targetNames.length === 0
+    ? "No test CSV selected"
+    : targetNames.length === 1
+      ? targetNames[0]
+      : `${targetNames.length} test CSVs`;
   app.innerHTML = `
     <header class="workbench-header">
       <h1>CSV Contract Workbench</h1>
@@ -135,7 +145,7 @@ function render(): void {
       <div>
         <h2>Test target</h2>
         <span class="field-label">SOURCE CSV</span>
-        <code>${escape(csvName)}</code>
+        <code>${escape(sourceLabel)}</code>
       </div>
       <div>
         <span class="field-label">CONTRACT</span>
@@ -143,16 +153,38 @@ function render(): void {
       </div>
       <div class="workbench-actions">
         <button class="inc-btn inc-btn--outline-secondary" data-action="choose-csv">Select test CSV</button>
+        ${configuredTargetCount > 0 && !usingConfiguredTargets ? `<button class="inc-btn inc-btn--outline-secondary" data-action="use-configured-targets">Use configured CSVs</button>` : ""}
         <button class="inc-btn inc-btn--outline-secondary" data-action="open-yaml">Open YAML</button>
         <button class="inc-btn inc-btn--primary" data-action="run">Run tests</button>
+      </div>
+      <div class="configured-targets">
+        <div class="configured-targets__heading">
+          <div><span class="field-label">CONFIGURED TEST CSVs</span><p>Saved in this contract. Relative paths resolve from the contract file.</p></div>
+          <div class="configured-targets__actions">
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="add-target-files">Add file paths</button>
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="add-target-url">Add URL</button>
+          </div>
+        </div>
+        <div class="configured-target-list">
+          ${configuredTargets.map((target, index) => {
+            const type = target.url !== undefined ? "URL" : "PATH";
+            const value = target.url ?? target.path;
+            return `<div class="configured-target-row">
+              <span class="target-type">${type}</span>
+              <code title="${escape(value)}">${escape(value)}</code>
+              <button type="button" class="icon-button" data-action="remove-target" data-index="${index}" aria-label="Remove ${type.toLowerCase()} target">×</button>
+            </div>`;
+          }).join("") || `<p class="empty compact-empty">No saved targets. You can still select CSVs for this session.</p>`}
+        </div>
       </div>
     </section>
     <section class="metrics" aria-label="Contract metrics">
       ${[
-        ["Columns", csv?.headers.length ?? names.length],
-        ["Rows", csv?.rowCount ?? "—"],
-        ["Tests", names.length + (contract.rowTests?.length ?? 0)],
-        ["Failures", result ? issues.length : "—"]
+        ["Files", targetNames.length || "—"],
+        ["Columns", names.length],
+        ["Rows scanned", rowCount],
+        ["Rules", names.length + (contract.rowTests?.length ?? 0)],
+        ["Failures", runs.length > 0 ? issueCount : "—"]
       ].map(([label, value]) => `<article class="inc-card metric"><span>${label}</span><strong>${escape(value)}</strong></article>`).join("")}
     </section>
     <section class="split">
@@ -206,9 +238,18 @@ function render(): void {
         </div>
       </article>
       <article class="inc-card pane">
-        <div class="pane-heading"><div><h2>Latest results</h2><p>${result ? `${result.valid ? "Passed" : "Failed"} · ${result.rowCount} rows scanned` : "Run the contract to see results."}</p></div></div>
+        <div class="pane-heading"><div><h2>Latest results</h2><p>${runs.length > 0 ? `${runs.filter((run) => run.result.valid).length} of ${runs.length} targets passed` : "Run the contract to see results."}</p></div></div>
         <div class="results">
-          ${result ? (issues.length ? issues.slice(0, 10).map((issue) => `<div class="result result--fail"><span>FAIL</span><code>${escape(issue.testId ?? issue.code)}</code><p>${escape(issue.message)}</p></div>`).join("") : `<div class="result result--pass"><span>PASS</span><code>all-tests</code><p>All configured checks passed.</p></div>`) : ""}
+          ${runs.map((run) => `<section class="target-result">
+            <div class="target-result__heading">
+              <span class="${run.result.valid ? "target-result__pass" : "target-result__fail"}">${run.result.valid ? "PASS" : "FAIL"}</span>
+              <code title="${escape(run.target)}">${escape(run.target)}</code>
+              <small>${run.result.rowCount.toLocaleString()} rows · ${run.result.issueCount.toLocaleString()} issues</small>
+            </div>
+            ${run.result.issues.length
+              ? run.result.issues.slice(0, 10).map((issue) => `<div class="result result--fail"><span>FAIL</span><code>${escape(issue.testId ?? issue.code)}</code><p>${escape(issue.message)}</p></div>`).join("")
+              : `<div class="result result--pass"><span>PASS</span><code>all-tests</code><p>All configured checks passed.</p></div>`}
+          </section>`).join("")}
         </div>
       </article>
     </section>`;
@@ -298,6 +339,16 @@ function bind(): void {
     field.addEventListener("change", () => saveSelectedRowTest())
   );
   app.querySelector('[data-action="choose-csv"]')?.addEventListener("click", () => vscode.postMessage({ type: "chooseCsv" }));
+  app.querySelector('[data-action="use-configured-targets"]')?.addEventListener("click", () => vscode.postMessage({ type: "useConfiguredTargets" }));
+  app.querySelector('[data-action="add-target-files"]')?.addEventListener("click", () => vscode.postMessage({ type: "addTargetFiles" }));
+  app.querySelector('[data-action="add-target-url"]')?.addEventListener("click", () => vscode.postMessage({ type: "addTargetUrl" }));
+  app.querySelectorAll<HTMLElement>('[data-action="remove-target"]').forEach((button) => button.addEventListener("click", () => {
+    if (!contract?.targets) return;
+    contract.targets.splice(Number(button.dataset.index), 1);
+    if (contract.targets.length === 0) contract.targets = undefined;
+    render();
+    vscode.postMessage({ type: "updateContract", contract });
+  }));
   app.querySelector('[data-action="open-yaml"]')?.addEventListener("click", () => vscode.postMessage({ type: "openYaml" }));
   app.querySelector('[data-action="run"]')?.addEventListener("click", () => vscode.postMessage({ type: "run" }));
   app.querySelector('[data-action="add-row-test"]')?.addEventListener("click", () => {
@@ -362,9 +413,10 @@ window.addEventListener("message", (event) => {
   if (message.type === "state") {
     contract = message.contract;
     contractName = message.contractName;
-    csvName = message.csvName ?? "Choose a CSV file";
-    csv = message.csv;
-    result = message.result;
+    targetNames = message.targetNames ?? [];
+    configuredTargetCount = message.configuredTargetCount ?? 0;
+    usingConfiguredTargets = message.usingConfiguredTargets ?? false;
+    runs = message.runs ?? [];
     render();
   } else if (message.type === "error") {
     app.innerHTML = `<div class="inc-alert inc-alert--danger">${escape(message.message)}</div>`;

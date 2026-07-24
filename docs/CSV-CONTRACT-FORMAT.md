@@ -10,6 +10,10 @@ Contracts use YAML and normally end in `.csvtest.yaml`. The bundled JSON Schema 
 
 ```yaml
 version: 1
+targets:
+  - path: ../exports/employees-east.csv
+  - path: ../exports/employees-west.csv
+  - url: https://example.com/exports/employees.csv
 csv:
   delimiter: ","
   encoding: utf-8
@@ -54,6 +58,19 @@ rowTests:
         Status:
           equals: Active
 ```
+
+## Test targets
+
+`targets` is optional. When present, **Run tests**, the Command Palette runner, the Node CLI, and the PowerShell wrapper validate every listed target without prompting for a CSV.
+
+- `path` accepts a relative or absolute file path. Relative paths resolve from the `*.csvtest.yaml` file, not the current shell directory.
+- `url` accepts an HTTP or HTTPS URL that returns CSV content.
+- Paths and URLs can be mixed in one contract.
+- **Select test CSV** remains a temporary Workbench override and does not modify `targets`.
+- Explicit CLI `--csv` or PowerShell `-Csv` values override configured targets.
+- Do not commit credentials or secret-bearing URLs. Use explicit runtime targets when authentication data should remain outside the contract.
+
+The Workbench reads each target into memory one at a time. VS Code desktop can retrieve normal HTTP/HTTPS URLs; browser-hosted editors require the remote server to permit cross-origin access. For very large local or remote CSVs, use the PowerShell or Node runner. It streams local files and downloads URLs to temporary disk before running the bounded-memory validator.
 
 ## Comparison rules
 
@@ -107,7 +124,7 @@ Regex patterns use JavaScript regular-expression syntax. They are applied to eac
 
 Use a broad schema contract for every file of one type and a second contract for date- or customer-specific spot checks. The CLI and PowerShell wrapper accept multiple contracts for the same CSV and return failure if any contract fails.
 
-Contracts with the same physical CSV settings (`delimiter`, `quote`, and `allowBlankRows`) share one streaming pass through the file. A different physical setting requires another pass. The result includes `performance.passes`, so automated runs can detect an accidental extra scan.
+Contracts that reference the same target are grouped automatically. Contracts with the same physical CSV settings (`delimiter`, `quote`, and `allowBlankRows`) share one streaming pass through that file. A different physical setting requires another pass. The result includes `performance.passes`, so automated runs can detect an accidental extra scan.
 
 ## Bounded diagnostics
 

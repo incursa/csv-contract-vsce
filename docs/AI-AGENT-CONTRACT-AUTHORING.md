@@ -37,7 +37,6 @@ Tell the agent which sources are authoritative when they disagree.
 
    ```powershell
    .\scripts\Test-CsvContract.ps1 `
-     -Csv .\exports\employees.csv `
      -Contract .\contracts\employees.csvtest.yaml `
      -Format json
    ```
@@ -59,6 +58,7 @@ Tell the agent which sources are authoritative when they disagree.
 - Prefer anchored regexes such as `^\d{6}$`.
 - Avoid cross-column logic because version 1 does not support it.
 - Never include sensitive production values in a committed spot-check contract without approval.
+- Prefer relative `targets[].path` values for portable repositories. Use `targets[].url` only for stable HTTP or HTTPS CSV sources, and never embed credentials or secret-bearing URLs.
 
 ## Expected deliverables
 

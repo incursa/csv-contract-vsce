@@ -1,5 +1,8 @@
 # yaml-language-server: $schema=../../../../schemas/csvtest.schema.json
 version: 1
+targets:
+  - path: ../csv/pass.csv
+  - path: ../csv/optional-absent.csv
 csv:
   delimiter: ","
   encoding: utf-8

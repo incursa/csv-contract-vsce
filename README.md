@@ -6,7 +6,7 @@ Define reusable YAML contracts for CSV files, edit them visually in VS Code, and
 
 ## Build contracts visually
 
-Create a contract from a CSV to start with its real column names, then set presence and data-quality rules from the workbench. The YAML file remains the source of truth and can always be edited directly with schema-aware IntelliSense.
+Create a contract from a CSV to start with its real column names, then set presence and data-quality rules from the workbench. Save one or more local paths or HTTP/HTTPS URLs as test targets when the same contract should run without prompting. The YAML file remains the source of truth and can always be edited directly with schema-aware IntelliSense.
 
 ![Configure column rules in CSV Contract Workbench](images/workbench-column-rules.png)
 
@@ -36,7 +36,8 @@ Run a contract against a CSV and review file, column, row, and cell failures alo
 1. Install **CSV Contract Workbench** from the VS Code Marketplace.
 2. Run **CSV Contract: Create Contract from CSV** from the Command Palette.
 3. Review the generated `*.csvtest.yaml` file in the visual workbench or YAML editor.
-4. Select **Select test CSV**, choose the CSV to validate, and then select **Run tests**.
+4. Use the saved target, add more file paths or URLs, or choose temporary targets with **Select test CSV**.
+5. Select **Run tests** to validate every active target.
 
 Generated contracts are deliberately conservative: they capture the observed columns and include sample row and cell assertions without guessing business rules. You decide which columns are required, unique, nullable, length-limited, or restricted to known values.
 

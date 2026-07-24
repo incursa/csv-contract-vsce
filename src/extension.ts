@@ -1,8 +1,18 @@
 import * as vscode from "vscode";
-import { createContractFromCsv, parseContract, parseCsv, serializeContract, validateCsv } from "./core/contract";
-import type { CsvContract, ValidationResult } from "./core/model";
+import { createContractFromCsv, parseContract, serializeContract, validateCsv } from "./core/contract";
+import type { CsvContract, CsvTarget, ValidationResult } from "./core/model";
 
 const viewType = "csv-contract-vsce.contractEditor";
+
+interface ResolvedTarget {
+  label: string;
+  source: vscode.Uri | string;
+}
+
+interface TargetRun {
+  target: string;
+  result: ValidationResult;
+}
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("CSV Contract");
@@ -22,7 +32,69 @@ export function activate(context: vscode.ExtensionContext): void {
 export function deactivate(): void {}
 
 async function pickFile(filters: Record<string, string[]>): Promise<vscode.Uri | undefined> {
-  return (await vscode.window.showOpenDialog({ canSelectMany: false, filters }))?.[0];
+  return (await pickFiles(filters, false))?.[0];
+}
+
+async function pickFiles(filters: Record<string, string[]>, canSelectMany = true): Promise<vscode.Uri[] | undefined> {
+  return vscode.window.showOpenDialog({ canSelectMany, filters });
+}
+
+function relativeTargetPath(contractUri: vscode.Uri, targetUri: vscode.Uri): string {
+  if (contractUri.scheme !== targetUri.scheme || contractUri.authority !== targetUri.authority) {
+    return targetUri.fsPath || targetUri.path;
+  }
+  const contractParts = contractUri.path.split("/").filter(Boolean);
+  const targetParts = targetUri.path.split("/").filter(Boolean);
+  contractParts.pop();
+  if (
+    contractUri.scheme === "file"
+    && contractParts[0]?.endsWith(":")
+    && targetParts[0]?.endsWith(":")
+    && contractParts[0].toLowerCase() !== targetParts[0].toLowerCase()
+  ) {
+    return targetUri.fsPath;
+  }
+  let common = 0;
+  while (
+    common < contractParts.length
+    && common < targetParts.length
+    && (contractUri.scheme === "file"
+      ? contractParts[common].toLowerCase() === targetParts[common].toLowerCase()
+      : contractParts[common] === targetParts[common])
+  ) {
+    common += 1;
+  }
+  const value = [
+    ...Array.from({ length: contractParts.length - common }, () => ".."),
+    ...targetParts.slice(common)
+  ].join("/");
+  return value.startsWith(".") ? value : `./${value}`;
+}
+
+function resolveConfiguredTarget(contractUri: vscode.Uri, target: CsvTarget): ResolvedTarget {
+  if (target.url !== undefined) return { label: target.url, source: target.url };
+  const path = target.path;
+  if (/^[a-z]:[\\/]/i.test(path) || path.startsWith("/")) {
+    const uri = contractUri.scheme === "file"
+      ? vscode.Uri.file(path)
+      : contractUri.with({ path: path.replaceAll("\\", "/") });
+    return { label: path, source: uri };
+  }
+  const uri = vscode.Uri.joinPath(contractUri, "..", ...path.split(/[\\/]+/));
+  return { label: path, source: uri };
+}
+
+function configuredTargets(contractUri: vscode.Uri, contract: CsvContract): ResolvedTarget[] {
+  return (contract.targets ?? []).map((target) => resolveConfiguredTarget(contractUri, target));
+}
+
+async function readTargetText(target: ResolvedTarget): Promise<string> {
+  if (typeof target.source !== "string") {
+    return new TextDecoder("utf-8").decode(await vscode.workspace.fs.readFile(target.source));
+  }
+  const response = await fetch(target.source, { redirect: "follow" });
+  if (!response.ok) throw new Error(`Unable to download ${target.label}: HTTP ${response.status} ${response.statusText}.`);
+  return response.text();
 }
 
 async function createFromCsv(): Promise<void> {
@@ -36,6 +108,7 @@ async function createFromCsv(): Promise<void> {
     filters: { "CSV contract": ["csvtest.yaml"] }
   });
   if (!outputUri) return;
+  contract.targets = [{ path: relativeTargetPath(outputUri, csvUri) }];
   const schemaUrl = "https://raw.githubusercontent.com/incursa/csv-contract-vsce/main/schemas/csvtest.schema.json";
   await vscode.workspace.fs.writeFile(outputUri, new TextEncoder().encode(serializeContract(contract, schemaUrl)));
   await vscode.commands.executeCommand("vscode.openWith", outputUri, viewType);
@@ -44,22 +117,27 @@ async function createFromCsv(): Promise<void> {
 async function runContract(output: vscode.OutputChannel): Promise<void> {
   const specUri = await pickFile({ "CSV contracts": ["csvtest.yaml", "csvtest.yml", "yaml", "yml"] });
   if (!specUri) return;
-  const csvUri = await pickFile({ "CSV files": ["csv"] });
-  if (!csvUri) return;
-  const [contractBytes, csvBytes] = await Promise.all([
-    vscode.workspace.fs.readFile(specUri),
-    vscode.workspace.fs.readFile(csvUri)
-  ]);
-  const result = validateCsv(
-    parseContract(new TextDecoder().decode(contractBytes)),
-    new TextDecoder().decode(csvBytes)
-  );
+  const contract = parseContract(new TextDecoder().decode(await vscode.workspace.fs.readFile(specUri)));
+  let targets = configuredTargets(specUri, contract);
+  if (targets.length === 0) {
+    const csvUris = await pickFiles({ "CSV files": ["csv"] });
+    if (!csvUris?.length) return;
+    targets = csvUris.map((uri) => ({ label: vscode.workspace.asRelativePath(uri, false), source: uri }));
+  }
   output.clear();
-  output.appendLine(`${result.valid ? "PASS" : "FAIL"} ${specUri.fsPath}`);
-  output.appendLine(`${result.rowCount} rows · ${result.columnCount} columns · ${result.issues.length} issues`);
-  result.issues.forEach((issue) => output.appendLine(`${issue.code}: ${issue.message}`));
+  let valid = true;
+  for (const target of targets) {
+    const result = validateCsv(contract, await readTargetText(target));
+    valid &&= result.valid;
+    output.appendLine(`${result.valid ? "PASS" : "FAIL"} ${target.label}`);
+    output.appendLine(`${result.rowCount} rows · ${result.columnCount} columns · ${result.issueCount} issues`);
+    result.issues.forEach((issue) => output.appendLine(`${issue.code}: ${issue.message}`));
+    output.appendLine("");
+  }
   output.show(true);
-  void vscode.window.showInformationMessage(result.valid ? "CSV contract passed." : `CSV contract failed with ${result.issues.length} issue(s).`);
+  void vscode.window.showInformationMessage(
+    valid ? `CSV contract passed for ${targets.length} target(s).` : "CSV contract failed. See the CSV Contract output channel."
+  );
 }
 
 async function openWorkbench(): Promise<void> {
@@ -79,20 +157,21 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
       localResourceRoots: [this.context.extensionUri]
     };
     panel.webview.html = this.html(panel.webview);
-    let csvText: string | undefined;
-    let csvName: string | undefined;
+    let manualTargets: ResolvedTarget[] | undefined;
 
-    const postState = async (result?: ValidationResult): Promise<void> => {
+    const postState = async (runs: TargetRun[] = []): Promise<void> => {
       try {
         const contract = parseContract(document.getText());
-        const parsed = csvText === undefined ? undefined : parseCsv(csvText, contract.csv);
+        const savedTargets = configuredTargets(document.uri, contract);
+        const activeTargets = manualTargets ?? savedTargets;
         await panel.webview.postMessage({
           type: "state",
           contract,
           contractName: vscode.workspace.asRelativePath(document.uri, false),
-          csvName,
-          csv: parsed && { headers: parsed.headers, rowCount: parsed.rows.length },
-          result
+          targetNames: activeTargets.map((target) => target.label),
+          configuredTargetCount: savedTargets.length,
+          usingConfiguredTargets: manualTargets === undefined && savedTargets.length > 0,
+          runs
         });
       } catch (error) {
         await panel.webview.postMessage({ type: "error", message: error instanceof Error ? error.message : String(error) });
@@ -107,18 +186,54 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
       if (message.type === "ready") {
         await postState();
       } else if (message.type === "chooseCsv") {
-        const uri = await pickFile({ "CSV files": ["csv"] });
-        if (!uri) return;
-        csvText = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
-        csvName = vscode.workspace.asRelativePath(uri, false);
+        const uris = await pickFiles({ "CSV files": ["csv"] });
+        if (!uris?.length) return;
+        manualTargets = uris.map((uri) => ({ label: vscode.workspace.asRelativePath(uri, false), source: uri }));
         await postState();
+      } else if (message.type === "useConfiguredTargets") {
+        manualTargets = undefined;
+        await postState();
+      } else if (message.type === "addTargetFiles") {
+        const uris = await pickFiles({ "CSV files": ["csv"] });
+        if (!uris?.length) return;
+        const contract = parseContract(document.getText());
+        contract.targets ??= [];
+        const existing = new Set(contract.targets.map((target) => target.path ?? target.url));
+        for (const uri of uris) {
+          const path = relativeTargetPath(document.uri, uri);
+          if (!existing.has(path)) contract.targets.push({ path });
+        }
+        await this.replaceDocument(document, serializeContract(contract));
+      } else if (message.type === "addTargetUrl") {
+        const url = await vscode.window.showInputBox({
+          title: "Add CSV URL",
+          prompt: "Enter an HTTP or HTTPS URL that returns CSV content.",
+          placeHolder: "https://example.com/export.csv",
+          validateInput: (value) => /^https?:\/\/\S+$/i.test(value) ? undefined : "Enter a valid HTTP or HTTPS URL."
+        });
+        if (!url) return;
+        const contract = parseContract(document.getText());
+        contract.targets ??= [];
+        if (!contract.targets.some((target) => target.url === url)) contract.targets.push({ url });
+        await this.replaceDocument(document, serializeContract(contract));
       } else if (message.type === "run") {
-        if (csvText === undefined) {
-          void vscode.window.showWarningMessage("Choose a CSV file before running the contract.");
+        const contract = parseContract(document.getText());
+        const targets = manualTargets ?? configuredTargets(document.uri, contract);
+        if (targets.length === 0) {
+          void vscode.window.showWarningMessage("Select a test CSV or add configured file paths or URLs before running the contract.");
           return;
         }
-        const contract = parseContract(document.getText());
-        await postState(validateCsv(contract, csvText));
+        const runs: TargetRun[] = [];
+        try {
+          for (const target of targets) {
+            runs.push({ target: target.label, result: validateCsv(contract, await readTargetText(target)) });
+            await postState(runs);
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          await postState(runs);
+          void vscode.window.showErrorMessage(message);
+        }
       } else if (message.type === "updateContract") {
         await this.replaceDocument(document, serializeContract(message.contract as CsvContract));
       } else if (message.type === "openYaml") {

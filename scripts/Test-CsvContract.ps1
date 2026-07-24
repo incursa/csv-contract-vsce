@@ -1,8 +1,7 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory, Position = 0)]
-    [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
-    [string] $Csv,
+    [Parameter(Position = 0)]
+    [string[]] $Csv,
 
     [Parameter(Mandatory, Position = 1, ValueFromRemainingArguments)]
     [ValidateNotNullOrEmpty()]
@@ -37,12 +36,23 @@ $nodeCommand = @(Get-Command -Name $NodeExecutable -CommandType Application -Err
 $arguments = @(
     $cliPath,
     'test',
-    '--csv', (Resolve-Path -LiteralPath $Csv).Path,
     '--format', $Format,
     '--max-issues', [string]$MaxIssues,
     '--progress-interval', [string]$ProgressInterval,
     '--unique-partitions', [string]$UniquePartitions
 )
+
+foreach ($target in $Csv) {
+    if ($target -match '^https?://') {
+        $arguments += @('--csv', $target)
+    }
+    elseif (Test-Path -LiteralPath $target -PathType Leaf) {
+        $arguments += @('--csv', (Resolve-Path -LiteralPath $target).Path)
+    }
+    else {
+        throw "CSV target not found: $target"
+    }
+}
 
 foreach ($spec in $Contract) {
     if (-not (Test-Path -LiteralPath $spec -PathType Leaf)) {

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0
+
+- Added optional contract-level CSV targets using relative or absolute file paths and HTTP/HTTPS URLs.
+- Added Workbench controls for saving multiple file paths or URLs, temporarily overriding them, and reviewing per-target results.
+- Added automatic multi-file execution to the Command Palette, Node CLI, and PowerShell wrapper.
+- Grouped contracts that reference the same CSV so compatible validations still share a streaming pass.
+- Downloaded remote CSV targets incrementally to isolated temporary disk for bounded-memory batch validation.
+- Updated contract generation to save the source CSV as a portable relative target.
+- Added separate desktop and browser extension bundles so normal remote URLs are not constrained by browser CORS in VS Code desktop.
+
 ## 0.1.5
 
 - Renamed the Workbench CSV picker to **Select test CSV** to make clear that selecting a validation target does not replace the existing contract or its tests.

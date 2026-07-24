@@ -13,7 +13,18 @@ Run one contract:
 
 ```powershell
 .\scripts\Test-CsvContract.ps1 `
-  -Csv .\exports\employees.csv `
+  -Contract .\contracts\employees.csvtest.yaml
+```
+
+When the contract contains `targets`, `-Csv` is optional. Every configured file path and URL is tested. Use `-Csv` to override configured targets for a particular run, and pass an array to test multiple explicit targets:
+
+```powershell
+.\scripts\Test-CsvContract.ps1 `
+  -Csv @(
+    '.\exports\employees-east.csv',
+    '.\exports\employees-west.csv',
+    'https://example.com/exports/employees.csv'
+  ) `
   -Contract .\contracts\employees.csvtest.yaml
 ```
 
@@ -48,6 +59,7 @@ Use `-Format json` for orchestration. Progress goes to stderr, leaving stdout as
 
 The default generator is conservative:
 
+- saves the source CSV as a relative contract target;
 - reads only the header and first data row;
 - declares observed columns as required;
 - adds `rowCount.min: 1` and the exact column count;
@@ -70,7 +82,8 @@ The PowerShell wrapper invokes the bundled Node CLI, which:
 5. stores at most `MaxIssues` diagnostic objects while still counting all failures;
 6. handles exact uniqueness by hash-partitioning normalized values into temporary binary files;
 7. reads one uniqueness partition at a time to find exact duplicates;
-8. removes uniqueness temporary files on success or failure.
+8. removes uniqueness temporary files on success or failure;
+9. downloads HTTP and HTTPS targets incrementally to an isolated temporary directory and removes the download after validation.
 
 The entire CSV and its rows are never retained in memory by the batch validator.
 

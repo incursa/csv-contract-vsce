@@ -11,10 +11,19 @@ const shared = {
 };
 
 await mkdir("dist/web", { recursive: true });
+await mkdir("dist/node", { recursive: true });
 await mkdir("dist/cli", { recursive: true });
 await mkdir("dist/test", { recursive: true });
 
 const builds = [
+  {
+    ...shared,
+    entryPoints: ["src/extension.ts"],
+    outfile: "dist/node/extension.cjs",
+    format: "cjs",
+    platform: "node",
+    external: ["vscode"]
+  },
   {
     ...shared,
     entryPoints: ["src/extension.ts"],
@@ -45,7 +54,8 @@ const builds = [
       "test/core.test.ts",
       "test/generator.test.ts",
       "test/streaming.test.ts",
-      "test/outline-generator.test.ts"
+      "test/outline-generator.test.ts",
+      "test/targets.test.ts"
     ],
     outdir: "dist/test",
     entryNames: "[name]",
