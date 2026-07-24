@@ -125,17 +125,80 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .target-result__heading small { grid-column: 2; color: #656668; }
 .target-result__pass { color: #00833a; font-weight: 600; }
 .target-result__fail { color: #b01524; font-weight: 600; }
+.report-body { min-width: 20rem; }
+.report-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-block: 1.35rem; }
+.report-header > div { min-width: 0; }
+.report-eyebrow { display: block; margin-bottom: .25rem; color: #656668; font-size: .7rem; font-weight: 600; letter-spacing: .055em; text-transform: uppercase; }
+.report-header .report-eyebrow { color: #dfe5ff; }
+.report-status { display: inline-flex; flex: 0 0 auto; min-width: 4.2rem; align-items: center; justify-content: center; padding: .4rem .7rem; border: 1px solid; border-radius: 999px; font-size: .75rem; font-weight: 700; letter-spacing: .04em; }
+.report-status--pass { color: #006d31; border-color: #24a45a; background: #e6fbef; }
+.report-status--fail { color: #a01120; border-color: #df5966; background: #fff0f1; }
+.workspace-report { display: grid; gap: 1rem; width: min(100%, 100rem); margin: 0 auto; padding: 1.25rem 2rem 2rem; }
+.report-metrics { display: grid; grid-template-columns: repeat(6, minmax(7rem, 1fr)); gap: .75rem; }
+.report-metric { padding: .9rem 1rem; }
+.report-metric span { display: block; color: #656668; font-size: .75rem; }
+.report-metric strong { display: block; margin-top: .2rem; font-size: 1.45rem; font-weight: 600; }
+.report-metric--pass strong { color: #007b37; }
+.report-metric--fail strong { color: #b01524; }
+.report-selected, .report-runs { overflow: hidden; }
+.report-selected { padding: 1rem; border-left-width: 4px; }
+.report-selected--pass { border-left-color: #009743; }
+.report-selected--fail { border-left-color: #d11a2a; }
+.report-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; }
+.report-selected .report-section-heading { padding: 0 0 .85rem; }
+.report-section-heading h2 { margin: 0; font-size: 1rem; }
+.report-section-heading > span { color: #656668; font-size: .78rem; }
+.report-run-list { border-top: 1px solid #dbdcdc; }
+.report-run { border-bottom: 1px solid #dbdcdc; background: #fff; }
+.report-run:last-child { border-bottom: 0; }
+.report-run > summary { display: grid; grid-template-columns: 3.75rem minmax(14rem, 1.4fr) minmax(6rem, .5fr) minmax(5rem, .4fr) minmax(5rem, .4fr) 1rem; align-items: center; gap: .75rem; padding: .85rem 1rem; cursor: pointer; list-style: none; }
+.report-run > summary::-webkit-details-marker { display: none; }
+.report-run > summary:hover { background: #f7f8ff; }
+.report-run > summary:focus-visible { outline: 2px solid #4459c6; outline-offset: -2px; }
+.report-run-status { font-size: .72rem; font-weight: 700; letter-spacing: .035em; }
+.report-run--pass .report-run-status { color: #007b37; }
+.report-run--fail .report-run-status { color: #b01524; }
+.report-run-name { display: grid; min-width: 0; gap: .12rem; }
+.report-run-name strong, .report-run-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.report-run-name strong { font-size: .82rem; }
+.report-run-name small, .report-run-stat { color: #656668; font-size: .72rem; }
+.report-run-chevron { width: .5rem; height: .5rem; border-right: 1.5px solid #656668; border-bottom: 1.5px solid #656668; transform: rotate(45deg); transition: transform .15s ease; }
+.report-run[open] .report-run-chevron { transform: rotate(225deg); }
+.report-run-detail { display: grid; gap: .85rem; padding: 0 1rem 1rem 5.5rem; background: #fafafa; }
+.report-run-metrics { display: grid; grid-template-columns: repeat(3, minmax(8rem, 1fr)); gap: .65rem 1rem; margin: 0; }
+.report-run-metrics > div { min-width: 0; }
+.report-run-metrics dt { color: #656668; font-size: .68rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.report-run-metrics dd { margin: .2rem 0 0; overflow-wrap: anywhere; font-size: .8rem; }
+.report-outcome { padding: .75rem .85rem; border: 1px solid; border-radius: 4px; }
+.report-outcome strong { font-size: .82rem; }
+.report-outcome p { margin: .2rem 0 0; font-size: .78rem; }
+.report-outcome--pass { color: #006d31; border-color: #8bd8ab; background: #eafaf0; }
+.report-outcome--fail { color: #a01120; border-color: #eea8af; background: #fff4f5; }
+.report-issues { display: grid; gap: .5rem; margin: .75rem 0 0; padding: 0; list-style: none; }
+.report-issues li { display: grid; grid-template-columns: minmax(8rem, auto) minmax(10rem, 1fr); gap: .15rem .75rem; padding-top: .55rem; border-top: 1px solid #eea8af; }
+.report-issues code { font-size: .75rem; font-weight: 600; }
+.report-issues span { color: #8b2631; font-size: .72rem; }
+.report-issues p { grid-column: 1 / -1; }
+.report-jump { display: inline-block; margin-top: .8rem; color: #344bbd; font-size: .78rem; font-weight: 600; text-decoration: none; }
+.report-jump:hover { text-decoration: underline; }
 
 @media (max-width: 1200px) {
   .workbench-target { grid-template-columns: 1fr; }
   .workbench-actions { justify-content: flex-start; }
   .row-test-layout { grid-template-columns: 1fr; }
+  .report-metrics { grid-template-columns: repeat(3, 1fr); }
+  .report-run > summary { grid-template-columns: 3.75rem minmax(10rem, 1fr) repeat(2, minmax(5rem, auto)) 1rem; }
+  .report-run > summary .report-run-stat:nth-of-type(5) { display: none; }
 }
 
 @media (max-width: 900px) {
   .split { grid-template-columns: 1fr; }
   .metrics { grid-template-columns: repeat(3, 1fr); }
   .configured-targets__heading { align-items: flex-start; flex-direction: column; }
+  .report-run > summary { grid-template-columns: 3.75rem minmax(0, 1fr) 1rem; }
+  .report-run-stat { display: none; }
+  .report-run-detail { padding-left: 1rem; }
+  .report-run-metrics { grid-template-columns: repeat(2, minmax(8rem, 1fr)); }
 }
 
 @media (max-width: 560px) {
@@ -150,6 +213,11 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
   .configured-target-row > .icon-button { grid-column: 3; grid-row: 1; }
   .result { grid-template-columns: 1fr; }
   .icon-button { width: 100%; }
+  .workspace-report { padding-inline: 1rem; }
+  .report-header { align-items: flex-start; padding-inline: 1rem; }
+  .report-metrics { grid-template-columns: repeat(2, 1fr); }
+  .report-section-heading { align-items: flex-start; }
+  .report-run-metrics { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

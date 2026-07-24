@@ -22,7 +22,7 @@ Run a contract against a CSV and follow live per-target progress while large fil
 
 ## Run workspace test suites
 
-Open **CSV Contract** in the Activity Bar to see every `*.csvtest.yaml` and `*.csvtest.yml` file in the workspace. Expand a contract to inspect and open its local or URL targets. Check the contracts you want, select **Run Selected**, and review the consolidated pass/fail report. Contracts that share a target reuse the same loaded CSV, and the selection remains checked for the workspace.
+Open **CSV Contract** in the Activity Bar to see every `*.csvtest.yaml` and `*.csvtest.yml` file in the workspace. Expand a contract to inspect and open its local or URL targets. Check the contracts you want and select **Run Selected**. A dedicated report opens with totals for the complete test run and expandable results for every contract-target pair. Select **Last run** to reopen the aggregate report, or select an individual green or red run to open the report focused on that result. Contracts that share a target reuse the same loaded CSV, and the selection remains checked for the workspace.
 
 ## What you can validate
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+- Added a dedicated workspace test report that opens automatically after selected contracts finish.
+- Added aggregate contract, target, run, pass, failure, and duration metrics for the complete batch.
+- Added expandable per-run results with rows, columns, test counts, durations, and full diagnostics.
+- Changed successful and failed run nodes in the Activity Bar to open their result in the report instead of reopening the YAML Workbench.
+- Made the **Last run** tree node reopen the complete report while contract nodes continue to open the editor.
+
 ## 0.4.1
 
 - Added an immediate spinner and disabled state to the Workbench **Run tests** button.

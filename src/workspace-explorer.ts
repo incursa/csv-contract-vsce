@@ -9,6 +9,7 @@ import {
   targetKey,
   type ResolvedTarget
 } from "./vscode-targets";
+import { renderWorkspaceReportHtml } from "./workspace-report";
 
 export const explorerContainerId = "csvContractExplorer";
 export const explorerViewId = "csvContractExplorer.contracts";
@@ -48,10 +49,12 @@ interface WorkspaceReportEntry {
   target: string;
   result?: ValidationResult;
   error?: string;
+  durationMs?: number;
 }
 
 interface WorkspaceReport {
   completedAt: Date;
+  durationMs: number;
   selectedContracts: number;
   targets: number;
   entries: WorkspaceReportEntry[];
@@ -95,7 +98,9 @@ export function registerWorkspaceExplorer(
     ),
     vscode.commands.registerCommand(refreshExplorerCommand, () => provider.refresh()),
     vscode.commands.registerCommand(runSelectedCommand, () => provider.runSelected()),
-    vscode.commands.registerCommand(showWorkspaceReportCommand, () => provider.showReport()),
+    vscode.commands.registerCommand(showWorkspaceReportCommand, (argument?: WorkspaceReportEntry | CsvContractTreeItem) =>
+      provider.showReport(argument)
+    ),
     vscode.commands.registerCommand(openTargetInVsCodeCommand, (argument: ResolvedTarget | CsvContractTreeItem) =>
       openExplorerTarget(argument, openTargetInVsCode)
     ),
@@ -112,6 +117,7 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
   private contractsPromise: Promise<ContractSnapshot[]> | undefined;
   private checked: Set<string>;
   private lastReport: WorkspaceReport | undefined;
+  private reportPanel: vscode.WebviewPanel | undefined;
 
   public readonly onDidChangeTreeData = this.changed.event;
 
@@ -132,6 +138,7 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
   }
 
   public dispose(): void {
+    this.reportPanel?.dispose();
     this.changed.dispose();
     this.watchers.forEach((watcher) => watcher.dispose());
   }
@@ -202,28 +209,62 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
     this.lastReport = report;
     this.writeReport(report);
     this.changed.fire();
+    this.showReport();
 
     const summary = report.valid
       ? `All ${report.selectedContracts} selected CSV contracts passed across ${report.targets} target${report.targets === 1 ? "" : "s"}.`
       : `${report.entries.filter((entry) => !entry.result?.valid).length} of ${report.entries.length} contract-target runs failed.`;
     const action = report.valid
-      ? await vscode.window.showInformationMessage(summary, "Show report")
-      : await vscode.window.showErrorMessage(summary, "Show report");
-    if (action === "Show report") this.showReport();
+      ? await vscode.window.showInformationMessage(summary, "View report")
+      : await vscode.window.showErrorMessage(summary, "View report");
+    if (action === "View report") this.showReport();
   }
 
-  public showReport(): void {
+  public showReport(argument?: WorkspaceReportEntry | CsvContractTreeItem): void {
     if (!this.lastReport) {
       void vscode.window.showInformationMessage("Run selected CSV contracts to create a workspace report.");
       return;
     }
-    this.output.show(true);
+    const entry = argument instanceof CsvContractTreeItem
+      ? argument.data.kind === "reportEntry" ? argument.data.entry : undefined
+      : argument;
+    const selectedEntryIndex = entry
+      ? this.lastReport.entries.findIndex((candidate) =>
+        candidate.contractUri.toString() === entry.contractUri.toString() && candidate.target === entry.target
+      )
+      : undefined;
+    if (!this.reportPanel) {
+      this.reportPanel = vscode.window.createWebviewPanel(
+        "csv-contract-vsce.workspaceReport",
+        "CSV Contract Test Report",
+        vscode.ViewColumn.Active,
+        {
+          enableScripts: false,
+          retainContextWhenHidden: true,
+          localResourceRoots: [this.context.extensionUri]
+        }
+      );
+      this.reportPanel.onDidDispose(() => {
+        this.reportPanel = undefined;
+      });
+    } else {
+      this.reportPanel.reveal(vscode.ViewColumn.Active);
+    }
+    const styleUri = this.reportPanel.webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, "dist", "web", "webview.css")
+    );
+    this.reportPanel.webview.html = renderWorkspaceReportHtml(this.lastReport, {
+      cspSource: this.reportPanel.webview.cspSource,
+      styleUri: styleUri.toString(),
+      selectedEntryIndex: selectedEntryIndex === -1 ? undefined : selectedEntryIndex
+    });
   }
 
   private async executeContracts(
     snapshots: ContractSnapshot[],
     progress: vscode.Progress<{ message?: string; increment?: number }>
   ): Promise<WorkspaceReport> {
+    const reportStartedAt = Date.now();
     const entries: WorkspaceReportEntry[] = [];
     const groups = new Map<string, TargetGroup>();
 
@@ -261,15 +302,22 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
     const increment = groups.size > 0 ? 100 / groups.size : 100;
     for (const group of groups.values()) {
       progress.report({ message: group.target.label });
+      const groupStartedAt = Date.now();
       try {
         const csvText = await readTargetText(group.target);
+        const readDurationMs = Date.now() - groupStartedAt;
+        let includeReadDuration = true;
         for (const prepared of group.contracts) {
+          const validationStartedAt = Date.now();
+          const result = validateCsv(prepared.contract, csvText);
           entries.push({
             contractUri: prepared.snapshot.uri,
             contractLabel: prepared.snapshot.relativePath,
             target: group.target.label,
-            result: validateCsv(prepared.contract, csvText)
+            result,
+            durationMs: Date.now() - validationStartedAt + (includeReadDuration ? readDurationMs : 0)
           });
+          includeReadDuration = false;
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -278,7 +326,8 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
             contractUri: prepared.snapshot.uri,
             contractLabel: prepared.snapshot.relativePath,
             target: group.target.label,
-            error: message
+            error: message,
+            durationMs: Date.now() - groupStartedAt
           });
         }
       }
@@ -290,6 +339,7 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
     );
     return {
       completedAt: new Date(),
+      durationMs: Date.now() - reportStartedAt,
       selectedContracts: snapshots.length,
       targets: groups.size,
       entries,
@@ -370,6 +420,12 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
     item.description = `${report.entries.filter((entry) => entry.result?.valid).length}/${report.entries.length} runs`;
     item.iconPath = new vscode.ThemeIcon(report.valid ? "pass" : "error", new vscode.ThemeColor(report.valid ? "testing.iconPassed" : "testing.iconFailed"));
     item.contextValue = "csvContractReport";
+    item.tooltip = "Open the complete workspace test report.";
+    item.command = {
+      command: showWorkspaceReportCommand,
+      title: "Open CSV Contract Test Report",
+      arguments: [item]
+    };
     return item;
   }
 
@@ -442,9 +498,9 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
     item.tooltip = `${valid ? "PASS" : "FAIL"} ${entry.contractLabel}\nTarget: ${entry.target}${entry.error ? `\n${entry.error}` : ""}`;
     item.iconPath = new vscode.ThemeIcon(valid ? "pass" : "error", new vscode.ThemeColor(valid ? "testing.iconPassed" : "testing.iconFailed"));
     item.command = {
-      command: "csv-contract-vsce.openWorkbench",
-      title: "Open CSV Contract Workbench",
-      arguments: [entry.contractUri]
+      command: showWorkspaceReportCommand,
+      title: "Open Run Result",
+      arguments: [entry]
     };
     return item;
   }

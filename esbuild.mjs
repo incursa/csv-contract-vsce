@@ -56,7 +56,8 @@ const builds = [
       "test/streaming.test.ts",
       "test/outline-generator.test.ts",
       "test/targets.test.ts",
-      "test/manifest.test.ts"
+      "test/manifest.test.ts",
+      "test/workspace-report.test.ts"
     ],
     outdir: "dist/test",
     entryNames: "[name]",
