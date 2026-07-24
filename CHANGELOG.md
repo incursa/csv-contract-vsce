@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1
+
+- Added an immediate spinner and disabled state to the Workbench **Run tests** button.
+- Added live per-target progress so long-running validations show which CSV is currently being tested.
+- Ensured the running indicator clears after successful runs, validation errors, and missing-target warnings.
+
 ## 0.4.0
 
 - Added **Open in VS Code** and **Open externally** actions for every configured CSV target in the Workbench.

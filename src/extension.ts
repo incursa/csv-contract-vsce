@@ -194,15 +194,22 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
           void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
         }
       } else if (message.type === "run") {
-        const contract = parseContract(document.getText());
-        const targets = manualTargets ?? configuredTargets(document.uri, contract);
-        if (targets.length === 0) {
-          void vscode.window.showWarningMessage("Select a test CSV or add configured file paths or URLs before running the contract.");
-          return;
-        }
         const runs: TargetRun[] = [];
         try {
-          for (const target of targets) {
+          const contract = parseContract(document.getText());
+          const targets = manualTargets ?? configuredTargets(document.uri, contract);
+          if (targets.length === 0) {
+            void vscode.window.showWarningMessage("Select a test CSV or add configured file paths or URLs before running the contract.");
+            return;
+          }
+          for (const [index, target] of targets.entries()) {
+            await panel.webview.postMessage({
+              type: "runState",
+              running: true,
+              target: target.label,
+              index: index + 1,
+              total: targets.length
+            });
             runs.push({ target: target.label, result: validateCsv(contract, await readTargetText(target)) });
             await postState(runs);
           }
@@ -210,6 +217,8 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
           const message = error instanceof Error ? error.message : String(error);
           await postState(runs);
           void vscode.window.showErrorMessage(message);
+        } finally {
+          await panel.webview.postMessage({ type: "runState", running: false });
         }
       } else if (message.type === "updateContract") {
         await this.replaceDocument(document, serializeContract(message.contract as CsvContract));

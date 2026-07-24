@@ -12,6 +12,10 @@ let targetNames: string[] = [];
 let configuredTargetCount = 0;
 let usingConfiguredTargets = false;
 let runs: Array<{ target: string; result: ValidationResult }> = [];
+let running = false;
+let runningTarget = "";
+let runningTargetIndex = 0;
+let runningTargetCount = 0;
 let selectedColumn = "";
 let selectedRowTestIndex = -1;
 let columnsScrollTop = 0;
@@ -136,6 +140,10 @@ function render(): void {
     : targetNames.length === 1
       ? targetNames[0]
       : `${targetNames.length} test CSVs`;
+  const runningDetail = runningTarget
+    ? `Testing ${runningTargetIndex} of ${runningTargetCount}: ${runningTarget}`
+    : `Preparing ${runningTargetCount || targetNames.length} test target${(runningTargetCount || targetNames.length) === 1 ? "" : "s"}…`;
+  app.setAttribute("aria-busy", String(running));
   app.innerHTML = `
     <header class="workbench-header">
       <h1>CSV Contract Workbench</h1>
@@ -157,8 +165,14 @@ function render(): void {
         ${targetNames.length > 0 ? `<button class="inc-btn inc-btn--outline-secondary" data-action="open-active-target-vscode">Open CSV in VS Code</button>
         <button class="inc-btn inc-btn--outline-secondary" data-action="open-active-target-external">Open CSV externally</button>` : ""}
         <button class="inc-btn inc-btn--outline-secondary" data-action="open-yaml">Open YAML</button>
-        <button class="inc-btn inc-btn--primary" data-action="run">Run tests</button>
+        <button class="inc-btn inc-btn--primary run-button" data-action="run" ${running ? "disabled aria-busy=\"true\"" : ""}>
+          ${running ? `<span class="run-spinner run-spinner--button" aria-hidden="true"></span><span>Running…</span>` : "Run tests"}
+        </button>
       </div>
+      ${running ? `<div class="workbench-run-status" role="status" aria-live="polite">
+        <span class="run-spinner" aria-hidden="true"></span>
+        <div><strong>Running CSV tests</strong><span title="${escape(runningTarget)}">${escape(runningDetail)}</span></div>
+      </div>` : ""}
       <div class="configured-targets">
         <div class="configured-targets__heading">
           <div><span class="field-label">CONFIGURED TEST CSVs</span><p>Saved in this contract. Relative paths resolve from the contract file.</p></div>
@@ -368,7 +382,15 @@ function bind(): void {
     vscode.postMessage({ type: "updateContract", contract });
   }));
   app.querySelector('[data-action="open-yaml"]')?.addEventListener("click", () => vscode.postMessage({ type: "openYaml" }));
-  app.querySelector('[data-action="run"]')?.addEventListener("click", () => vscode.postMessage({ type: "run" }));
+  app.querySelector('[data-action="run"]')?.addEventListener("click", () => {
+    if (running) return;
+    running = true;
+    runningTarget = "";
+    runningTargetIndex = 0;
+    runningTargetCount = targetNames.length;
+    render();
+    vscode.postMessage({ type: "run" });
+  });
   app.querySelector('[data-action="add-row-test"]')?.addEventListener("click", () => {
     if (!contract) return;
     const id = `row-test-${(contract.rowTests?.length ?? 0) + 1}`;
@@ -435,6 +457,12 @@ window.addEventListener("message", (event) => {
     configuredTargetCount = message.configuredTargetCount ?? 0;
     usingConfiguredTargets = message.usingConfiguredTargets ?? false;
     runs = message.runs ?? [];
+    render();
+  } else if (message.type === "runState") {
+    running = message.running === true;
+    runningTarget = running ? message.target ?? "" : "";
+    runningTargetIndex = running ? message.index ?? 0 : 0;
+    runningTargetCount = running ? message.total ?? targetNames.length : 0;
     render();
   } else if (message.type === "error") {
     app.innerHTML = `<div class="inc-alert inc-alert--danger">${escape(message.message)}</div>`;

@@ -28,6 +28,15 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .workbench-target code { display: block; margin-top: .4rem; font-size: .85rem; }
 .field-label { display: block; margin-top: .8rem; color: #656668; font-size: .7rem; font-weight: 600; letter-spacing: .04em; }
 .workbench-actions { display: flex; flex-wrap: wrap; gap: .65rem; justify-content: flex-end; }
+.run-button { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; min-width: 6.5rem; }
+.run-button:disabled { cursor: wait; opacity: .82; }
+.workbench-run-status { grid-column: 1 / -1; display: flex; min-width: 0; align-items: center; gap: .75rem; padding: .75rem .85rem; border: 1px solid #b8c1f7; border-radius: 4px; color: #263b9f; background: #edf0ff; }
+.workbench-run-status div { display: grid; min-width: 0; gap: .1rem; }
+.workbench-run-status strong { font-size: .82rem; }
+.workbench-run-status span:last-child { overflow: hidden; color: #52545a; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
+.run-spinner { flex: 0 0 auto; width: 1.15rem; height: 1.15rem; border: 2px solid rgba(68, 89, 198, .25); border-top-color: var(--inc-action-primary); border-radius: 50%; animation: csv-contract-spin .75s linear infinite; }
+.run-spinner--button { width: .9rem; height: .9rem; border-color: rgba(255, 255, 255, .38); border-top-color: #fff; }
+@keyframes csv-contract-spin { to { transform: rotate(360deg); } }
 .configured-targets { grid-column: 1 / -1; min-width: 0; padding-top: .85rem; border-top: 1px solid #dbdcdc; }
 .configured-targets__heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; }
 .configured-targets__heading .field-label { margin-top: 0; }
@@ -141,4 +150,8 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
   .configured-target-row > .icon-button { grid-column: 3; grid-row: 1; }
   .result { grid-template-columns: 1fr; }
   .icon-button { width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-spinner { animation-duration: 1.5s; }
 }

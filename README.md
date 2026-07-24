@@ -14,7 +14,7 @@ Create a contract from a CSV to start with its real column names, then set prese
 
 ## See failures in context
 
-Run a contract against a CSV and review file, column, row, and cell failures directly below the run summary, before the column and row-test editors.
+Run a contract against a CSV and follow live per-target progress while large files are being checked. Review file, column, row, and cell failures directly below the run summary, before the column and row-test editors.
 
 ![Review CSV validation results in CSV Contract Workbench](images/workbench-results.png)
 

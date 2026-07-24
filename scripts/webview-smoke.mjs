@@ -172,6 +172,26 @@ await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message"
 await page.locator('[data-action="run"]').click();
 const lastMessage = await page.evaluate(() => window.__messages.at(-1));
 if (lastMessage?.type !== "run") throw new Error("Run tests did not send the expected host message.");
+if (!await page.locator('[data-action="run"]').isDisabled() || await page.locator(".run-spinner").count() < 2) {
+  throw new Error("Run tests did not immediately show a disabled spinner state.");
+}
+await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), {
+  type: "runState",
+  running: true,
+  target: "../exports/customers-east.csv",
+  index: 1,
+  total: 3
+});
+if (!await page.locator(".workbench-run-status").getByText("Testing 1 of 3").isVisible()) {
+  throw new Error("Run progress did not identify the active target.");
+}
+await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), {
+  type: "runState",
+  running: false
+});
+if (await page.locator(".workbench-run-status").count() !== 0 || await page.locator('[data-action="run"]').isDisabled()) {
+  throw new Error("Run progress did not clear when validation finished.");
+}
 await page.locator('[data-action="add-target-url"]').click();
 const addUrlMessage = await page.evaluate(() => window.__messages.at(-1));
 if (addUrlMessage?.type !== "addTargetUrl") throw new Error("Add URL did not send the expected host message.");
