@@ -86,5 +86,15 @@ export interface ValidationResult {
   rowCount: number;
   columnCount: number;
   testCount: number;
+  issueCount: number;
+  truncated: boolean;
   issues: ValidationIssue[];
+}
+
+export interface ValidationPerformance {
+  bytesRead: number;
+  durationMs: number;
+  rowsPerSecond: number;
+  maxRssBytes: number;
+  passes: number;
 }

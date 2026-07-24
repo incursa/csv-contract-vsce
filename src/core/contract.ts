@@ -216,6 +216,8 @@ export function validateCsv(contract: CsvContract, csvText: string): ValidationR
     rowCount: parsed.rows.length,
     columnCount: parsed.headers.length,
     testCount: Object.keys(contract.schema.columns).length + (contract.rowTests?.length ?? 0),
+    issueCount: issues.length,
+    truncated: false,
     issues
   };
 }

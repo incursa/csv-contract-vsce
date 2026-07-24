@@ -1,0 +1,63 @@
+# yaml-language-server: $schema=../../../../schemas/csvtest.schema.json
+version: 1
+csv:
+  delimiter: ","
+  encoding: utf-8
+  quote: '"'
+  header: required
+  nullValues: [""]
+  trimValues: false
+  caseSensitive: true
+  allowBlankRows: false
+  allowRaggedRows: false
+identity:
+  columns: [Company, EmployeeId]
+  unique: true
+schema:
+  allowAdditionalColumns: false
+  rowCount: { min: 1, max: 10 }
+  columnCount: { min: 4, max: 5 }
+  columns:
+    Company:
+      presence: required
+      constraints:
+        notNull: true
+        maxLength: 2
+        matches: '^\d{2}$'
+    EmployeeId:
+      presence: required
+      constraints:
+        notNull: true
+        unique: true
+        maxLength: 6
+        matches: '^\d{6}$'
+    Name:
+      presence: required
+      constraints:
+        notNull: true
+        minLength: 2
+        maxLength: 20
+    Status:
+      presence: required
+      constraints:
+        notNull: true
+        allowedValues: [Active, Inactive]
+    OptionalComment:
+      presence: optional
+      constraints:
+        maxLength: 20
+rowTests:
+  - id: expected-ada
+    select:
+      Company: "01"
+      EmployeeId: "000001"
+    expect:
+      count: { exact: 1 }
+      cells:
+        Status: { equals: Active }
+  - id: forbidden-employee
+    select:
+      Company: "99"
+      EmployeeId: "999999"
+    expect:
+      count: { exact: 0 }

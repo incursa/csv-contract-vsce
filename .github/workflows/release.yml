@@ -27,5 +27,9 @@ jobs:
           files: csv-contract-vsce.vsix
           generate_release_notes: true
       - name: Publish to Visual Studio Marketplace
-        if: ${{ env.VSCE_PAT != '' }}
-        run: npx vsce publish --pat "$VSCE_PAT"
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::error::VSCE_PAT is not configured for this repository or organization."
+            exit 1
+          fi
+          npx vsce publish --pat "$VSCE_PAT"

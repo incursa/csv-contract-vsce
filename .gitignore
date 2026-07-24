@@ -4,3 +4,6 @@ dist/
 .vscode-test/
 coverage/
 artifacts/runtime/
+artifacts/performance/*.csv
+artifacts/performance/benchmark.stderr.txt
+artifacts/performance/unique-temp/

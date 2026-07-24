@@ -40,4 +40,12 @@ Without `-Marketplace`, the script only verifies and packages.
 3. Commit the version change.
 4. Create and push a tag such as `v0.1.0`.
 5. The release workflow builds a VSIX and attaches it to a GitHub release.
-6. If the private repository has a `VSCE_PAT` Actions secret, the workflow also publishes to Marketplace.
+6. The workflow publishes to Marketplace and fails clearly if `VSCE_PAT` is unavailable.
+
+Configure the Actions secret interactively without placing the token in shell history:
+
+```powershell
+gh secret set VSCE_PAT --repo incursa/csv-contract-vsce
+```
+
+The secret may instead be supplied at the `incursa` organization level with access granted to this private repository.

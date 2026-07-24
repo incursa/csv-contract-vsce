@@ -1,0 +1,23 @@
+version: 1
+csv:
+  caseSensitive: false
+  trimValues: true
+  nullValues: ["", "NULL"]
+schema:
+  columns:
+    Code:
+      presence: required
+      constraints:
+        notNull: true
+        unique: true
+        allowedValues: [alpha, beta]
+    Value:
+      presence: required
+rowTests:
+  - id: normalized-selector
+    select:
+      Code: alpha
+    expect:
+      count: { exact: 1 }
+      cells:
+        Value: { equals: yes }

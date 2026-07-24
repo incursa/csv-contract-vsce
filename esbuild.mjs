@@ -41,7 +41,12 @@ const builds = [
   },
   {
     ...shared,
-    entryPoints: ["test/core.test.ts", "test/generator.test.ts"],
+    entryPoints: [
+      "test/core.test.ts",
+      "test/generator.test.ts",
+      "test/streaming.test.ts",
+      "test/outline-generator.test.ts"
+    ],
     outdir: "dist/test",
     entryNames: "[name]",
     outExtension: { ".js": ".cjs" },

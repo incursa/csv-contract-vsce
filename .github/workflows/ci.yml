@@ -25,3 +25,19 @@ jobs:
         with:
           name: csv-contract-vsce
           path: csv-contract-vsce.vsix
+  windows-powershell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:production
+      - name: PowerShell 7 suite
+        shell: pwsh
+        run: ./scripts/Test-PowerShellSuite.ps1
+      - name: Windows PowerShell 5.1 suite
+        shell: powershell
+        run: ./scripts/Test-PowerShellSuite.ps1

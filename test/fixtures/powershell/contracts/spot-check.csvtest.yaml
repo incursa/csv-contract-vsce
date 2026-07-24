@@ -1,0 +1,16 @@
+version: 1
+schema:
+  columns:
+    Company: { presence: required }
+    EmployeeId: { presence: required }
+    Name: { presence: required }
+    Status: { presence: required }
+    OptionalComment: { presence: optional }
+rowTests:
+  - id: expected-grace
+    select:
+      EmployeeId: "000002"
+    expect:
+      count: { exact: 1 }
+      cells:
+        Name: { equals: Grace }

@@ -1,0 +1,46 @@
+version: 1
+csv:
+  delimiter: ","
+  quote: '"'
+  nullValues: [""]
+  allowBlankRows: false
+  allowRaggedRows: false
+schema:
+  allowAdditionalColumns: true
+  rowCount: { min: 1 }
+  columnCount: { min: 5 }
+  columns:
+    Id:
+      presence: required
+      constraints:
+        notNull: true
+        unique: true
+        maxLength: 12
+        matches: '^\d{12}$'
+    Company:
+      presence: required
+      constraints:
+        notNull: true
+        maxLength: 2
+        matches: '^\d{2}$'
+    Status:
+      presence: required
+      constraints:
+        allowedValues: [Active, Inactive]
+    Name:
+      presence: required
+      constraints:
+        notNull: true
+        maxLength: 30
+    OptionalComment:
+      presence: required
+      constraints:
+        maxLength: 20
+rowTests:
+  - id: first-generated-row
+    select:
+      Id: "000000000001"
+    expect:
+      count: { exact: 1 }
+      cells:
+        Status: { equals: Active }

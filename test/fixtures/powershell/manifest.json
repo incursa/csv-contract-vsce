@@ -1,0 +1,158 @@
+[
+  {
+    "name": "comprehensive pass with quoted and multiline cells",
+    "csv": "csv/pass.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml"],
+    "expectedExit": 0,
+    "expectedCodes": []
+  },
+  {
+    "name": "optional declared column may be absent",
+    "csv": "csv/optional-absent.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml"],
+    "expectedExit": 0,
+    "expectedCodes": []
+  },
+  {
+    "name": "blank physical lines are ignored",
+    "csv": "csv/blank-lines.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml"],
+    "expectedExit": 0,
+    "expectedCodes": []
+  },
+  {
+    "name": "multiple contracts share one CSV pass",
+    "csv": "csv/pass.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml", "contracts/spot-check.csvtest.yaml"],
+    "expectedExit": 0,
+    "expectedCodes": [],
+    "expectedPasses": 1
+  },
+  {
+    "name": "multiple contracts propagate spot-check failure",
+    "csv": "csv/pass.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml", "contracts/spot-check-fail.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["CELL_NOT_EQUAL"],
+    "expectedPasses": 1
+  },
+  {
+    "name": "null value",
+    "csv": "csv/null.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["NULL_VALUE"]
+  },
+  {
+    "name": "column and identity uniqueness",
+    "csv": "csv/duplicate.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["NOT_UNIQUE", "IDENTITY_NOT_UNIQUE"]
+  },
+  {
+    "name": "maximum lengths",
+    "csv": "csv/max-length.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["MAX_LENGTH"]
+  },
+  {
+    "name": "regex constraints",
+    "csv": "csv/regex.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["REGEX_MISMATCH"]
+  },
+  {
+    "name": "allowed values",
+    "csv": "csv/allowed-value.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["NOT_ALLOWED"]
+  },
+  {
+    "name": "missing required column",
+    "csv": "csv/missing-required.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["REQUIRED_COLUMN_MISSING"]
+  },
+  {
+    "name": "additional column disallowed",
+    "csv": "csv/additional.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["ADDITIONAL_COLUMN", "COLUMN_COUNT_MAX"]
+  },
+  {
+    "name": "ragged record",
+    "csv": "csv/ragged.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["RAGGED_ROW"]
+  },
+  {
+    "name": "required row missing",
+    "csv": "csv/row-missing.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["MATCH_COUNT_EXACT"]
+  },
+  {
+    "name": "cell mismatch",
+    "csv": "csv/cell-mismatch.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["CELL_NOT_EQUAL"]
+  },
+  {
+    "name": "forbidden row exists",
+    "csv": "csv/forbidden.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["MATCH_COUNT_EXACT"]
+  },
+  {
+    "name": "duplicate header",
+    "csv": "csv/duplicate-header.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["DUPLICATE_HEADER"]
+  },
+  {
+    "name": "empty CSV",
+    "csv": "csv/empty.csv",
+    "contracts": ["contracts/comprehensive.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["CSV_EMPTY", "REQUIRED_COLUMN_MISSING", "ROW_COUNT_MIN"]
+  },
+  {
+    "name": "optional selector column absent is a contract failure",
+    "csv": "csv/optional-absent.csv",
+    "contracts": ["contracts/optional-selector.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["TEST_COLUMN_MISSING"]
+  },
+  {
+    "name": "undeclared selector column is a contract failure",
+    "csv": "csv/pass.csv",
+    "contracts": ["contracts/undeclared-test-column.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["UNDECLARED_TEST_COLUMN"]
+  },
+  {
+    "name": "invalid regex is reported",
+    "csv": "csv/pass.csv",
+    "contracts": ["contracts/invalid-regex.csvtest.yaml"],
+    "expectedExit": 1,
+    "expectedCodes": ["INVALID_REGEX"]
+  },
+  {
+    "name": "trim and case-insensitive comparison",
+    "csv": "csv/case-insensitive.csv",
+    "contracts": ["contracts/case-insensitive.csvtest.yaml"],
+    "expectedExit": 0,
+    "expectedCodes": []
+  }
+]

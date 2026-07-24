@@ -1,0 +1,15 @@
+version: 1
+schema:
+  allowAdditionalColumns: true
+  columns:
+    Company: { presence: required }
+    EmployeeId: { presence: required }
+    Name: { presence: required }
+    Status: { presence: required }
+    OptionalComment: { presence: optional }
+rowTests:
+  - id: optional-column-selector
+    select:
+      OptionalComment: Remote
+    expect:
+      count: { exact: 1 }

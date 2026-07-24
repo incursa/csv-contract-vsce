@@ -1,11 +1,11 @@
 .github/**
 .vscode/**
 artifacts/**
-docs/**
 src/**
 test/**
 scripts/webview-smoke.mjs
 scripts/clean.mjs
+scripts/Test-PowerShellSuite.ps1
 dist/test/**
 *.ts
 eslint.config.mjs

@@ -1,0 +1,10 @@
+version: 1
+schema:
+  columns:
+    Company:
+      presence: required
+      constraints:
+        matches: "[unterminated"
+    EmployeeId: { presence: required }
+    Name: { presence: required }
+    Status: { presence: required }

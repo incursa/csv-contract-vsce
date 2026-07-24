@@ -107,6 +107,18 @@ Regex patterns use JavaScript regular-expression syntax. They are applied to eac
 
 Use a broad schema contract for every file of one type and a second contract for date- or customer-specific spot checks. The CLI and PowerShell wrapper accept multiple contracts for the same CSV and return failure if any contract fails.
 
+Contracts with the same physical CSV settings (`delimiter`, `quote`, and `allowBlankRows`) share one streaming pass through the file. A different physical setting requires another pass. The result includes `performance.passes`, so automated runs can detect an accidental extra scan.
+
+## Bounded diagnostics
+
+The streaming CLI and PowerShell wrapper report at most 1,000 issue records by default while continuing to count every failure. Use `--max-issues` or `-MaxIssues` to change that bound. The result distinguishes:
+
+- `issues`: the retained issue records
+- `issueCount`: the total number of detected issues
+- `truncated`: whether additional issue records were omitted
+
+This keeps a badly malformed multi-million-row file from exhausting memory just to describe repeated failures. See [PowerShell and large-file operation](POWERSHELL-AND-PERFORMANCE.md) for batch commands, progress, exact disk-backed uniqueness, and performance guidance.
+
 ## Deliberately deferred
 
 Version 1 does not include cross-column expressions, foreign keys, typed numeric/date comparison, arbitrary query expressions, severities, JUnit, or SARIF. These can be added later without weakening the exact-string core.

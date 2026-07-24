@@ -1,0 +1,15 @@
+version: 1
+schema:
+  columns:
+    Company: { presence: required }
+    EmployeeId: { presence: required }
+    Name: { presence: required }
+    Status: { presence: required }
+    OptionalComment: { presence: optional }
+rowTests:
+  - id: wrong-grace-status
+    select:
+      EmployeeId: "000002"
+    expect:
+      cells:
+        Status: { equals: Active }

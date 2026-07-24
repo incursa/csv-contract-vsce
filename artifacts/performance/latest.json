@@ -1,0 +1,14 @@
+{
+  "generatedAtUtc": "2026-07-24T06:20:39.2335060Z",
+  "node": "v24.16.0",
+  "powershell": "7.6.3",
+  "rows": 500000,
+  "columns": 100,
+  "csvBytes": 396939555,
+  "durationSeconds": 16.928,
+  "rowsPerSecond": 29537,
+  "mebibytesPerSecond": 22.36,
+  "maxRssMiB": 341.7,
+  "passes": 1,
+  "valid": true
+}

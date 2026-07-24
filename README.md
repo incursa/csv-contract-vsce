@@ -11,6 +11,8 @@ CSV Contract Workbench is a VS Code extension, Node CLI, and PowerShell wrapper 
 - Selects rows by one or more exact string values and checks match counts or exact cell values.
 - Runs one general contract plus any number of spot-check contracts against the same CSV.
 - Preserves raw string semantics such as leading zeroes.
+- Streams batch validation instead of loading the CSV into memory.
+- Uses bounded diagnostics and disk-partitioned exact uniqueness checks for very large files.
 
 ## Quick start
 
@@ -29,7 +31,7 @@ In VS Code:
 4. Import a CSV and run the contract.
 5. Use **Open YAML** whenever direct editing is more convenient.
 
-The complete format and edge-case behavior are documented in [CSV contract format](docs/CSV-CONTRACT-FORMAT.md).
+The complete format and edge-case behavior are documented in [CSV contract format](docs/CSV-CONTRACT-FORMAT.md). Batch usage and large-file guidance are in [PowerShell and performance](docs/POWERSHELL-AND-PERFORMANCE.md).
 
 ## CLI
 
@@ -65,6 +67,36 @@ Exit codes are `0` for pass, `1` for test failures, and `2` for invalid argument
 ```
 
 For a 30-file export, keep the file-to-contract mapping in your own orchestration script and call `Test-CsvContract.ps1` once per CSV. Construction stays visual; batch execution stays scriptable.
+
+Generate a conservative outline from the CSV header:
+
+```powershell
+.\scripts\New-CsvContract.ps1 `
+  -Csv .\export\employees.csv `
+  -Output .\contracts\employees.csvtest.yaml
+```
+
+The outline includes every column, file-level counts, a sample row-existence test, and a sample exact-cell test. Data constraints are deliberately not guessed unless `-InferConstraints` is supplied.
+
+Run the complete behavioral suite:
+
+```powershell
+npm run test:powershell
+```
+
+The suite exercises 24 command-level checks under PowerShell 7 and Windows PowerShell 5.1. It covers valid files, optional columns, quotes and multiline cells, nulls, duplicates, composite identity, lengths, regex, allowed values, required/additional columns, ragged records, row counts, cell mismatches, invalid contracts, multiple contracts, and safe generator behavior.
+
+Run a generated large-file benchmark:
+
+```powershell
+npm run benchmark
+```
+
+See [PowerShell and performance](docs/POWERSHELL-AND-PERFORMANCE.md) for measured results and scaling guidance.
+
+## AI-assisted contract authoring
+
+[AI agent contract authoring](docs/AI-AGENT-CONTRACT-AUTHORING.md) explains how to turn source files, data dictionaries, specifications, sample CSVs, or business rules into reviewed contracts. A ready-to-paste agent prompt is available at [prompts/author-csv-contract.md](prompts/author-csv-contract.md).
 
 ## Design
 
