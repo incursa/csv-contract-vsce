@@ -1,3 +1,5 @@
+![CSV Contract Workbench](images/csv-contract-readme-banner.png)
+
 # CSV Contract Workbench
 
 CSV Contract Workbench is a VS Code extension, Node CLI, and PowerShell wrapper for reusable CSV data-quality contracts. A YAML contract describes the expected file shape, column constraints, row selectors, and exact cell assertions. The same TypeScript engine runs in every surface.
@@ -102,6 +104,8 @@ See [PowerShell and performance](docs/POWERSHELL-AND-PERFORMANCE.md) for measure
 
 The approved design source is [CSV Contract Workbench — VS Code](https://www.figma.com/design/342HejE612xMMeL30zAscf). Design renders are retained in `artifacts/design/`.
 
+The product mark, compact icon exports, wordmark, README banner, monochrome asset, colors, and rebuild commands are documented in [Branding](docs/BRANDING.md).
+
 ## Publishing
 
 See [Marketplace release runbook](runbooks/marketplace-release.md). `npm run release:check` runs tests, browser smoke validation, and creates the VSIX. Marketplace publishing requires `VSCE_PAT`; no secret is stored in this repository.
@@ -109,3 +113,5 @@ See [Marketplace release runbook](runbooks/marketplace-release.md). `npm run rel
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+The extension code and documentation are licensed under Apache-2.0. The CSV Contract Workbench name and the files listed in [`BRAND-ASSET-LICENSE.md`](BRAND-ASSET-LICENSE.md) are separate brand assets governed by that policy and [`TRADEMARKS.md`](TRADEMARKS.md); they are not licensed under Apache-2.0.

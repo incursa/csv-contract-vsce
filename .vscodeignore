@@ -6,6 +6,8 @@ test/**
 scripts/webview-smoke.mjs
 scripts/clean.mjs
 scripts/Test-PowerShellSuite.ps1
+scripts/build-brand-assets.mjs
+scripts/verify-brand-assets.mjs
 dist/test/**
 *.ts
 eslint.config.mjs

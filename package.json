@@ -2,7 +2,7 @@
   "name": "csv-contract-vsce",
   "displayName": "CSV Contract Workbench",
   "description": "Build and run reusable YAML contracts for CSV files from VS Code, Node, or PowerShell.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "incursa",
   "license": "Apache-2.0",
   "engines": {
@@ -34,6 +34,7 @@
     "yaml",
     "validation"
   ],
+  "icon": "images/icon.png",
   "browser": "./dist/web/extension.js",
   "contributes": {
     "commands": [
@@ -109,11 +110,13 @@
     "test:powershell": "npm run build:production && pwsh -NoProfile -File scripts/Test-PowerShellSuite.ps1",
     "test:webview": "npm run build && node scripts/webview-smoke.mjs",
     "test:all": "npm run test && npm run test:powershell && npm run test:webview",
+    "brand:build": "node scripts/build-brand-assets.mjs",
+    "brand:verify": "node scripts/verify-brand-assets.mjs",
     "benchmark": "npm run build:production && pwsh -NoProfile -File scripts/Test-CsvContractPerformance.ps1 -Rows 100000 -Columns 100",
     "vscode:prepublish": "npm run build:production",
     "package:vsix": "npm run build:production && vsce package --out csv-contract-vsce.vsix",
     "publish:marketplace": "npm run build:production && vsce publish",
-    "release:check": "npm run test:all && npm run package:vsix",
+    "release:check": "npm run brand:verify && npm run test:all && npm run package:vsix",
     "cli": "node dist/cli/csv-contract.cjs",
     "watch": "node esbuild.mjs --watch"
   },

@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">CSV Contract Workbench brand sheet</title>
+  <desc id="desc">Primary icon, wordmark, monochrome mark, compact-size checks, and approved colors.</desc>
+  <rect width="1200" height="720" fill="#F6F7FA"/>
+  <text x="64" y="74" fill="#121316" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="34" font-weight="700">CSV Contract Workbench — brand assets</text>
+  <text x="64" y="108" fill="#656668" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="17">A table frame establishes CSV structure; the open corner resolves into a validation check.</text>
+
+  <rect x="64" y="148" width="430" height="348" rx="18" fill="#FFFFFF" stroke="#DBDCDC"/>
+  <text x="94" y="190" fill="#656668" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="13" font-weight="600" letter-spacing="1">MARKETPLACE ICON</text>
+  <g transform="translate(151 208)">
+    <rect width="256" height="256" rx="52" fill="#4459C6"/>
+    <g transform="translate(20 20) scale(3.4)" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M31 52H17a5 5 0 0 1-5-5V17a5 5 0 0 1 5-5H47a5 5 0 0 1 5 5V29" stroke-width="7"/>
+      <path d="M12 26H52M12 39H30M28 12V52" stroke-width="6"/>
+      <path d="M34 42L41 49L55 31" stroke-width="7"/>
+    </g>
+  </g>
+
+  <rect x="520" y="148" width="616" height="176" rx="18" fill="#FFFFFF" stroke="#DBDCDC"/>
+  <text x="550" y="190" fill="#656668" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="13" font-weight="600" letter-spacing="1">WORDMARK</text>
+  <g transform="translate(551 214) scale(1.36)">
+    <g transform="translate(8 9) scale(0.9)" fill="none" stroke="#4459C6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M31 52H17a5 5 0 0 1-5-5V17a5 5 0 0 1 5-5H47a5 5 0 0 1 5 5V29" stroke-width="7"/>
+      <path d="M12 26H52M12 39H30M28 12V52" stroke-width="6"/>
+      <path d="M34 42L41 49L55 31" stroke="#2B397F" stroke-width="7"/>
+    </g>
+    <text x="76" y="44" fill="#121316" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="31" font-weight="700" letter-spacing="-0.8">CSV Contract</text>
+    <text x="78" y="65" fill="#2B397F" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="10.5" font-weight="600" letter-spacing="1.65">WORKBENCH FOR VS CODE</text>
+  </g>
+
+  <rect x="520" y="348" width="300" height="254" rx="18" fill="#2A3142"/>
+  <text x="550" y="390" fill="#DFE5FF" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="13" font-weight="600" letter-spacing="1">MONOCHROME</text>
+  <g transform="translate(587 416) scale(2.55)" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M31 52H17a5 5 0 0 1-5-5V17a5 5 0 0 1 5-5H47a5 5 0 0 1 5 5V29" stroke-width="7"/>
+    <path d="M12 26H52M12 39H30M28 12V52" stroke-width="6"/>
+    <path d="M34 42L41 49L55 31" stroke-width="7"/>
+  </g>
+
+  <rect x="844" y="348" width="292" height="254" rx="18" fill="#FFFFFF" stroke="#DBDCDC"/>
+  <text x="874" y="390" fill="#656668" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="13" font-weight="600" letter-spacing="1">COMPACT SIZES</text>
+  <g transform="translate(874 431)">
+    <g transform="scale(1.5)">
+      <rect width="64" height="64" rx="13" fill="#4459C6"/>
+      <g transform="translate(5 5) scale(0.85)" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M31 52H17a5 5 0 0 1-5-5V17a5 5 0 0 1 5-5H47a5 5 0 0 1 5 5V29" stroke-width="7"/>
+        <path d="M12 26H52M12 39H30M28 12V52" stroke-width="6"/>
+        <path d="M34 42L41 49L55 31" stroke-width="7"/>
+      </g>
+    </g>
+    <g transform="translate(128 24)">
+      <rect width="48" height="48" rx="10" fill="#4459C6"/>
+      <g transform="translate(3.75 3.75) scale(0.6375)" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M31 52H17a5 5 0 0 1-5-5V17a5 5 0 0 1 5-5H47a5 5 0 0 1 5 5V29" stroke-width="7"/>
+        <path d="M12 26H52M12 39H30M28 12V52" stroke-width="6"/>
+        <path d="M34 42L41 49L55 31" stroke-width="7"/>
+      </g>
+    </g>
+    <g transform="translate(204 40)">
+      <rect width="32" height="32" rx="7" fill="#4459C6"/>
+      <g transform="translate(2.5 2.5) scale(0.425)" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M31 52H17a5 5 0 0 1-5-5V17a5 5 0 0 1 5-5H47a5 5 0 0 1 5 5V29" stroke-width="7"/>
+        <path d="M12 26H52M12 39H30M28 12V52" stroke-width="6"/>
+        <path d="M34 42L41 49L55 31" stroke-width="7"/>
+      </g>
+    </g>
+  </g>
+
+  <text x="64" y="558" fill="#656668" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="13" font-weight="600" letter-spacing="1">APPROVED PALETTE</text>
+  <rect x="64" y="584" width="86" height="64" rx="10" fill="#4459C6"/>
+  <text x="64" y="675" fill="#121316" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="14" font-weight="600">Incursa Indigo</text>
+  <text x="64" y="698" fill="#656668" font-family="Consolas, monospace" font-size="13">#4459C6</text>
+  <rect x="182" y="584" width="86" height="64" rx="10" fill="#2B397F"/>
+  <text x="182" y="675" fill="#121316" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="14" font-weight="600">Deep Indigo</text>
+  <text x="182" y="698" fill="#656668" font-family="Consolas, monospace" font-size="13">#2B397F</text>
+  <rect x="300" y="584" width="86" height="64" rx="10" fill="#2A3142"/>
+  <text x="300" y="675" fill="#121316" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="14" font-weight="600">Workbench Ink</text>
+  <text x="300" y="698" fill="#656668" font-family="Consolas, monospace" font-size="13">#2A3142</text>
+</svg>

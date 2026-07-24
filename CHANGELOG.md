@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+- Added the CSV table-and-check product mark in Marketplace, wordmark, README banner, monochrome, and compact icon variants.
+- Added deterministic brand-asset rendering and verification scripts.
+- Added separate Incursa brand asset and trademark terms.
+
 ## 0.1.0
 
 - Added the visual CSV Contract Workbench custom editor.

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="220" viewBox="0 0 960 220" role="img" aria-labelledby="title desc">
+  <title id="title">CSV Contract Workbench</title>
+  <desc id="desc">CSV Contract Workbench banner with the table-and-check mark and product tagline.</desc>
+  <rect width="960" height="220" rx="28" fill="#EEF1FF"/>
+  <g transform="translate(45 30) scale(2.5)" fill="none" stroke="#4459C6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M31 52H17a5 5 0 0 1-5-5V17a5 5 0 0 1 5-5H47a5 5 0 0 1 5 5V29" stroke-width="7"/>
+    <path d="M12 26H52M12 39H30M28 12V52" stroke-width="6"/>
+    <path d="M34 42L41 49L55 31" stroke="#2B397F" stroke-width="7"/>
+  </g>
+  <text x="220" y="111" fill="#121316" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="53" font-weight="700" letter-spacing="-1.6">CSV Contract Workbench</text>
+  <text x="222" y="160" fill="#2B2E69" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="21.5" font-weight="400">Build, inspect, and run reusable tests against CSV exports.</text>
+</svg>
