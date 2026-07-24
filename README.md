@@ -2,116 +2,54 @@
 
 # CSV Contract Workbench
 
-CSV Contract Workbench is a VS Code extension, Node CLI, and PowerShell wrapper for reusable CSV data-quality contracts. A YAML contract describes the expected file shape, column constraints, row selectors, and exact cell assertions. The same TypeScript engine runs in every surface.
+Define reusable YAML contracts for CSV files, edit them visually in VS Code, and run the same validations interactively or in unattended workflows.
 
-## What it does
+## Build contracts visually
 
-- Creates a starter `*.csvtest.yaml` contract from an existing CSV.
-- Provides JSON Schema IntelliSense and validation for contract files.
-- Opens contracts in a visual editor built with `@incursa/ui-kit`.
-- Tests required and optional columns, extra columns, row and column counts, nulls, uniqueness, lengths, allowed values, and regex patterns.
-- Selects rows by one or more exact string values and checks match counts or exact cell values.
-- Runs one general contract plus any number of spot-check contracts against the same CSV.
-- Preserves raw string semantics such as leading zeroes.
-- Streams batch validation instead of loading the CSV into memory.
-- Uses bounded diagnostics and disk-partitioned exact uniqueness checks for very large files.
+Import a CSV to start with its real column names, then set presence and data-quality rules from the workbench. The YAML file remains the source of truth and can always be edited directly with schema-aware IntelliSense.
 
-## Quick start
+![Configure column rules in CSV Contract Workbench](images/workbench-column-rules.png)
 
-```powershell
-npm install
-npm run test:all
-npm run package:vsix
-code --install-extension .\csv-contract-vsce.vsix
-```
+*Configure required and optional columns, null handling, uniqueness, lengths, allowed values, and regular expressions.*
 
-In VS Code:
+## See failures in context
 
-1. Run **CSV Contract: Create Contract from CSV**.
-2. Open the generated `*.csvtest.yaml` file in **CSV Contract Workbench**.
-3. Mark columns required or optional and add constraints.
-4. Import a CSV and run the contract.
-5. Use **Open YAML** whenever direct editing is more convenient.
+Run a contract against a CSV and review file, column, row, and cell failures alongside the rules that produced them.
 
-The complete format and edge-case behavior are documented in [CSV contract format](docs/CSV-CONTRACT-FORMAT.md). Batch usage and large-file guidance are in [PowerShell and performance](docs/POWERSHELL-AND-PERFORMANCE.md).
+![Review CSV validation results in CSV Contract Workbench](images/workbench-results.png)
 
-## CLI
+*Inspect the selected column and the latest validation result in one workspace.*
 
-Build once, then run:
+## What you can validate
 
-```powershell
-node .\dist\cli\csv-contract.cjs test `
-  --csv .\examples\employees.csv `
-  --spec .\examples\employees.csvtest.yaml
-```
+- Expected and optional columns, with control over undeclared extras
+- Row and column counts
+- Null values, uniqueness, minimum and maximum lengths
+- Allowed values and regular-expression matches
+- Composite identities across multiple columns
+- Required or forbidden rows selected by exact values
+- Exact cell values for selected rows
+- Raw string values such as identifiers with leading zeroes
 
-Multiple `--spec` arguments apply multiple contracts to the same CSV:
+## Get started
 
-```powershell
-node .\dist\cli\csv-contract.cjs test `
-  --csv .\export\employees.csv `
-  --spec .\contracts\employee-general.csvtest.yaml `
-  --spec .\contracts\employee-spot-checks.csvtest.yaml `
-  --format json
-```
+1. Install **CSV Contract Workbench** from the VS Code Marketplace.
+2. Run **CSV Contract: Create Contract from CSV** from the Command Palette.
+3. Review the generated `*.csvtest.yaml` file in the visual workbench or YAML editor.
+4. Import a CSV and select **Run tests**.
 
-Exit codes are `0` for pass, `1` for test failures, and `2` for invalid arguments or runtime errors.
+Generated contracts are deliberately conservative: they capture the observed columns and include sample row and cell assertions without guessing business rules. You decide which columns are required, unique, nullable, length-limited, or restricted to known values.
 
-## PowerShell
+## Reuse the same contract
 
-```powershell
-.\scripts\Test-CsvContract.ps1 `
-  -Csv .\export\employees.csv `
-  -Contract @(
-    '.\contracts\employee-general.csvtest.yaml',
-    '.\contracts\employee-spot-checks.csvtest.yaml'
-  )
-```
+Contracts are plain YAML files designed to live beside the data workflow they protect. A broad schema contract and focused spot-check contracts can be applied to the same CSV.
 
-For a 30-file export, keep the file-to-contract mapping in your own orchestration script and call `Test-CsvContract.ps1` once per CSV. Construction stays visual; batch execution stays scriptable.
+The included Node CLI and PowerShell wrapper use a streaming validator for unattended runs. Compatible contracts share one CSV pass, diagnostics remain bounded, and exact uniqueness checks spill to temporary disk instead of retaining the entire CSV in memory.
 
-Generate a conservative outline from the CSV header:
+## Local by design
 
-```powershell
-.\scripts\New-CsvContract.ps1 `
-  -Csv .\export\employees.csv `
-  -Output .\contracts\employees.csvtest.yaml
-```
-
-The outline includes every column, file-level counts, a sample row-existence test, and a sample exact-cell test. Data constraints are deliberately not guessed unless `-InferConstraints` is supplied.
-
-Run the complete behavioral suite:
-
-```powershell
-npm run test:powershell
-```
-
-The suite exercises 24 command-level checks under PowerShell 7 and Windows PowerShell 5.1. It covers valid files, optional columns, quotes and multiline cells, nulls, duplicates, composite identity, lengths, regex, allowed values, required/additional columns, ragged records, row counts, cell mismatches, invalid contracts, multiple contracts, and safe generator behavior.
-
-Run a generated large-file benchmark:
-
-```powershell
-npm run benchmark
-```
-
-See [PowerShell and performance](docs/POWERSHELL-AND-PERFORMANCE.md) for measured results and scaling guidance.
-
-## AI-assisted contract authoring
-
-[AI agent contract authoring](docs/AI-AGENT-CONTRACT-AUTHORING.md) explains how to turn source files, data dictionaries, specifications, sample CSVs, or business rules into reviewed contracts. A ready-to-paste agent prompt is available at [prompts/author-csv-contract.md](prompts/author-csv-contract.md).
-
-## Design
-
-The approved design source is [CSV Contract Workbench — VS Code](https://www.figma.com/design/342HejE612xMMeL30zAscf). Design renders are retained in `artifacts/design/`.
-
-The product mark, compact icon exports, wordmark, README banner, monochrome asset, colors, and rebuild commands are documented in [Branding](docs/BRANDING.md).
-
-## Publishing
-
-See [Marketplace release runbook](runbooks/marketplace-release.md). `npm run release:check` runs tests, browser smoke validation, and creates the VSIX. Marketplace publishing requires `VSCE_PAT`; no secret is stored in this repository.
+CSV contents and contracts are processed locally. CSV Contract Workbench does not upload validation data to a hosted service.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
-
-The extension code and documentation are licensed under Apache-2.0. The CSV Contract Workbench name and the files listed in [`BRAND-ASSET-LICENSE.md`](BRAND-ASSET-LICENSE.md) are separate brand assets governed by that policy and [`TRADEMARKS.md`](TRADEMARKS.md); they are not licensed under Apache-2.0.
+The extension code and documentation are licensed under Apache-2.0. CSV Contract Workbench and its product marks are Incursa brand assets and are not granted under that license.

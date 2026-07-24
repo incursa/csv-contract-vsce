@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+- Reworked the Marketplace overview around end-user workflows and validation capabilities.
+- Added current workbench screenshots for column-rule authoring and validation-result review.
+- Removed repository build, test, publishing, benchmark, and one-off batch details from the Marketplace README.
+
 ## 0.1.1
 
 - Added the CSV table-and-check product mark in Marketplace, wordmark, README banner, monochrome, and compact icon variants.

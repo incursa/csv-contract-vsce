@@ -10,6 +10,8 @@ const expectedPngs = new Map([
   ["images/icon-32.png", [32, 32]],
   ["images/icon-16.png", [16, 16]],
   ["images/csv-contract-readme-banner.png", [960, 220]],
+  ["images/workbench-column-rules.png", [1440, 1000]],
+  ["images/workbench-results.png", [1440, 1000]],
   ["artifacts/brand/csv-contract-brand-sheet.png", [1200, 720]]
 ]);
 
@@ -32,8 +34,22 @@ if (packageJson.icon !== "images/icon.png") throw new Error("package.json must d
 
 const readme = await readFile(resolve(root, "README.md"), "utf8");
 requireText(readme, "![CSV Contract Workbench](images/csv-contract-readme-banner.png)", "README");
-requireText(readme, "BRAND-ASSET-LICENSE.md", "README");
-requireText(readme, "TRADEMARKS.md", "README");
+requireText(readme, "![Configure column rules in CSV Contract Workbench](images/workbench-column-rules.png)", "README");
+requireText(readme, "![Review CSV validation results in CSV Contract Workbench](images/workbench-results.png)", "README");
+for (const internalDetail of [
+  "npm install",
+  "npm run",
+  "30-file",
+  "30 file",
+  "release runbook",
+  "VSCE_PAT",
+  "@incursa/ui-kit",
+  "figma.com"
+]) {
+  if (readme.toLowerCase().includes(internalDetail.toLowerCase())) {
+    throw new Error(`README contains internal release or implementation detail: ${internalDetail}`);
+  }
+}
 
 const activityMark = await readFile(resolve(root, "resources/csv-contract.svg"), "utf8");
 requireText(activityMark, 'stroke="currentColor"', "Activity-bar mark");
