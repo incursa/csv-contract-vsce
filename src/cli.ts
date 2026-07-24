@@ -1,5 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { basename, dirname, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { parseContract, serializeContract } from "./core/contract";
 import { createContractOutlineFromFile } from "./node/contract-generator";
 import { validateCsvFile } from "./node/streaming-validator";
@@ -106,8 +106,9 @@ async function initialize(args: ParsedArgs, csvPath: string): Promise<void> {
     inferConstraints: args.inferConstraints,
     includeSampleTests: args.includeSampleTests
   });
-  let targetPath = relative(dirname(output), csvPath).split(sep).join("/");
-  if (!targetPath.startsWith(".")) targetPath = `./${targetPath}`;
+  const relativePath = relative(dirname(output), csvPath);
+  let targetPath = (isAbsolute(relativePath) ? csvPath : relativePath).split(sep).join("/");
+  if (!isAbsolute(relativePath) && !targetPath.startsWith(".")) targetPath = `./${targetPath}`;
   generated.contract.targets = [{ path: targetPath }];
   const schemaUrl = "https://raw.githubusercontent.com/incursa/csv-contract-vsce/main/schemas/csvtest.schema.json";
   const preamble = [

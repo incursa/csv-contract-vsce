@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- Preserved an absolute Windows target path when a generated contract and its source CSV are on different drives.
+
 ## 0.2.0
 
 - Added optional contract-level CSV targets using relative or absolute file paths and HTTP/HTTPS URLs.

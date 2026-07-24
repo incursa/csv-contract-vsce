@@ -2,7 +2,7 @@
   "name": "csv-contract-vsce",
   "displayName": "CSV Contract Workbench",
   "description": "Design and run reusable YAML contracts for CSV files in VS Code, PowerShell, or Node.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "incursa",
   "license": "Apache-2.0",
   "engines": {
