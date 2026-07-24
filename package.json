@@ -1,0 +1,133 @@
+{
+  "name": "csv-contract-vsce",
+  "displayName": "CSV Contract Workbench",
+  "description": "Build and run reusable YAML contracts for CSV files from VS Code, Node, or PowerShell.",
+  "version": "0.1.0",
+  "publisher": "incursa",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.110.0"
+  },
+  "preview": true,
+  "pricing": "Free",
+  "markdown": "github",
+  "galleryBanner": {
+    "color": "#2A3142",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/incursa/csv-contract-vsce.git"
+  },
+  "homepage": "https://github.com/incursa/csv-contract-vsce#readme",
+  "bugs": {
+    "url": "https://github.com/incursa/csv-contract-vsce/issues"
+  },
+  "categories": [
+    "Testing",
+    "Other"
+  ],
+  "keywords": [
+    "csv",
+    "data quality",
+    "contract testing",
+    "yaml",
+    "validation"
+  ],
+  "browser": "./dist/web/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "csv-contract-vsce.createFromCsv",
+        "title": "CSV Contract: Create Contract from CSV",
+        "category": "CSV Contract"
+      },
+      {
+        "command": "csv-contract-vsce.runContract",
+        "title": "CSV Contract: Run Contract",
+        "category": "CSV Contract"
+      },
+      {
+        "command": "csv-contract-vsce.openWorkbench",
+        "title": "CSV Contract: Open Workbench",
+        "category": "CSV Contract"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "csv-contract-vsce.contractEditor",
+        "displayName": "CSV Contract Workbench",
+        "selector": [
+          {
+            "filenamePattern": "*.csvtest.yaml"
+          },
+          {
+            "filenamePattern": "*.csvtest.yml"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "yamlValidation": [
+      {
+        "fileMatch": [
+          "*.csvtest.yaml",
+          "*.csvtest.yml"
+        ],
+        "url": "./schemas/csvtest.schema.json"
+      }
+    ],
+    "configuration": {
+      "title": "CSV Contract",
+      "properties": {
+        "csvContract.defaultNullValues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ""
+          ],
+          "description": "Null markers added to contracts created from CSV files."
+        }
+      }
+    }
+  },
+  "activationEvents": [
+    "onCustomEditor:csv-contract-vsce.contractEditor",
+    "onCommand:csv-contract-vsce.createFromCsv",
+    "onCommand:csv-contract-vsce.runContract",
+    "onCommand:csv-contract-vsce.openWorkbench"
+  ],
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "check-types": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src test",
+    "build": "npm run clean && npm run check-types && npm run lint && node esbuild.mjs",
+    "build:production": "npm run clean && npm run check-types && npm run lint && node esbuild.mjs --production",
+    "test": "npm run build && node --test dist/test/**/*.test.cjs",
+    "test:webview": "npm run build && node scripts/webview-smoke.mjs",
+    "test:all": "npm run test && npm run test:webview",
+    "vscode:prepublish": "npm run build:production",
+    "package:vsix": "npm run build:production && vsce package --out csv-contract-vsce.vsix",
+    "publish:marketplace": "npm run build:production && vsce publish",
+    "release:check": "npm run test:all && npm run package:vsix",
+    "cli": "node dist/cli/csv-contract.cjs",
+    "watch": "node esbuild.mjs --watch"
+  },
+  "devDependencies": {
+    "@incursa/ui-kit": "^1.9.0",
+    "@types/node": "^24.10.1",
+    "@types/papaparse": "^5.3.16",
+    "@types/vscode": "^1.110.0",
+    "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.28.1",
+    "eslint": "^9.39.3",
+    "jsdom": "^27.4.0",
+    "papaparse": "^5.5.3",
+    "playwright": "^1.59.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.1",
+    "yaml": "^2.8.1"
+  }
+}

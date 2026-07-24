@@ -1,0 +1,65 @@
+# yaml-language-server: $schema=../schemas/csvtest.schema.json
+version: 1
+csv:
+  delimiter: ","
+  encoding: utf-8
+  quote: '"'
+  header: required
+  nullValues:
+    - ""
+  trimValues: false
+  caseSensitive: true
+  allowBlankRows: false
+  allowRaggedRows: false
+identity:
+  columns:
+    - Company
+    - EmployeeId
+  unique: true
+schema:
+  allowAdditionalColumns: true
+  rowCount:
+    min: 1
+  columnCount:
+    exact: 5
+  columns:
+    Company:
+      presence: required
+      constraints:
+        notNull: true
+        maxLength: 2
+    EmployeeId:
+      presence: required
+      constraints:
+        notNull: true
+        unique: true
+        maxLength: 12
+        matches: ^\d+$
+    EmployeeName:
+      presence: required
+      constraints:
+        notNull: true
+        maxLength: 120
+    Status:
+      presence: required
+      constraints:
+        notNull: true
+        allowedValues:
+          - Active
+          - Inactive
+    OptionalComment:
+      presence: optional
+      constraints:
+        maxLength: 250
+rowTests:
+  - id: expected-employee-exists
+    name: Expected employee exists
+    select:
+      Company: "01"
+      EmployeeId: "000123"
+    expect:
+      count:
+        exact: 1
+      cells:
+        Status:
+          equals: Active

@@ -1,0 +1,4 @@
+Company,EmployeeId,EmployeeName,Status,OptionalComment
+01,000123,Ada Lovelace,Active,
+01,000124,Grace Hopper,Active,Remote
+02,000125,Katherine Johnson,Inactive,

@@ -1,0 +1,14 @@
+.github/**
+.vscode/**
+artifacts/**
+docs/**
+src/**
+test/**
+scripts/webview-smoke.mjs
+scripts/clean.mjs
+dist/test/**
+*.ts
+eslint.config.mjs
+esbuild.mjs
+tsconfig.json
+tsconfig.cli.json

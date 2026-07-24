@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/incursa/csv-contract-vsce/main/schemas/csvtest.schema.json",
+  "title": "CSV Contract",
+  "description": "Requirements and spot checks for one CSV file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "schema"
+  ],
+  "properties": {
+    "version": {
+      "const": 1,
+      "description": "CSV Contract format version."
+    },
+    "csv": {
+      "$ref": "#/$defs/csvOptions"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "columns"
+      ],
+      "properties": {
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "unique": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "columns"
+      ],
+      "properties": {
+        "allowAdditionalColumns": {
+          "type": "boolean",
+          "default": true
+        },
+        "rowCount": {
+          "$ref": "#/$defs/count"
+        },
+        "columnCount": {
+          "$ref": "#/$defs/count"
+        },
+        "columns": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/column"
+          }
+        }
+      }
+    },
+    "rowTests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rowTest"
+      }
+    }
+  },
+  "$defs": {
+    "csvOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "delimiter": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1,
+          "default": ","
+        },
+        "encoding": {
+          "const": "utf-8",
+          "default": "utf-8"
+        },
+        "quote": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1,
+          "default": "\""
+        },
+        "header": {
+          "const": "required",
+          "default": "required"
+        },
+        "nullValues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ""
+          ]
+        },
+        "trimValues": {
+          "type": "boolean",
+          "default": false
+        },
+        "caseSensitive": {
+          "type": "boolean",
+          "default": true
+        },
+        "allowBlankRows": {
+          "type": "boolean",
+          "default": false
+        },
+        "allowRaggedRows": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "count": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "exact": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "min": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "column": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "presence"
+      ],
+      "properties": {
+        "presence": {
+          "enum": [
+            "required",
+            "optional"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "constraints": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "notNull": {
+              "type": "boolean"
+            },
+            "unique": {
+              "type": "boolean"
+            },
+            "minLength": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxLength": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "matches": {
+              "type": "string",
+              "format": "regex"
+            },
+            "allowedValues": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "rowTest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "select",
+        "expect"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "description": "Stable machine-readable test identifier."
+        },
+        "name": {
+          "type": "string"
+        },
+        "select": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "expect": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "count": {
+              "$ref": "#/$defs/count"
+            },
+            "cells": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "equals"
+                ],
+                "properties": {
+                  "equals": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "count"
+              ]
+            },
+            {
+              "required": [
+                "cells"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

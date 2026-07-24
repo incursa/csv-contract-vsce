@@ -1,0 +1,67 @@
+:root {
+  --inc-surface-primary: #fff;
+  --inc-surface-secondary: #f6f6f6;
+  --inc-surface-muted: #f1f1f1;
+  --inc-surface-highlight: #eef1ff;
+  --inc-surface-strong: #2a3142;
+  --inc-text-primary: #121316;
+  --inc-text-secondary: #656668;
+  --inc-border-default: #dbdcdc;
+  --inc-action-primary: #4459c6;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  color: var(--inc-text-primary);
+  background: var(--inc-surface-secondary);
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--inc-surface-secondary); }
+button, input, select, textarea { font: inherit; }
+code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+.workbench-loading { padding: 2rem; }
+.workbench-header { padding: 1.1rem 2rem; background: #2a3142; color: #fff; }
+.workbench-header h1 { margin: 0; font-size: 1.5rem; font-weight: 600; }
+.workbench-header p { margin: .25rem 0 0; color: #dfe5ff; }
+.inc-card { border: 1px solid #dbdcdc; border-radius: 4px; background: #fff; box-shadow: 0 1px 4px rgba(18,19,22,.08); }
+.workbench-target { display: grid; grid-template-columns: 1.15fr 1.4fr auto; align-items: end; gap: 1.5rem; margin: 1.25rem 2rem 1rem; padding: 1rem; }
+.workbench-target h2, .pane h2 { margin: 0; font-size: 1rem; }
+.workbench-target code { display: block; margin-top: .4rem; font-size: .85rem; }
+.field-label { display: block; margin-top: .8rem; color: #656668; font-size: .7rem; font-weight: 600; letter-spacing: .04em; }
+.workbench-actions { display: flex; gap: .65rem; justify-content: flex-end; }
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin: 0 2rem 1rem; }
+.metric { padding: 1rem; }
+.metric span { display: block; color: #656668; font-size: .8rem; }
+.metric strong { display: block; margin-top: .2rem; font-size: 1.75rem; font-weight: 600; }
+.split { display: grid; grid-template-columns: 1.2fr .95fr; gap: 1rem; margin: 0 2rem 1rem; }
+.split.lower { grid-template-columns: 1fr 1fr; }
+.pane { min-width: 0; padding: 1rem; }
+.columns-pane { padding: 0; overflow: hidden; }
+.columns-pane .pane-heading { padding: 1rem 1rem .55rem; }
+.pane-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.pane-heading p, .pane > p { margin: .25rem 0 0; color: #656668; font-size: .8rem; }
+.inc-table { width: 100%; border-collapse: collapse; }
+.inc-table th, .inc-table td { padding: .7rem 1rem; text-align: left; border-bottom: 1px solid #dbdcdc; font-size: .8rem; }
+.inc-table th { color: #656668; font-size: .7rem; text-transform: uppercase; }
+.inc-table tbody tr { cursor: pointer; }
+.inc-table__row--selected { background: #eef1ff; }
+.inc-badge { text-transform: uppercase; font-size: .65rem; }
+.inspector { display: grid; grid-template-columns: 1fr 1fr; gap: .85rem 1rem; }
+.inspector h2, .inspector .column-name { grid-column: 1 / -1; }
+.inspector label { display: flex; flex-direction: column; gap: .35rem; color: #656668; font-size: .78rem; }
+.inspector .check { flex-direction: row; align-items: start; color: #121316; }
+.check span { display: flex; flex-direction: column; }
+.check small { color: #656668; margin-top: .1rem; }
+.form-control, .form-select { width: 100%; padding: .5rem .65rem; border: 1px solid #c4c4c5; border-radius: 4px; color: #121316; background: #fff; }
+.test-list, .results { display: grid; gap: .75rem; margin-top: 1rem; }
+.test-row { display: grid; gap: .35rem; padding: .75rem; border: 1px solid #dbdcdc; border-radius: 4px; }
+.test-row span, .empty { color: #656668; font-size: .8rem; }
+.result { display: grid; grid-template-columns: 3.5rem 12rem 1fr; align-items: center; gap: .5rem; padding: .75rem; border: 1px solid; border-radius: 4px; font-size: .8rem; }
+.result span { font-weight: 600; }
+.result p { margin: 0; }
+.result--pass { color: #00833a; border-color: #009743; background: #e6fbef; }
+.result--fail { color: #b01524; border-color: #d11a2a; background: #fff0f1; }
+
+@media (max-width: 900px) {
+  .workbench-target, .split { grid-template-columns: 1fr; }
+  .metrics { grid-template-columns: repeat(2, 1fr); }
+  .workbench-actions { justify-content: flex-start; }
+}
