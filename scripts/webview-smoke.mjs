@@ -78,11 +78,115 @@ await page.locator("text=Status").first().click();
 if ((await page.locator("#allowedValues").inputValue()) !== "Active\nInactive") {
   throw new Error("Column selection did not update the inspector.");
 }
+await page.locator('[data-row-test-index="1"]').click();
+if ((await page.locator("#rowTestId").inputValue()) !== "expected-customer-status") {
+  throw new Error("Row test selection did not open the expected editor.");
+}
+const expectedCell = page.locator("[data-cell-value]");
+if ((await expectedCell.inputValue()) !== "Active") throw new Error("Cell expectation did not render for editing.");
+await expectedCell.fill("Inactive");
+await expectedCell.evaluate((element) => element.dispatchEvent(new Event("change", { bubbles: true })));
+let updateMessage = await page.evaluate(() => window.__messages.at(-1));
+if (updateMessage?.type !== "updateContract" || updateMessage.contract.rowTests[1].expect.cells.Status.equals !== "Inactive") {
+  throw new Error("Editing a cell expectation did not emit the updated contract.");
+}
+await page.locator('[data-action="add-selector"]').click();
+if ((await page.locator("[data-selector-row]").count()) !== 2) throw new Error("Adding a row selector did not update the editor.");
+await page.locator('[data-action="add-cell"]').click();
+if ((await page.locator("[data-cell-row]").count()) !== 2) throw new Error("Adding a cell expectation did not update the editor.");
+await page.locator('[data-action="add-row-test"]').click();
+if ((await page.locator("[data-row-test-index]").count()) !== 3 || (await page.locator("#rowTestId").inputValue()) !== "row-test-3") {
+  throw new Error("Adding a row test did not select an editable test.");
+}
+await page.locator('[data-action="delete-row-test"]').click();
+if ((await page.locator("[data-row-test-index]").count()) !== 2) throw new Error("Deleting a row test did not update the list.");
+const editedContract = await page.evaluate(() =>
+  window.__messages.filter((message) => message.type === "updateContract").at(-1).contract
+);
+const editedFailedState = {
+  ...failedState,
+  contract: editedContract,
+  result: {
+    ...failedState.result,
+    issues: [{
+      level: "cell",
+      code: "CELL_NOT_EQUAL",
+      testId: "expected-customer-status",
+      message: "Expected Inactive; found Active."
+    }]
+  }
+};
+await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), editedFailedState);
 await page.locator('[data-action="run"]').click();
 const lastMessage = await page.evaluate(() => window.__messages.at(-1));
 if (lastMessage?.type !== "run") throw new Error("Run tests did not send the expected host message.");
 await page.screenshot({ path: "images/workbench-results.png", fullPage: true });
 await page.screenshot({ path: "artifacts/runtime/webview-workbench.png", fullPage: true });
+
+const largeColumns = Object.fromEntries(Array.from({ length: 202 }, (_, index) => {
+  const name = index === 0 ? "CustomerId" : `Column_${String(index + 1).padStart(3, "0")}`;
+  return [name, { presence: "required", constraints: { maxLength: 24 } }];
+}));
+const largeState = {
+  ...state,
+  csv: { headers: Object.keys(largeColumns), rowCount: 500000 },
+  contract: {
+    ...state.contract,
+    schema: { ...state.contract.schema, columns: largeColumns },
+    rowTests: [{ id: "large-row-check", select: { CustomerId: "C000123" }, expect: { count: { exact: 1 } } }]
+  }
+};
+await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), largeState);
+if ((await page.locator(".columns-pane [data-column]").count()) !== 202) throw new Error("Large column list did not render completely.");
+const overflow = await page.locator(".columns-scroll").evaluate((element) => ({
+  clientHeight: element.clientHeight,
+  scrollHeight: element.scrollHeight
+}));
+if (overflow.scrollHeight <= overflow.clientHeight) throw new Error("Large column list is not contained by a vertical scroller.");
+const topAlignment = await page.evaluate(() => {
+  const columns = document.querySelector(".columns-pane").getBoundingClientRect();
+  const inspector = document.querySelector(".inspector").getBoundingClientRect();
+  return Math.abs(columns.top - inspector.top);
+});
+if (topAlignment > 1) throw new Error(`Column inspector is not top aligned (${topAlignment}px difference).`);
+await page.locator(".columns-scroll").evaluate((element) => { element.scrollTop = element.scrollHeight; });
+await page.locator('[data-column="Column_202"]').click();
+if ((await page.locator(".column-name").textContent()) !== "Column_202") {
+  throw new Error("A column at the end of the overflow list could not be selected.");
+}
+const retainedScroll = await page.locator(".columns-scroll").evaluate((element) => element.scrollTop);
+if (retainedScroll <= 0) throw new Error("Selecting a column reset the large column list to the top.");
+const stickyHeader = await page.evaluate(() => {
+  const scroller = document.querySelector(".columns-scroll");
+  const header = document.querySelector(".columns-table-header");
+  return {
+    scrollerTop: scroller.getBoundingClientRect().top,
+    headerBottom: header.getBoundingClientRect().bottom,
+    position: getComputedStyle(header).position,
+    overflow: getComputedStyle(scroller).overflow
+  };
+});
+if (Math.abs(stickyHeader.scrollerTop - stickyHeader.headerBottom) > 1) {
+  throw new Error(`Column header is not fixed above the overflow region: ${JSON.stringify(stickyHeader)}`);
+}
+const presenceStyle = await page.locator(".presence-label").first().evaluate((element) => {
+  const style = getComputedStyle(element);
+  return { color: style.color, background: style.backgroundColor, text: element.textContent };
+});
+if (presenceStyle.color === presenceStyle.background || presenceStyle.text !== "required") {
+  throw new Error("Presence status does not render as a readable label.");
+}
+const qaScreenshotDir = process.env.CSV_CONTRACT_QA_SCREENSHOT_DIR;
+if (qaScreenshotDir) {
+  await mkdir(qaScreenshotDir, { recursive: true });
+  await page.locator(".split").first().screenshot({ path: `${qaScreenshotDir}/large-column-workbench.png` });
+}
+
+await page.setViewportSize({ width: 600, height: 900 });
+await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), state);
+const mobileOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+if (mobileOverflow > 1) throw new Error(`Workbench has ${mobileOverflow}px of page-level horizontal overflow at 600px.`);
+if (qaScreenshotDir) await page.screenshot({ path: `${qaScreenshotDir}/mobile-row-test-editor.png`, fullPage: false });
 if (consoleProblems.length > 0) throw new Error(`Webview console problems:\n${consoleProblems.join("\n")}`);
 await browser.close();
 server.close();

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4
+
+- Replaced low-contrast presence badges with readable required and optional labels.
+- Added a bounded, sticky-header column scroller that preserves position for contracts with hundreds of columns.
+- Kept the column inspector top aligned beside large column lists.
+- Added complete visual editing for row selectors, match counts, and exact cell expectations.
+- Added browser coverage for a 202-column contract, row/cell editing, and responsive overflow.
+
 ## 0.1.3
 
 - Refined and enlarged the table-and-check mark for cleaner balance and stronger small-size legibility.
