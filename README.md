@@ -24,6 +24,12 @@ Run a contract against a CSV and follow live per-target progress while large fil
 
 Open **CSV Contract** in the Activity Bar to see every `*.csvtest.yaml` and `*.csvtest.yml` file in the workspace. Expand a contract to inspect and open its local or URL targets. Check the contracts you want and select **Run Selected**. A dedicated report opens with totals for the complete test run and expandable results for every contract-target pair. Select **Last run** to reopen the aggregate report, or select an individual green or red run to open the report focused on that result. Contracts that share a target reuse the same loaded CSV, and the selection remains checked for the workspace.
 
+## Compare CSV files semantically
+
+Run **CSV Contract: Compare CSV Files Semantically** for an order-independent full-row multiset comparison or an explicit keyed comparison. Duplicate keys are surfaced without pairing ambiguous records. Trimming, case folding, blank/null equivalence, date and decimal normalization, ignored columns, keys, and context columns are all opt-in.
+
+The aggregate result view keeps diagnostics redacted and bounded. Open complete normal-sized normalized results in the native VS Code diff editor, or save deterministic JSON, CSV, and Markdown evidence locally. The pure TypeScript engine runs in a real VS Code web host through `vscode.workspace.fs`; desktop automatically switches large local files to exact spill-to-disk comparison. See [Semantic CSV comparison](docs/SEMANTIC-COMPARISON.md) for limits, evidence files, and privacy guidance.
+
 ## What you can validate
 
 - Expected and optional columns, with control over undeclared extras

@@ -2,6 +2,7 @@ node_modules/
 dist/
 *.vsix
 .vscode-test/
+.vscode-test-web/
 coverage/
 artifacts/runtime/
 artifacts/performance/*.csv

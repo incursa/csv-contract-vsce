@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0
+
+- Added canonical pure-TypeScript full-row multiset and explicit keyed semantic comparison.
+- Added duplicate-key detection without arbitrary pairing, schema summaries, and added, removed, changed, unchanged, and duplicate counts.
+- Added opt-in ignored columns, trimming, invariant case folding, blank/null equivalence, date normalization, and exact decimal normalization without business-key inference.
+- Added bounded redacted diagnostics plus deterministic JSON, CSV, Markdown, schema, difference, and normalized evidence files.
+- Added a responsive aggregate comparison result view and native VS Code normalized diff action.
+- Added browser-host comparison through `vscode.workspace.fs` with explicit 20 MiB and 250,000-row portable limits.
+- Added a separate Node desktop entry with exact 128-partition spill-to-disk comparison for large local files.
+- Added PowerShell parity fixtures, spill tests, and a real headless VS Code web-extension-host workflow test.
+
 ## 0.5.0
 
 - Added a dedicated workspace test report that opens automatically after selected contracts finish.
