@@ -1,0 +1,28 @@
+{
+  "sourceBehavior": "Compare-CsvSemantic.ps1",
+  "schema": "incursa.csv-semantic-comparison-parity/v1",
+  "cases": [
+    { "name": "order-change", "left": "order-left.csv", "right": "order-right.csv", "options": {}, "exitCode": 0 },
+    { "name": "duplicate-row-removed", "left": "duplicate-left.csv", "right": "duplicate-right.csv", "options": {}, "exitCode": 1, "removed": 1 },
+    { "name": "keyed-change", "left": "keyed-left.csv", "right": "keyed-right.csv", "options": { "keyColumns": ["Id"] }, "exitCode": 1, "changed": 1 },
+    { "name": "duplicate-key", "left": "duplicate-key-left.csv", "right": "duplicate-key-right.csv", "options": { "keyColumns": ["Id"] }, "exitCode": 4, "duplicateKeysLeft": 1 },
+    { "name": "schema-change", "left": "schema-left.csv", "right": "schema-right.csv", "options": {}, "exitCode": 3, "schemaChanges": 2 },
+    {
+      "name": "normalization",
+      "left": "normalization-left.csv",
+      "right": "normalization-right.csv",
+      "options": {
+        "normalization": {
+          "trim": true,
+          "caseFold": true,
+          "blankNullEquivalent": true,
+          "dateColumns": ["WorkDate"],
+          "decimalColumns": ["Amount"]
+        }
+      },
+      "exitCode": 0
+    },
+    { "name": "duplicate-header-error", "left": "duplicate-header.csv", "right": "order-right.csv", "options": {}, "exitCode": 2, "errorCode": "DUPLICATE_HEADER" },
+    { "name": "decimal-error", "left": "decimal-error.csv", "right": "decimal-right.csv", "options": { "normalization": { "decimalColumns": ["Amount"] } }, "exitCode": 2, "errorCode": "DECIMAL_NORMALIZATION" }
+  ]
+}

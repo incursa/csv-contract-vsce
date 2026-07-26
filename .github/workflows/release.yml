@@ -11,6 +11,7 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    environment: marketplace
     env:
       VSCE_PAT: ${{ secrets.VSCE_PAT }}
     steps:
@@ -32,4 +33,4 @@ jobs:
             echo "::error::VSCE_PAT is not configured for this repository or organization."
             exit 1
           fi
-          npx vsce publish --pat "$VSCE_PAT"
+          npx vsce publish --packagePath csv-contract-vsce.vsix --pat "$VSCE_PAT"

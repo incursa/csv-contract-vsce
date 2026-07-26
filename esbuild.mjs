@@ -18,7 +18,7 @@ await mkdir("dist/test", { recursive: true });
 const builds = [
   {
     ...shared,
-    entryPoints: ["src/extension.ts"],
+    entryPoints: ["src/node/extension.ts"],
     outfile: "dist/node/extension.cjs",
     format: "cjs",
     platform: "node",
@@ -42,6 +42,14 @@ const builds = [
   },
   {
     ...shared,
+    entryPoints: ["test/web/index.ts"],
+    outfile: "dist/web/test/index.js",
+    format: "cjs",
+    platform: "browser",
+    external: ["vscode"]
+  },
+  {
+    ...shared,
     entryPoints: ["src/cli.ts"],
     outfile: "dist/cli/csv-contract.cjs",
     format: "cjs",
@@ -57,7 +65,8 @@ const builds = [
       "test/outline-generator.test.ts",
       "test/targets.test.ts",
       "test/manifest.test.ts",
-      "test/workspace-report.test.ts"
+      "test/workspace-report.test.ts",
+      "test/semantic-comparison.test.ts"
     ],
     outdir: "dist/test",
     entryNames: "[name]",

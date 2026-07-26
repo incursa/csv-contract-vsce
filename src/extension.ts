@@ -11,6 +11,8 @@ import {
   type ResolvedTarget
 } from "./vscode-targets";
 import { registerWorkspaceExplorer } from "./workspace-explorer";
+import { registerSemanticComparison } from "./vscode-comparison";
+import type { DesktopComparisonRunner } from "./vscode-comparison";
 
 const viewType = "csv-contract-vsce.contractEditor";
 
@@ -19,7 +21,7 @@ interface TargetRun {
   result: ValidationResult;
 }
 
-export function activate(context: vscode.ExtensionContext): void {
+export function activate(context: vscode.ExtensionContext, desktopComparisonRunner?: DesktopComparisonRunner): void {
   const output = vscode.window.createOutputChannel("CSV Contract");
   const provider = new ContractEditorProvider(context);
   registerTargetContentProvider(context);
@@ -34,6 +36,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("csv-contract-vsce.openWorkbench", (uri?: vscode.Uri) => openWorkbench(uri))
   );
   registerWorkspaceExplorer(context, output);
+  registerSemanticComparison(context, desktopComparisonRunner);
 }
 
 export function deactivate(): void {}

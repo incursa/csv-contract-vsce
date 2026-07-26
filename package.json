@@ -2,7 +2,7 @@
   "name": "csv-contract-vsce",
   "displayName": "CSV Contract Workbench",
   "description": "Design and run reusable YAML contracts for CSV files in VS Code, PowerShell, or Node.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "publisher": "incursa",
   "license": "Apache-2.0",
   "engines": {
@@ -88,6 +88,11 @@
         "title": "CSV Contract: Open Target Externally",
         "category": "CSV Contract",
         "icon": "$(link-external)"
+      },
+      {
+        "command": "csv-contract-vsce.compareCsv",
+        "title": "CSV Contract: Compare CSV Files Semantically",
+        "category": "CSV Contract"
       }
     ],
     "viewsContainers": {
@@ -189,7 +194,8 @@
     "onCommand:csv-contract-vsce.showWorkspaceReport",
     "onCommand:csv-contract-vsce.refreshExplorer",
     "onCommand:csv-contract-vsce.openTargetInVsCode",
-    "onCommand:csv-contract-vsce.openTargetExternally"
+    "onCommand:csv-contract-vsce.openTargetExternally",
+    "onCommand:csv-contract-vsce.compareCsv"
   ],
   "scripts": {
     "clean": "node scripts/clean.mjs",
@@ -200,7 +206,9 @@
     "test": "npm run build && node --test dist/test/**/*.test.cjs",
     "test:powershell": "npm run build:production && pwsh -NoProfile -File scripts/Test-PowerShellSuite.ps1",
     "test:webview": "npm run build && node scripts/webview-smoke.mjs",
-    "test:all": "npm run test && npm run test:powershell && npm run test:webview",
+    "test:web-extension": "npm run build:production && node scripts/web-extension-test.mjs",
+    "test:semantic-parity": "pwsh -NoProfile -File scripts/Test-SemanticParity.ps1",
+    "test:all": "npm run test && npm run test:powershell && npm run test:webview && npm run test:web-extension",
     "brand:build": "node scripts/build-brand-assets.mjs",
     "brand:verify": "node scripts/verify-brand-assets.mjs",
     "benchmark": "npm run build:production && pwsh -NoProfile -File scripts/Test-CsvContractPerformance.ps1 -Rows 100000 -Columns 100",
@@ -216,6 +224,7 @@
     "@types/node": "^24.10.1",
     "@types/papaparse": "^5.3.16",
     "@types/vscode": "^1.110.0",
+    "@vscode/test-web": "^0.0.81",
     "@vscode/vsce": "^3.7.1",
     "esbuild": "^0.28.1",
     "eslint": "^9.39.3",
