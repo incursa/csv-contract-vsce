@@ -2,6 +2,12 @@
 
 CSV Contract Workbench can translate reviewed CSV contract constraints and SQL-specific conditional rules into a deterministic, read-only T-SQL script. Generation is offline: the extension and CLI do not connect to SQL Server or execute the generated code.
 
+## Import the table definition first
+
+Use **CSV Contract: Import SQL Server Table Schema** with an offline `CREATE TABLE` script, Database Tracking canonical `*.structure.json` model, or compact Database Knowledge snapshot. The import preview must be confirmed before changes are applied.
+
+New physical columns and safe technical constraints are added. Existing reviewed rules and contract-only columns are preserved, including conflicts where the contract deliberately differs from the imported schema. SQL metadata is stored under `sqlServer.importedSchema`; the source file path and database credentials are not stored. Identity and computed columns are declared optional for CSV validation because SQL Server may generate them after the source file is loaded.
+
 Start with [the staging example](../examples/sql-server-staging.csvtest.yaml), set `sqlServer.schema` and `sqlServer.table`, and declare every referenced staging column under `schema.columns`. `rowLocator` controls which identifying columns appear before `t.*` in each bounded failure sample.
 
 ## Limit validation to one load

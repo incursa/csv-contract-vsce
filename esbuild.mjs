@@ -67,7 +67,8 @@ const builds = [
       "test/manifest.test.ts",
       "test/workspace-report.test.ts",
       "test/semantic-comparison.test.ts",
-      "test/sql-server-generator.test.ts"
+      "test/sql-server-generator.test.ts",
+      "test/sql-schema-import.test.ts"
     ],
     outdir: "dist/test",
     entryNames: "[name]",

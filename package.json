@@ -2,7 +2,7 @@
   "name": "csv-contract-vsce",
   "displayName": "CSV Contract Workbench",
   "description": "Design and run reusable YAML contracts for CSV files in VS Code, PowerShell, or Node.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "incursa",
   "license": "Apache-2.0",
   "engines": {
@@ -97,6 +97,11 @@
       {
         "command": "csv-contract-vsce.generateSqlServerValidation",
         "title": "CSV Contract: Generate SQL Server Staging Validation",
+        "category": "CSV Contract"
+      },
+      {
+        "command": "csv-contract-vsce.importSqlServerSchema",
+        "title": "CSV Contract: Import SQL Server Table Schema",
         "category": "CSV Contract"
       }
     ],
@@ -201,7 +206,8 @@
     "onCommand:csv-contract-vsce.openTargetInVsCode",
     "onCommand:csv-contract-vsce.openTargetExternally",
     "onCommand:csv-contract-vsce.compareCsv",
-    "onCommand:csv-contract-vsce.generateSqlServerValidation"
+    "onCommand:csv-contract-vsce.generateSqlServerValidation",
+    "onCommand:csv-contract-vsce.importSqlServerSchema"
   ],
   "scripts": {
     "clean": "node scripts/clean.mjs",
@@ -221,7 +227,7 @@
     "vscode:prepublish": "npm run build:production",
     "package:vsix": "npm run build:production && vsce package --out csv-contract-vsce.vsix",
     "publish:marketplace": "npm run build:production && vsce publish",
-    "release:check": "npm run brand:verify && npm run test:all && npm run package:vsix",
+    "release:check": "npm run test:all && npm run brand:verify && npm run package:vsix",
     "cli": "node dist/cli/csv-contract.cjs",
     "watch": "node esbuild.mjs --watch"
   },

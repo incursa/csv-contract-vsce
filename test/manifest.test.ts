@@ -11,6 +11,7 @@ test("contributes the workspace test Activity Bar view and commands", async () =
   assert.ok(commands.has("csv-contract-vsce.openTargetInVsCode"));
   assert.ok(commands.has("csv-contract-vsce.openTargetExternally"));
   assert.ok(commands.has("csv-contract-vsce.generateSqlServerValidation"));
+  assert.ok(commands.has("csv-contract-vsce.importSqlServerSchema"));
   assert.equal(manifest.contributes.viewsContainers.activitybar[0].id, "csvContractExplorer");
   assert.equal(manifest.contributes.views.csvContractExplorer[0].id, "csvContractExplorer.contracts");
   assert.ok(manifest.activationEvents.includes("onView:csvContractExplorer.contracts"));
@@ -27,4 +28,5 @@ test("Marketplace README explains how to run the installed PowerShell wrapper", 
   assert.match(readme, /scripts\\Test-CsvContract\.ps1/);
   assert.match(readme, /Run workspace test suites/);
   assert.match(readme, /Generate SQL Server staging validation/);
+  assert.match(readme, /Import a known staging schema/);
 });

@@ -14,6 +14,7 @@ import { registerWorkspaceExplorer } from "./workspace-explorer";
 import { registerSemanticComparison } from "./vscode-comparison";
 import type { DesktopComparisonRunner } from "./vscode-comparison";
 import { generateSqlServerValidation } from "./core/sql-server-generator";
+import { mergeImportedSchema, parseSqlSchemaSource, type ImportedSqlTable } from "./core/sql-schema-import";
 
 const viewType = "csv-contract-vsce.contractEditor";
 
@@ -35,10 +36,103 @@ export function activate(context: vscode.ExtensionContext, desktopComparisonRunn
     vscode.commands.registerCommand("csv-contract-vsce.createFromCsv", () => createFromCsv()),
     vscode.commands.registerCommand("csv-contract-vsce.runContract", () => runContract(output)),
     vscode.commands.registerCommand("csv-contract-vsce.openWorkbench", (uri?: vscode.Uri) => openWorkbench(uri)),
-    vscode.commands.registerCommand("csv-contract-vsce.generateSqlServerValidation", (uri?: vscode.Uri) => generateSqlServerScript(uri))
+    vscode.commands.registerCommand("csv-contract-vsce.generateSqlServerValidation", (uri?: vscode.Uri) => generateSqlServerScript(uri)),
+    vscode.commands.registerCommand("csv-contract-vsce.importSqlServerSchema", (uri?: vscode.Uri) => importSqlServerSchema(uri))
   );
   registerWorkspaceExplorer(context, output);
   registerSemanticComparison(context, desktopComparisonRunner);
+}
+
+async function chooseImportedTable(tables: ImportedSqlTable[]): Promise<ImportedSqlTable | undefined> {
+  if (tables.length === 1) return tables[0];
+  return (await vscode.window.showQuickPick(tables.map((table) => ({
+    label: `${table.schema}.${table.table}`,
+    description: `${table.columns.length} columns`,
+    detail: table.sourceKind,
+    table
+  })), { title: "Select SQL Server staging table", placeHolder: "Choose the table to import" }))?.table;
+}
+
+function safeContractFilename(table: string): string {
+  const safe = [...table].map((character) => character.charCodeAt(0) < 32 ? "-" : character)
+    .join("").replace(/[<>:"/\\|?*]/g, "-").replace(/[ .]+$/g, "").trim();
+  return `${safe || "staging-table"}.csvtest.yaml`;
+}
+
+async function replaceTextDocument(document: vscode.TextDocument, text: string): Promise<void> {
+  const last = document.lineAt(document.lineCount - 1);
+  const edit = new vscode.WorkspaceEdit();
+  edit.replace(document.uri, new vscode.Range(new vscode.Position(0, 0), last.range.end), text);
+  if (!await vscode.workspace.applyEdit(edit)) throw new Error("VS Code could not apply the schema import to the contract.");
+}
+
+async function importSqlServerSchema(requestedUri?: vscode.Uri): Promise<void> {
+  const sourceUri = await pickFile({
+    "SQL Server table schema": ["sql", "json"],
+    "All files": ["*"]
+  });
+  if (!sourceUri) return;
+  try {
+    const sourceText = new TextDecoder("utf-8").decode(await vscode.workspace.fs.readFile(sourceUri));
+    const extension = /\.[^./]+$/.exec(sourceUri.path)?.[0] ?? "";
+    const table = await chooseImportedTable(parseSqlSchemaSource(sourceText, extension));
+    if (!table) return;
+
+    const active = vscode.window.activeTextEditor?.document.uri;
+    let contractUri = requestedUri?.path.match(/\.csvtest\.ya?ml$/i) ? requestedUri
+      : active?.path.match(/\.csvtest\.ya?ml$/i) ? active : undefined;
+    let contract: CsvContract;
+    let existingDocument: vscode.TextDocument | undefined;
+    if (!contractUri) {
+      const action = await vscode.window.showQuickPick([
+        { label: "Create a new contract", description: `Start from ${table.schema}.${table.table}`, create: true },
+        { label: "Update an existing contract", description: "Merge without replacing reviewed rules", create: false }
+      ], { title: "Import SQL Server table schema", placeHolder: "Choose where to apply the imported schema" });
+      if (!action) return;
+      if (!action.create) contractUri = await pickFile({ "CSV contracts": ["csvtest.yaml", "csvtest.yml", "yaml", "yml"] });
+    }
+    if (contractUri) {
+      existingDocument = await vscode.workspace.openTextDocument(contractUri);
+      contract = parseContract(existingDocument.getText());
+    } else {
+      contract = { version: 1, schema: { allowAdditionalColumns: true, columns: {} } };
+    }
+
+    const merged = mergeImportedSchema(contract, table);
+    const details = [
+      `Source: ${table.sourceKind}`,
+      `Table: ${table.schema}.${table.table}`,
+      `Columns: ${table.columns.length}`,
+      `Add: ${merged.preview.addedColumns.length}; already declared: ${merged.preview.existingColumns.length}; contract-only preserved: ${merged.preview.contractOnlyColumns.length}`,
+      `Technical constraints inferred: ${merged.preview.inferredConstraints.length}; reviewed conflicts preserved: ${merged.preview.preservedConflicts.length}`,
+      merged.preview.targetChanged ? "The SQL target will change; existing scope, detail, and conditional-rule settings remain preserved." : "SQL target identity is unchanged.",
+      merged.preview.identityInitialized ? `Composite identity initialized from primary key: ${table.primaryKeyColumns.join(", ")}` : "Existing identity preserved.",
+      merged.preview.preservedConflicts.length ? `Preserved conflicts: ${merged.preview.preservedConflicts.slice(0, 10).join(", ")}` : "No reviewed constraint conflicts."
+    ].join("\n");
+    const confirmation = await vscode.window.showInformationMessage(
+      `Import schema for ${table.schema}.${table.table}?`,
+      { modal: true, detail: details },
+      "Import Schema"
+    );
+    if (confirmation !== "Import Schema") return;
+
+    if (!contractUri) {
+      contractUri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.joinPath(sourceUri, "..", safeContractFilename(table.table)),
+        filters: { "CSV contract": ["csvtest.yaml"] },
+        title: "Save imported staging contract"
+      });
+      if (!contractUri) return;
+    }
+    const schemaUrl = "https://raw.githubusercontent.com/incursa/csv-contract-vsce/main/schemas/csvtest.schema.json";
+    const serialized = serializeContract(merged.contract, schemaUrl);
+    if (existingDocument) await replaceTextDocument(existingDocument, serialized);
+    else await vscode.workspace.fs.writeFile(contractUri, new TextEncoder().encode(serialized));
+    await vscode.commands.executeCommand("vscode.openWith", contractUri, viewType);
+    void vscode.window.showInformationMessage(`Imported ${table.columns.length} columns from ${table.schema}.${table.table}. Reviewed rules were preserved.`);
+  } catch (error) {
+    void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+  }
 }
 
 async function generateSqlServerScript(requestedUri?: vscode.Uri): Promise<void> {
@@ -259,6 +353,8 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         await vscode.commands.executeCommand("vscode.openWith", document.uri, "default");
       } else if (message.type === "generateSqlServerValidation") {
         await generateSqlServerScript(document.uri);
+      } else if (message.type === "importSqlServerSchema") {
+        await importSqlServerSchema(document.uri);
       }
     });
   }

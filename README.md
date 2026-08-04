@@ -89,6 +89,25 @@ node .\dist\cli\csv-contract.cjs sql `
 
 See [SQL Server staging validation](docs/SQL-SERVER-STAGING-VALIDATION.md) for the complete predicate reference and load-scoping behavior.
 
+## Import a known staging schema
+
+Run **CSV Contract: Import SQL Server Table Schema** or select **Import table schema** in the Workbench. Choose an offline `CREATE TABLE` script, a Database Tracking `*.structure.json` table model, or a compact Database Knowledge snapshot. If the source contains several tables, select the one you want before the preview.
+
+The preview reports added and existing columns, contract-only columns that will remain in place, inferred technical constraints, preserved conflicts, table identity changes, and primary-key identity initialization. Nothing is written until **Import Schema** is confirmed. Existing descriptions, allowed values, regexes, conditional rules, load scope, detail limit, identities, and manually reviewed constraint values are preserved.
+
+Imported SQL type, nullability, length, precision, scale, identity, computed-column, and ordinal metadata remains under `sqlServer.importedSchema`. Identity and computed columns are optional in CSV validation because they may be generated after loading.
+
+The bundled CLI supports the same offline merge:
+
+```powershell
+node .\dist\cli\csv-contract.cjs schema `
+  --source .\staging-table.sql `
+  --spec .\payroll.csvtest.yaml `
+  --out .\payroll.csvtest.yaml
+```
+
+Omit `--spec` to create a new contract. For a multi-table source, add `--table staging.PayrollImport`.
+
 ## Get started
 
 1. Install **CSV Contract Workbench** from the VS Code Marketplace.

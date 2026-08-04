@@ -86,6 +86,25 @@ export interface SqlServerTarget {
     sqlType: string;
   };
   conditionalRules?: SqlConditionalRule[];
+  importedSchema?: SqlServerImportedSchema;
+}
+
+export interface SqlServerImportedColumn {
+  ordinal: number;
+  name: string;
+  sqlType: string;
+  nullable: boolean;
+  identity?: boolean;
+  computed?: boolean;
+  maxLength?: number;
+  precision?: number;
+  scale?: number;
+}
+
+export interface SqlServerImportedSchema {
+  formatVersion: 1;
+  sourceKind: "create-table" | "database-tracking" | "database-knowledge";
+  columns: SqlServerImportedColumn[];
 }
 
 export type CsvTarget =

@@ -6,6 +6,7 @@ import { validateCsvFile } from "./node/streaming-validator";
 import { createTargetPlans } from "./node/target-plan";
 import { withMaterializedTarget } from "./node/target-source";
 import { generateSqlServerValidation } from "./core/sql-server-generator";
+import { mergeImportedSchema, parseSqlSchemaSource } from "./core/sql-schema-import";
 
 interface ParsedArgs {
   command: string;
@@ -20,6 +21,8 @@ interface ParsedArgs {
   sampleRows: number;
   inferConstraints: boolean;
   includeSampleTests: boolean;
+  source?: string;
+  table?: string;
 }
 
 function usage(): never {
@@ -32,6 +35,8 @@ Usage:
   csv-contract init --csv <file.csv> --out <contract.csvtest.yaml>
                     [--sample-rows 10000] [--infer-constraints] [--no-sample-tests]
   csv-contract sql --spec <contract.csvtest.yaml> --out <validation.sql>
+  csv-contract schema --source <table.sql-or-json> --out <contract.csvtest.yaml>
+                      [--spec <existing.csvtest.yaml>] [--table <schema.name>]
 
 Repeat --csv to test multiple explicit files or URLs. When --csv is omitted, targets come from each contract.
 Compatible contracts targeting the same CSV are applied in one pass.
@@ -84,6 +89,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (token === "--unique-partitions") result.uniquePartitions = positiveInteger(value, "uniquePartitions");
     else if (token === "--temp-directory") result.tempDirectory = value;
     else if (token === "--sample-rows") result.sampleRows = positiveInteger(value, "sampleRows");
+    else if (token === "--source") result.source = value;
+    else if (token === "--table") result.table = value;
     else usage();
   }
   return result;
@@ -178,6 +185,29 @@ async function generateSql(args: ParsedArgs): Promise<void> {
   for (const warning of generated.warnings) console.error(`WARNING: ${warning}`);
 }
 
+async function importSchema(args: ParsedArgs): Promise<void> {
+  if (!args.source || !args.out || args.specs.length > 1) usage();
+  const source = resolve(args.source);
+  const extension = /\.[^.\\/]+$/.exec(source)?.[0] ?? "";
+  const tables = parseSqlSchemaSource(await readFile(source, "utf8"), extension);
+  const table = args.table
+    ? tables.find((candidate) => `${candidate.schema}.${candidate.table}`.toLocaleLowerCase() === args.table!.toLocaleLowerCase())
+    : tables.length === 1 ? tables[0] : undefined;
+  if (!table) {
+    const choices = tables.map((candidate) => `${candidate.schema}.${candidate.table}`).join(", ");
+    throw new Error(args.table ? `Table '${args.table}' was not found. Available tables: ${choices}` : `The source contains multiple tables; use --table. Available tables: ${choices}`);
+  }
+  const contract = args.specs.length
+    ? parseContract(await readFile(resolve(args.specs[0]), "utf8"))
+    : { version: 1 as const, schema: { allowAdditionalColumns: true, columns: {} } };
+  const merged = mergeImportedSchema(contract, table);
+  const schemaUrl = "https://raw.githubusercontent.com/incursa/csv-contract-vsce/main/schemas/csvtest.schema.json";
+  await writeFile(resolve(args.out), serializeContract(merged.contract, schemaUrl), "utf8");
+  console.log(`Imported ${table.columns.length} columns from ${table.schema}.${table.table} into ${resolve(args.out)}.`);
+  console.log(`Added ${merged.preview.addedColumns.length}; preserved ${merged.preview.existingColumns.length} existing and ${merged.preview.contractOnlyColumns.length} contract-only columns.`);
+  if (merged.preview.preservedConflicts.length) console.error(`WARNING: Preserved reviewed conflicts: ${merged.preview.preservedConflicts.join(", ")}`);
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (args.command === "init") {
@@ -192,6 +222,10 @@ async function main(): Promise<void> {
   }
   if (args.command === "sql") {
     await generateSql(args);
+    return;
+  }
+  if (args.command === "schema") {
+    await importSchema(args);
     return;
   }
   usage();

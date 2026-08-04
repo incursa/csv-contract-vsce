@@ -166,6 +166,7 @@ function render(): void {
         <button class="inc-btn inc-btn--outline-secondary" data-action="open-active-target-external">Open CSV externally</button>` : ""}
         <button class="inc-btn inc-btn--outline-secondary" data-action="open-yaml">Open YAML</button>
         <button class="inc-btn inc-btn--outline-secondary" data-action="generate-sql">Generate staging SQL</button>
+        <button class="inc-btn inc-btn--outline-secondary" data-action="import-sql-schema">Import table schema</button>
         <button class="inc-btn inc-btn--primary run-button" data-action="run" ${running ? "disabled aria-busy=\"true\"" : ""}>
           ${running ? `<span class="run-spinner run-spinner--button" aria-hidden="true"></span><span>Running…</span>` : "Run tests"}
         </button>
@@ -370,6 +371,7 @@ function bind(): void {
   app.querySelector('[data-action="add-target-files"]')?.addEventListener("click", () => vscode.postMessage({ type: "addTargetFiles" }));
   app.querySelector('[data-action="add-target-url"]')?.addEventListener("click", () => vscode.postMessage({ type: "addTargetUrl" }));
   app.querySelector('[data-action="generate-sql"]')?.addEventListener("click", () => vscode.postMessage({ type: "generateSqlServerValidation" }));
+  app.querySelector('[data-action="import-sql-schema"]')?.addEventListener("click", () => vscode.postMessage({ type: "importSqlServerSchema" }));
   app.querySelectorAll<HTMLElement>('[data-action="open-target-vscode"]').forEach((button) => button.addEventListener("click", () =>
     vscode.postMessage({ type: "openTargetInVsCode", index: Number(button.dataset.index) })
   ));

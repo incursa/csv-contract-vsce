@@ -111,6 +111,16 @@ openMessage = await page.evaluate(() => window.__messages.at(-1));
 if (openMessage?.type !== "openActiveTargetExternally") {
   throw new Error("Opening the active test CSV externally did not send the expected host message.");
 }
+await page.locator('[data-action="generate-sql"]').click();
+openMessage = await page.evaluate(() => window.__messages.at(-1));
+if (openMessage?.type !== "generateSqlServerValidation") {
+  throw new Error("Generating staging SQL did not send the expected host message.");
+}
+await page.locator('[data-action="import-sql-schema"]').click();
+openMessage = await page.evaluate(() => window.__messages.at(-1));
+if (openMessage?.type !== "importSqlServerSchema") {
+  throw new Error("Importing a table schema did not send the expected host message.");
+}
 await mkdir("artifacts/runtime", { recursive: true });
 await mkdir("images", { recursive: true });
 await page.screenshot({ path: "images/workbench-column-rules.png", fullPage: true });

@@ -263,7 +263,40 @@
         "conditionalRules": {
           "type": "array",
           "items": { "$ref": "#/$defs/conditionalRule" }
+        },
+        "importedSchema": {
+          "$ref": "#/$defs/importedSchema"
         }
+      }
+    },
+    "importedSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["formatVersion", "sourceKind", "columns"],
+      "properties": {
+        "formatVersion": { "const": 1 },
+        "sourceKind": { "enum": ["create-table", "database-tracking", "database-knowledge"] },
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/importedColumn" }
+        }
+      }
+    },
+    "importedColumn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ordinal", "name", "sqlType", "nullable"],
+      "properties": {
+        "ordinal": { "type": "integer", "minimum": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "sqlType": { "type": "string", "minLength": 1 },
+        "nullable": { "type": "boolean" },
+        "identity": { "type": "boolean" },
+        "computed": { "type": "boolean" },
+        "maxLength": { "type": "integer", "minimum": -1 },
+        "precision": { "type": "integer", "minimum": 0 },
+        "scale": { "type": "integer", "minimum": 0 }
       }
     },
     "predicate": {

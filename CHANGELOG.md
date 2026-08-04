@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0
+
+- Added offline SQL Server table-schema import with a preview and explicit confirmation before contract changes.
+- Added support for ordinary `CREATE TABLE` scripts, Database Tracking canonical `*.structure.json` models, and compact Database Knowledge snapshots.
+- Added non-destructive merge behavior that preserves reviewed descriptions, allowed values, regexes, identities, conditional rules, scope, and manually chosen constraint values.
+- Added imported SQL type, nullability, length, precision, scale, identity, computed-column, ordinal, table, and schema metadata to the YAML contract.
+- Added safe creation of a new contract or update of an existing one from the Command Palette, visual Workbench, and bundled CLI.
+- Kept identity and computed columns optional for CSV validation and avoided inferring a CSV identity from a generated identity primary key.
+
 ## 0.7.0
 
 - Added deterministic, read-only SQL Server staging validation generation from reviewed CSV contracts.
