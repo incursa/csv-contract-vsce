@@ -1,0 +1,71 @@
+# yaml-language-server: $schema=../schemas/csvtest.schema.json
+version: 1
+csv:
+  nullValues:
+    - ""
+    - "NULL"
+  trimValues: true
+  caseSensitive: false
+schema:
+  allowAdditionalColumns: true
+  columns:
+    LoadId:
+      presence: required
+      constraints:
+        notNull: true
+    SourceRow:
+      presence: required
+      constraints:
+        notNull: true
+        unique: true
+    Status:
+      presence: required
+      constraints:
+        notNull: true
+        allowedValues:
+          - Open
+          - Complete
+          - Rejected
+    SourceType:
+      presence: required
+    Category:
+      presence: required
+    CompletionDate:
+      presence: optional
+sqlServer:
+  schema: staging
+  table: PayrollImport
+  rowLocator:
+    - LoadId
+    - SourceRow
+  detailLimit: 100
+  scope:
+    column: LoadId
+    parameter: LoadId
+    sqlType: nvarchar(100)
+  conditionalRules:
+    - id: completed-requires-date
+      name: Completed rows have a completion date
+      when:
+        column: Status
+        operator: equals
+        value: Complete
+      expect:
+        column: CompletionDate
+        operator: notNull
+    - id: employee-category
+      name: Employee rows are categorized as Labor
+      when:
+        all:
+          - column: SourceType
+            operator: equals
+            value: Employee
+          - column: Status
+            operator: in
+            values:
+              - Open
+              - Complete
+      expect:
+        column: Category
+        operator: equals
+        value: Labor

@@ -2,7 +2,7 @@
   "name": "csv-contract-vsce",
   "displayName": "CSV Contract Workbench",
   "description": "Design and run reusable YAML contracts for CSV files in VS Code, PowerShell, or Node.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "incursa",
   "license": "Apache-2.0",
   "engines": {
@@ -92,6 +92,11 @@
       {
         "command": "csv-contract-vsce.compareCsv",
         "title": "CSV Contract: Compare CSV Files Semantically",
+        "category": "CSV Contract"
+      },
+      {
+        "command": "csv-contract-vsce.generateSqlServerValidation",
+        "title": "CSV Contract: Generate SQL Server Staging Validation",
         "category": "CSV Contract"
       }
     ],
@@ -195,7 +200,8 @@
     "onCommand:csv-contract-vsce.refreshExplorer",
     "onCommand:csv-contract-vsce.openTargetInVsCode",
     "onCommand:csv-contract-vsce.openTargetExternally",
-    "onCommand:csv-contract-vsce.compareCsv"
+    "onCommand:csv-contract-vsce.compareCsv",
+    "onCommand:csv-contract-vsce.generateSqlServerValidation"
   ],
   "scripts": {
     "clean": "node scripts/clean.mjs",

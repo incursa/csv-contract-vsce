@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0
+
+- Added deterministic, read-only SQL Server staging validation generation from reviewed CSV contracts.
+- Translated null, length, allowed-value, uniqueness, and composite-identity constraints into failure counts and bounded diagnostic rows.
+- Added SQL-only conditional rules for finite value sets, null and blank checks, column comparisons, and nested `all`/`any` logic.
+- Added an optional required load/batch scope parameter without persisting the parameter value in the contract.
+- Added Command Palette, visual Workbench, and bundled CLI entry points plus a documented staging contract example.
+- Added strict SQL identifier/literal quoting, an allowlist for scope parameter types, and explicit warnings for non-equivalent regex and CSV row-test semantics.
+- Fixed the release PowerShell harness so later web tests and VSIX packaging cannot be skipped, and verified it under Windows PowerShell 5.1 and PowerShell 7.
+
 ## 0.6.0
 
 - Added canonical pure-TypeScript full-row multiset and explicit keyed semantic comparison.

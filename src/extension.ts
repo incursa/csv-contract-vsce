@@ -13,6 +13,7 @@ import {
 import { registerWorkspaceExplorer } from "./workspace-explorer";
 import { registerSemanticComparison } from "./vscode-comparison";
 import type { DesktopComparisonRunner } from "./vscode-comparison";
+import { generateSqlServerValidation } from "./core/sql-server-generator";
 
 const viewType = "csv-contract-vsce.contractEditor";
 
@@ -33,10 +34,39 @@ export function activate(context: vscode.ExtensionContext, desktopComparisonRunn
     }),
     vscode.commands.registerCommand("csv-contract-vsce.createFromCsv", () => createFromCsv()),
     vscode.commands.registerCommand("csv-contract-vsce.runContract", () => runContract(output)),
-    vscode.commands.registerCommand("csv-contract-vsce.openWorkbench", (uri?: vscode.Uri) => openWorkbench(uri))
+    vscode.commands.registerCommand("csv-contract-vsce.openWorkbench", (uri?: vscode.Uri) => openWorkbench(uri)),
+    vscode.commands.registerCommand("csv-contract-vsce.generateSqlServerValidation", (uri?: vscode.Uri) => generateSqlServerScript(uri))
   );
   registerWorkspaceExplorer(context, output);
   registerSemanticComparison(context, desktopComparisonRunner);
+}
+
+async function generateSqlServerScript(requestedUri?: vscode.Uri): Promise<void> {
+  const active = vscode.window.activeTextEditor?.document.uri;
+  const specUri = requestedUri?.path.match(/\.csvtest\.ya?ml$/i)
+    ? requestedUri
+    : active?.path.match(/\.csvtest\.ya?ml$/i)
+      ? active
+      : await pickFile({ "CSV contracts": ["csvtest.yaml", "csvtest.yml", "yaml", "yml"] });
+  if (!specUri) return;
+  try {
+    const contract = parseContract(new TextDecoder().decode(await vscode.workspace.fs.readFile(specUri)));
+    const generated = generateSqlServerValidation(contract);
+    const filename = (specUri.path.split("/").pop() ?? "staging.csvtest.yaml").replace(/\.csvtest\.ya?ml$/i, ".validation.sql");
+    const outputUri = await vscode.window.showSaveDialog({
+      defaultUri: vscode.Uri.joinPath(specUri, "..", filename),
+      filters: { "SQL Server validation script": ["sql"] },
+      title: `Generate ${generated.ruleCount} SQL validation rules`
+    });
+    if (!outputUri) return;
+    await vscode.workspace.fs.writeFile(outputUri, new TextEncoder().encode(generated.sql));
+    const document = await vscode.workspace.openTextDocument(outputUri);
+    await vscode.window.showTextDocument(document, { preview: false });
+    const warningSuffix = generated.warnings.length ? ` ${generated.warnings.length} translation warning(s) were added as SQL comments.` : "";
+    void vscode.window.showInformationMessage(`Generated ${generated.ruleCount} staging validation rules.${warningSuffix}`);
+  } catch (error) {
+    void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+  }
 }
 
 export function deactivate(): void {}
@@ -227,6 +257,8 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         await this.replaceDocument(document, serializeContract(message.contract as CsvContract));
       } else if (message.type === "openYaml") {
         await vscode.commands.executeCommand("vscode.openWith", document.uri, "default");
+      } else if (message.type === "generateSqlServerValidation") {
+        await generateSqlServerScript(document.uri);
       }
     });
   }

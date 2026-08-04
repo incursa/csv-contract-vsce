@@ -31,26 +31,27 @@ function Invoke-ChildPowerShell {
         [string] $ErrorFile
     )
 
-    $previousPreference = $null
-    $previousErrorActionPreference = $ErrorActionPreference
-    if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
-        $previousPreference = $PSNativeCommandUseErrorActionPreference
-        $PSNativeCommandUseErrorActionPreference = $false
-    }
+    $outputFile = [System.IO.Path]::ChangeExtension($ErrorFile, '.stdout.txt')
+    $processArguments = @($Arguments | ForEach-Object {
+        if ($_ -match '[\s"]') { '"' + $_.Replace('"', '\"') + '"' } else { $_ }
+    })
     try {
-        $ErrorActionPreference = 'Continue'
-        $standardOutput = & $hostExecutable @Arguments 2> $ErrorFile | Out-String
+        $process = Start-Process `
+            -FilePath $hostExecutable `
+            -ArgumentList $processArguments `
+            -RedirectStandardOutput $outputFile `
+            -RedirectStandardError $ErrorFile `
+            -WindowStyle Hidden `
+            -Wait `
+            -PassThru
         return [pscustomobject]@{
-            ExitCode = $LASTEXITCODE
-            StandardOutput = $standardOutput
+            ExitCode = $process.ExitCode
+            StandardOutput = if (Test-Path -LiteralPath $outputFile) { Get-Content -Raw -LiteralPath $outputFile } else { '' }
             StandardError = if (Test-Path -LiteralPath $ErrorFile) { Get-Content -Raw -LiteralPath $ErrorFile } else { '' }
         }
     }
     finally {
-        $ErrorActionPreference = $previousErrorActionPreference
-        if ($null -ne $previousPreference) {
-            $PSNativeCommandUseErrorActionPreference = $previousPreference
-        }
+        if (Test-Path -LiteralPath $outputFile) { Remove-Item -LiteralPath $outputFile -Force }
     }
 }
 
@@ -200,7 +201,6 @@ try {
     }
     Write-Host ''
     Write-Host "PowerShell suite passed: $passes checks under $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)." -ForegroundColor Green
-    exit 0
 }
 finally {
     if ($KeepTemporaryFiles) {

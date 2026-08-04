@@ -5,6 +5,7 @@ import { createContractOutlineFromFile } from "./node/contract-generator";
 import { validateCsvFile } from "./node/streaming-validator";
 import { createTargetPlans } from "./node/target-plan";
 import { withMaterializedTarget } from "./node/target-source";
+import { generateSqlServerValidation } from "./core/sql-server-generator";
 
 interface ParsedArgs {
   command: string;
@@ -30,6 +31,7 @@ Usage:
                     [--unique-partitions 128] [--temp-directory <path>]
   csv-contract init --csv <file.csv> --out <contract.csvtest.yaml>
                     [--sample-rows 10000] [--infer-constraints] [--no-sample-tests]
+  csv-contract sql --spec <contract.csvtest.yaml> --out <validation.sql>
 
 Repeat --csv to test multiple explicit files or URLs. When --csv is omitted, targets come from each contract.
 Compatible contracts targeting the same CSV are applied in one pass.
@@ -166,6 +168,16 @@ async function testCsv(args: ParsedArgs): Promise<void> {
   process.exitCode = valid ? 0 : 1;
 }
 
+async function generateSql(args: ParsedArgs): Promise<void> {
+  if (args.specs.length !== 1 || !args.out) usage();
+  const spec = resolve(args.specs[0]);
+  const output = resolve(args.out);
+  const generated = generateSqlServerValidation(parseContract(await readFile(spec, "utf8")));
+  await writeFile(output, generated.sql, "utf8");
+  console.log(`Created ${output} (${generated.ruleCount} SQL validation rules).`);
+  for (const warning of generated.warnings) console.error(`WARNING: ${warning}`);
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (args.command === "init") {
@@ -176,6 +188,10 @@ async function main(): Promise<void> {
   }
   if (args.command === "test") {
     await testCsv(args);
+    return;
+  }
+  if (args.command === "sql") {
+    await generateSql(args);
     return;
   }
   usage();

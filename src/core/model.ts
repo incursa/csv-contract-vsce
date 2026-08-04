@@ -45,6 +45,49 @@ export interface RowTest {
   expect: RowExpectation;
 }
 
+export type SqlPredicateOperator =
+  | "equals"
+  | "notEquals"
+  | "in"
+  | "notIn"
+  | "isNull"
+  | "notNull"
+  | "isBlank"
+  | "notBlank"
+  | "equalsColumn"
+  | "notEqualsColumn";
+
+export interface SqlPredicateLeaf {
+  column: string;
+  operator: SqlPredicateOperator;
+  value?: string;
+  values?: string[];
+  otherColumn?: string;
+}
+
+export type SqlPredicate = SqlPredicateLeaf | { all: SqlPredicate[] } | { any: SqlPredicate[] };
+
+export interface SqlConditionalRule {
+  id: string;
+  name?: string;
+  severity?: "error" | "warning";
+  when?: SqlPredicate;
+  expect: SqlPredicate;
+}
+
+export interface SqlServerTarget {
+  schema: string;
+  table: string;
+  rowLocator?: string[];
+  detailLimit?: number;
+  scope?: {
+    column: string;
+    parameter: string;
+    sqlType: string;
+  };
+  conditionalRules?: SqlConditionalRule[];
+}
+
 export type CsvTarget =
   | { path: string; url?: never }
   | { url: string; path?: never };
@@ -64,6 +107,7 @@ export interface CsvContract {
     columns: Record<string, ColumnContract>;
   };
   rowTests?: RowTest[];
+  sqlServer?: SqlServerTarget;
 }
 
 export interface ParsedCsv {

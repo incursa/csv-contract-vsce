@@ -41,6 +41,54 @@ The aggregate result view keeps diagnostics redacted and bounded. Open complete 
 - Exact cell values for selected rows
 - Raw string values such as identifiers with leading zeroes
 
+## Generate SQL Server staging validation
+
+Use the same reviewed contract to generate a read-only T-SQL validation script for a staging table. Add a `sqlServer` target with optional `conditionalRules`, then run **CSV Contract: Generate SQL Server Staging Validation** from the Command Palette or select **Generate staging SQL** in the workbench. The generator creates a rule summary plus bounded failing-row samples; it never connects to SQL Server or executes the script.
+
+```yaml
+sqlServer:
+  schema: staging
+  table: PayrollImport
+  rowLocator: [LoadId, SourceRow]
+  detailLimit: 100
+  scope:
+    column: LoadId
+    parameter: LoadId
+    sqlType: nvarchar(100)
+
+  conditionalRules:
+    - id: completed-requires-date
+      name: Completed rows have a completion date
+      when:
+        column: Status
+        operator: equals
+        value: Complete
+      expect:
+        column: CompletionDate
+        operator: notNull
+    - id: employee-category
+      when:
+        column: SourceType
+        operator: equals
+        value: Employee
+      expect:
+        column: Category
+        operator: equals
+        value: Labor
+```
+
+The optional scope emits a required SQL variable initialized to `NULL`; set it before running the script so each check is limited to one load or batch. Supported predicates are exact equality/inequality, value lists, null/blank checks, column-to-column equality, and nested `all`/`any` groups. Column constraints translate to null, length, allowed-value, uniqueness, and composite-identity checks. JavaScript regular expressions and CSV `rowTests` are identified in comments as translation warnings because SQL Server has no exact equivalent for their current semantics.
+
+The bundled CLI supports unattended generation without a database connection:
+
+```powershell
+node .\dist\cli\csv-contract.cjs sql `
+  --spec .\payroll.csvtest.yaml `
+  --out .\payroll.validation.sql
+```
+
+See [SQL Server staging validation](docs/SQL-SERVER-STAGING-VALIDATION.md) for the complete predicate reference and load-scoping behavior.
+
 ## Get started
 
 1. Install **CSV Contract Workbench** from the VS Code Marketplace.
