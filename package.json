@@ -2,7 +2,7 @@
   "name": "csv-contract-vsce",
   "displayName": "CSV Contract Workbench",
   "description": "Design and run reusable YAML contracts for CSV files in VS Code, PowerShell, or Node.",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "publisher": "incursa",
   "license": "Apache-2.0",
   "engines": {
@@ -41,67 +41,67 @@
     "commands": [
       {
         "command": "csv-contract-vsce.createFromCsv",
-        "title": "CSV Contract: Create Contract from CSV",
+        "title": "Create Contract from CSV",
         "category": "CSV Contract"
       },
       {
         "command": "csv-contract-vsce.runContract",
-        "title": "CSV Contract: Run Contract",
+        "title": "Run Contract",
         "category": "CSV Contract"
       },
       {
         "command": "csv-contract-vsce.openWorkbench",
-        "title": "CSV Contract: Open Workbench",
+        "title": "Open Workbench",
         "category": "CSV Contract"
       },
       {
         "command": "csv-contract-vsce.openExplorer",
-        "title": "CSV Contract: Open Workspace Tests",
+        "title": "Open Workspace Tests",
         "category": "CSV Contract"
       },
       {
         "command": "csv-contract-vsce.runSelectedContracts",
-        "title": "CSV Contract: Run Selected Workspace Contracts",
+        "title": "Run Selected Workspace Contracts",
         "category": "CSV Contract",
         "icon": "$(run-all)"
       },
       {
         "command": "csv-contract-vsce.showWorkspaceReport",
-        "title": "CSV Contract: Show Workspace Report",
+        "title": "Show Workspace Report",
         "category": "CSV Contract",
         "icon": "$(output)"
       },
       {
         "command": "csv-contract-vsce.refreshExplorer",
-        "title": "CSV Contract: Refresh Workspace Tests",
+        "title": "Refresh Workspace Tests",
         "category": "CSV Contract",
         "icon": "$(refresh)"
       },
       {
         "command": "csv-contract-vsce.openTargetInVsCode",
-        "title": "CSV Contract: Open Target in VS Code",
+        "title": "Open Target in VS Code",
         "category": "CSV Contract",
         "icon": "$(go-to-file)"
       },
       {
         "command": "csv-contract-vsce.openTargetExternally",
-        "title": "CSV Contract: Open Target Externally",
+        "title": "Open Target Externally",
         "category": "CSV Contract",
         "icon": "$(link-external)"
       },
       {
         "command": "csv-contract-vsce.compareCsv",
-        "title": "CSV Contract: Compare CSV Files Semantically",
+        "title": "Compare CSV Files Semantically",
         "category": "CSV Contract"
       },
       {
         "command": "csv-contract-vsce.generateSqlServerValidation",
-        "title": "CSV Contract: Generate SQL Server Staging Validation",
+        "title": "Generate SQL Server Staging Validation",
         "category": "CSV Contract"
       },
       {
         "command": "csv-contract-vsce.importSqlServerSchema",
-        "title": "CSV Contract: Import SQL Server Table Schema",
+        "title": "Import SQL Server Table Schema",
         "category": "CSV Contract"
       }
     ],

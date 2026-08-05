@@ -15,6 +15,9 @@ test("contributes the workspace test Activity Bar view and commands", async () =
   assert.equal(manifest.contributes.viewsContainers.activitybar[0].id, "csvContractExplorer");
   assert.equal(manifest.contributes.views.csvContractExplorer[0].id, "csvContractExplorer.contracts");
   assert.ok(manifest.activationEvents.includes("onView:csvContractExplorer.contracts"));
+  for (const command of manifest.contributes.commands.filter((entry: { category?: string }) => entry.category === "CSV Contract")) {
+    assert.equal(command.title.startsWith("CSV Contract:"), false, `command palette title duplicated category: ${command.title}`);
+  }
   const titleCommands = manifest.contributes.menus["view/title"].map((entry: { command: string }) => entry.command);
   assert.ok(titleCommands.includes("csv-contract-vsce.runSelectedContracts"));
   const itemCommands = manifest.contributes.menus["view/item/context"].map((entry: { command: string }) => entry.command);
