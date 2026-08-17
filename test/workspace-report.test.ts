@@ -19,6 +19,8 @@ const report: WorkspaceReportView = {
         columnCount: 35,
         testCount: 42,
         issueCount: 0,
+        errorCount: 0,
+        warningCount: 0,
         truncated: false,
         issues: []
       }
@@ -33,6 +35,8 @@ const report: WorkspaceReportView = {
         columnCount: 35,
         testCount: 42,
         issueCount: 1,
+        errorCount: 1,
+        warningCount: 0,
         truncated: false,
         issues: [{
           level: "cell",

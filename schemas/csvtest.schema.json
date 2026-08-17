@@ -59,6 +59,10 @@
           "type": "boolean",
           "default": true
         },
+        "columnOrder": {
+          "const": "exact",
+          "description": "Require CSV headers to follow the declaration order in schema.columns."
+        },
         "rowCount": {
           "$ref": "#/$defs/count"
         },
@@ -78,6 +82,20 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/rowTest"
+      }
+    },
+    "rules": {
+      "type": "array",
+      "description": "Conditional rules evaluated against every CSV record. Warning rules do not fail validation.",
+      "items": {
+        "$ref": "#/$defs/csvConditionalRule"
+      }
+    },
+    "groupRules": {
+      "type": "array",
+      "description": "Cross-row completeness rules evaluated independently for each group key.",
+      "items": {
+        "$ref": "#/$defs/groupRule"
       }
     },
     "sqlServer": {
@@ -348,6 +366,117 @@
         "severity": { "enum": ["error", "warning"], "default": "error" },
         "when": { "$ref": "#/$defs/predicate" },
         "expect": { "$ref": "#/$defs/predicate" }
+      }
+    },
+    "csvPredicate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["column", "operator"],
+          "properties": {
+            "column": { "type": "string", "minLength": 1 },
+            "operator": {
+              "enum": [
+                "equals", "notEquals", "in", "notIn", "isNull", "notNull", "isBlank", "notBlank",
+                "equalsColumn", "notEqualsColumn", "contains", "notContains", "startsWith", "endsWith",
+                "matches", "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual"
+              ]
+            },
+            "value": { "type": ["string", "number"] },
+            "values": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "type": "string" }
+            },
+            "otherColumn": { "type": "string", "minLength": 1 }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "operator": { "enum": ["equals", "notEquals", "contains", "notContains", "startsWith", "endsWith", "matches", "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual"] } } },
+              "then": { "required": ["value"] }
+            },
+            {
+              "if": { "properties": { "operator": { "enum": ["in", "notIn"] } } },
+              "then": { "required": ["values"] }
+            },
+            {
+              "if": { "properties": { "operator": { "enum": ["equalsColumn", "notEqualsColumn"] } } },
+              "then": { "required": ["otherColumn"] }
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["all"],
+          "properties": {
+            "all": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/csvPredicate" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["any"],
+          "properties": {
+            "any": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/csvPredicate" } }
+          }
+        }
+      ]
+    },
+    "csvConditionalRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "expect"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "name": { "type": "string" },
+        "severity": { "enum": ["error", "warning"], "default": "error" },
+        "when": { "$ref": "#/$defs/csvPredicate" },
+        "expect": { "$ref": "#/$defs/csvPredicate" }
+      }
+    },
+    "groupValueRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["column"],
+      "properties": {
+        "column": { "type": "string", "minLength": 1 },
+        "values": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "contains": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "anyOf": [
+        { "required": ["values"] },
+        { "required": ["contains"] }
+      ]
+    },
+    "groupRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "groupBy", "require"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "name": { "type": "string" },
+        "severity": { "enum": ["error", "warning"], "default": "error" },
+        "when": { "$ref": "#/$defs/csvPredicate" },
+        "groupBy": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "require": { "$ref": "#/$defs/groupValueRequirement" }
       }
     },
     "rowTest": {

@@ -8,6 +8,7 @@ import type {
   ValidationIssue,
   ValidationResult
 } from "./model";
+import { createPredicateRuntime, evaluatePredicate, predicateColumns, predicateDescription } from "./predicate";
 
 const defaults: Required<CsvOptions> = {
   delimiter: ",",
@@ -107,6 +108,17 @@ export function validateCsv(contract: CsvContract, csvText: string): ValidationR
 
   const headerIndex = new Map(parsed.headers.map((header, index) => [header, index]));
   const declared = new Set(Object.keys(contract.schema.columns));
+  if (contract.schema.columnOrder === "exact") {
+    const expected = [...declared].filter((header) => headerIndex.has(header));
+    const actual = parsed.headers.filter((header) => declared.has(header));
+    if (actual.length !== expected.length || actual.some((header, index) => header !== expected[index])) {
+      issues.push({
+        level: "file",
+        code: "COLUMN_ORDER_MISMATCH",
+        message: "CSV headers do not follow the declaration order in schema.columns."
+      });
+    }
+  }
   for (const [column, definition] of Object.entries(contract.schema.columns)) {
     const index = headerIndex.get(column);
     if (index === undefined) {
@@ -211,12 +223,103 @@ export function validateCsv(contract: CsvContract, csvText: string): ValidationR
     }
   }
 
+  const nullValues = new Set(options.nullValues.map((value) => normalized(value, options)));
+  const advancedRuleIds = new Set<string>();
+  for (const rule of contract.rules ?? []) {
+    let validRule = true;
+    if (advancedRuleIds.has(rule.id)) {
+      issues.push({ level: "row", code: "DUPLICATE_RULE_ID", message: `Rule id "${rule.id}" is duplicated.`, testId: rule.id });
+      validRule = false;
+    }
+    advancedRuleIds.add(rule.id);
+    const references = [...new Set([...predicateColumns(rule.when), ...predicateColumns(rule.expect)])];
+    for (const column of references) {
+      if (!declared.has(column)) {
+        issues.push({ level: "row", code: "UNDECLARED_RULE_COLUMN", message: `Rule "${rule.id}" references undeclared column "${column}".`, column, testId: rule.id });
+        validRule = false;
+      } else if (!headerIndex.has(column)) {
+        issues.push({ level: "row", code: "RULE_COLUMN_MISSING", message: `Rule "${rule.id}" references optional column "${column}", but it is absent from this CSV.`, column, testId: rule.id });
+        validRule = false;
+      }
+    }
+    if (!validRule) continue;
+    parsed.rows.forEach((row, rowIndex) => {
+      const runtime = createPredicateRuntime((column) => row[headerIndex.get(column)!] ?? "", options, nullValues);
+      if (rule.when && !evaluatePredicate(rule.when, runtime)) return;
+      if (evaluatePredicate(rule.expect, runtime)) return;
+      issues.push({
+        level: "row",
+        code: "RULE_FAILED",
+        message: `Rule "${rule.name ?? rule.id}" expected ${predicateDescription(rule.expect)}.`,
+        row: parsed.sourceRowNumbers[rowIndex],
+        testId: rule.id,
+        severity: rule.severity ?? "error"
+      });
+    });
+  }
+
+  for (const rule of contract.groupRules ?? []) {
+    let validRule = true;
+    if (advancedRuleIds.has(rule.id)) {
+      issues.push({ level: "row", code: "DUPLICATE_RULE_ID", message: `Rule id "${rule.id}" is duplicated.`, testId: rule.id });
+      validRule = false;
+    }
+    advancedRuleIds.add(rule.id);
+    const references = [...new Set([...predicateColumns(rule.when), ...rule.groupBy, rule.require.column])];
+    for (const column of references) {
+      if (!declared.has(column)) {
+        issues.push({ level: "row", code: "UNDECLARED_RULE_COLUMN", message: `Group rule "${rule.id}" references undeclared column "${column}".`, column, testId: rule.id });
+        validRule = false;
+      } else if (!headerIndex.has(column)) {
+        issues.push({ level: "row", code: "RULE_COLUMN_MISSING", message: `Group rule "${rule.id}" references optional column "${column}", but it is absent from this CSV.`, column, testId: rule.id });
+        validRule = false;
+      }
+    }
+    if (!validRule) continue;
+    const groups = new Map<string, { row: number; labels: string[]; observed: Set<string> }>();
+    parsed.rows.forEach((row, rowIndex) => {
+      const runtime = createPredicateRuntime((column) => row[headerIndex.get(column)!] ?? "", options, nullValues);
+      if (rule.when && !evaluatePredicate(rule.when, runtime)) return;
+      const labels = rule.groupBy.map((column) => row[headerIndex.get(column)!] ?? "");
+      const key = labels.map((value) => `${normalized(value, options).length}:${normalized(value, options)}`).join("");
+      const group = groups.get(key) ?? { row: parsed.sourceRowNumbers[rowIndex], labels, observed: new Set<string>() };
+      group.observed.add(normalized(row[headerIndex.get(rule.require.column)!] ?? "", options));
+      groups.set(key, group);
+    });
+    for (const group of groups.values()) {
+      const missingValues = (rule.require.values ?? []).filter((required) => !group.observed.has(normalized(required, options)));
+      const missingFragments = (rule.require.contains ?? []).filter((required) => {
+        const fragment = normalized(required, options);
+        return ![...group.observed].some((value) => value.includes(fragment));
+      });
+      for (const missing of [...missingValues, ...missingFragments]) {
+        const groupLabel = rule.groupBy.map((column, index) => `${column}=${group.labels[index]}`).join(", ");
+        issues.push({
+          level: "row",
+          code: "GROUP_REQUIRED_VALUE_MISSING",
+          message: `Group rule "${rule.name ?? rule.id}" is missing "${missing}" in ${rule.require.column} for ${groupLabel}.`,
+          row: group.row,
+          column: rule.require.column,
+          testId: rule.id,
+          expected: missing,
+          severity: rule.severity ?? "error"
+        });
+      }
+    }
+  }
+
+  const errorCount = issues.filter((issue) => issue.severity !== "warning").length;
+  const warningCount = issues.length - errorCount;
+
   return {
-    valid: issues.length === 0,
+    valid: errorCount === 0,
     rowCount: parsed.rows.length,
     columnCount: parsed.headers.length,
-    testCount: Object.keys(contract.schema.columns).length + (contract.rowTests?.length ?? 0),
+    testCount: Object.keys(contract.schema.columns).length + (contract.rowTests?.length ?? 0) +
+      (contract.rules?.length ?? 0) + (contract.groupRules?.length ?? 0),
     issueCount: issues.length,
+    errorCount,
+    warningCount,
     truncated: false,
     issues
   };

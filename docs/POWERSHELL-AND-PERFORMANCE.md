@@ -92,11 +92,12 @@ The PowerShell wrapper invokes the bundled Node CLI, which:
 2. parses records incrementally, including quoted commas, escaped quotes, CRLF, and multiline quoted cells;
 3. keeps only the current record and validation state;
 4. evaluates compatible general and spot-check contracts in one pass;
-5. stores at most `MaxIssues` diagnostic objects while still counting all failures;
+5. stores at most `MaxIssues` diagnostic objects while still counting all errors and warnings;
 6. handles exact uniqueness by hash-partitioning normalized values into temporary binary files;
 7. reads one uniqueness partition at a time to find exact duplicates;
-8. removes uniqueness temporary files on success or failure;
-9. downloads HTTP and HTTPS targets incrementally to an isolated temporary directory and removes the download after validation.
+8. writes group-rule observations to hash partitions and evaluates completeness after EOF, so related records may appear in any order;
+9. removes uniqueness and group temporary files on success or failure;
+10. downloads HTTP and HTTPS targets incrementally to an isolated temporary directory and removes the download after validation.
 
 The entire CSV and its rows are never retained in memory by the batch validator.
 
@@ -135,6 +136,8 @@ row count × (normalized key bytes + 14-byte record header)
 ```
 
 For 18 million 12-byte IDs, that is approximately 446 MiB before filesystem overhead. Each additional unique column or composite identity adds another stream of keys. Use `-TempDirectory` to place this work on a fast disk with sufficient free space.
+
+Group rules also use temporary disk. Each selected row contributes its normalized group key, observed value, display key, and a small binary record header. Only one hash partition is reduced in memory at a time; peak group memory therefore depends on the largest partition rather than the complete CSV. A group result is intentionally deferred until EOF because required companion records can occur later in the file.
 
 `-UniquePartitions` defaults to `128`. Increasing it reduces memory used while checking each partition but creates more temporary files; decreasing it does the reverse.
 

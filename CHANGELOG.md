@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.0
+
+- Added generic conditional CSV rules with nested predicates, cross-column checks, string matching, numeric comparisons, and error/warning severity.
+- Added exact declared header ordering for fixed-layout receiving systems.
+- Added cross-row group completeness rules with exact required values or required name fragments.
+- Kept group validation order-independent and bounded-memory by spilling normalized group observations to hash-partitioned temporary files and reducing them after EOF.
+- Added error and warning counts across CLI, Workbench, workspace reports, and JSON results.
+
 ## 0.8.0
 
 - Added offline SQL Server table-schema import with a preview and explicit confirmation before contract changes.

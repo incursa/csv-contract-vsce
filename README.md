@@ -39,6 +39,9 @@ The aggregate result view keeps diagnostics redacted and bounded. Open complete 
 - Composite identities across multiple columns
 - Required or forbidden rows selected by exact values
 - Exact cell values for selected rows
+- Conditional row rules with nested predicates, cross-column checks, numeric comparisons, and warning severity
+- Cross-row group completeness rules, such as requiring every employee/tax-area group to contain a full balance family
+- Exact header order when the receiving system requires a fixed layout
 - Raw string values such as identifiers with leading zeroes
 
 ## Generate SQL Server staging validation
@@ -122,7 +125,7 @@ Generated contracts are deliberately conservative: they capture the observed col
 
 Contracts are plain YAML files designed to live beside the data workflow they protect. A broad schema contract and focused spot-check contracts can be applied to the same CSV.
 
-The included Node CLI and PowerShell wrapper use a streaming validator for unattended runs. Compatible contracts share one CSV pass, diagnostics remain bounded, and exact uniqueness checks spill to temporary disk instead of retaining the entire CSV in memory.
+The included Node CLI and PowerShell wrapper use a streaming validator for unattended runs. Compatible contracts share one CSV pass, diagnostics remain bounded, and exact uniqueness checks spill to temporary disk instead of retaining the entire CSV in memory. Group rules are finalized only after EOF: normalized group observations are hash-partitioned to temporary disk during the stream, then reduced partition by partition so required companion rows may appear anywhere in the file.
 
 ## Local by design
 

@@ -56,7 +56,9 @@ Tell the agent which sources are authoritative when they disagree.
 - Use `expect.count.exact: 0` for rows that must not exist.
 - Use quoted YAML strings for identifiers, codes, dates, and values where YAML might infer another type.
 - Prefer anchored regexes such as `^\d{6}$`.
-- Avoid cross-column logic because version 1 does not support it.
+- Use finite `rules` predicates for conditional, cross-column, string, and numeric checks; do not invent arbitrary expression syntax.
+- Use `groupRules` when every business grain must contain a required set of exact values or name fragments. Include every column that defines the grain in `groupBy`.
+- Prefer `severity: warning` only when the condition requires review but should not fail delivery.
 - Never include sensitive production values in a committed spot-check contract without approval.
 - Prefer relative `targets[].path` values for portable repositories. Use `targets[].url` only for stable HTTP or HTTPS CSV sources, and never embed credentials or secret-bearing URLs.
 

@@ -31,9 +31,13 @@ identity:
 
 schema:
   allowAdditionalColumns: true
+  columnOrder: exact
   rowCount: { min: 1, max: 50000 }
   columnCount: { exact: 5 }
   columns:
+    Company:
+      presence: required
+      constraints: { notNull: true }
     EmployeeId:
       presence: required
       constraints:
@@ -41,6 +45,11 @@ schema:
         unique: true
         maxLength: 12
         matches: '^\d+$'
+    Status:
+      presence: required
+      constraints: { notNull: true, allowedValues: [Active, Complete] }
+    CompletionDate:
+      presence: required
     OptionalComment:
       presence: optional
       constraints:
@@ -57,6 +66,11 @@ rowTests:
       cells:
         Status:
           equals: Active
+
+rules:
+  - id: completed-requires-date
+    when: { column: Status, operator: equals, value: Complete }
+    expect: { column: CompletionDate, operator: notBlank }
 ```
 
 ## Test targets
@@ -102,6 +116,34 @@ This means a test may target an optional column, but that test only applies to C
 
 If `expect.count` is omitted, the engine expects exactly one matching row.
 
+## Conditional row rules
+
+`rules` are evaluated independently for every record. `when` is optional; when present, the expectation applies only to matching records. Predicates may be nested with `all` and `any`.
+
+Supported string predicates are `equals`, `notEquals`, `in`, `notIn`, `isNull`, `notNull`, `isBlank`, `notBlank`, `equalsColumn`, `notEqualsColumn`, `contains`, `notContains`, `startsWith`, `endsWith`, and `matches`. Numeric predicates are `greaterThan`, `greaterThanOrEqual`, `lessThan`, and `lessThanOrEqual`. Numeric comparisons require both operands to parse as finite invariant numbers; otherwise the predicate is false.
+
+Rules default to `severity: error`. A failed warning is reported and counted but does not fail the contract.
+
+## Group completeness rules
+
+`groupRules` select records with an optional `when`, partition them by the exact `groupBy` columns, and inspect one `require.column`. Use `require.values` for exact required values and/or `require.contains` when balance names contain qualifiers such as `Resident` or `Nonresident`.
+
+The streaming validator does not decide a group when it sees its first record because companion records may occur later. It writes normalized group observations to hash-partitioned temporary files during the CSV pass and evaluates each group after EOF, one partition at a time. This makes the result independent of input order without loading the CSV or all groups into memory.
+
+```yaml
+groupRules:
+  - id: city-tax-family
+    when: { column: BalanceName, operator: contains, value: City }
+    groupBy: [PersonNumber, State, County, City]
+    require:
+      column: BalanceName
+      contains: [Gross, Reduced Subject Withholdable, Withheld]
+```
+
+## Exact header order
+
+Set `schema.columnOrder: exact` when a receiving system requires the CSV headers to appear in the same order as `schema.columns`. Presence and additional-column rules still apply normally.
+
 ## Count expectations
 
 `rowCount`, `columnCount`, and row-test `count` accept:
@@ -128,7 +170,7 @@ Contracts that reference the same target are grouped automatically. Contracts wi
 
 ## Bounded diagnostics
 
-The streaming CLI and PowerShell wrapper report at most 1,000 issue records by default while continuing to count every failure. Use `--max-issues` or `-MaxIssues` to change that bound. The result distinguishes:
+The streaming CLI and PowerShell wrapper report at most 1,000 issue records by default while continuing to count every error and warning. Use `--max-issues` or `-MaxIssues` to change that bound. The result distinguishes:
 
 - `issues`: the retained issue records
 - `issueCount`: the total number of detected issues
@@ -138,4 +180,4 @@ This keeps a badly malformed multi-million-row file from exhausting memory just 
 
 ## Deliberately deferred
 
-Version 1 does not include cross-column expressions, foreign keys, typed numeric/date comparison, arbitrary query expressions, severities, JUnit, or SARIF. These can be added later without weakening the exact-string core.
+Version 1 deliberately uses finite predicates instead of arbitrary expressions. It does not include foreign keys across files, general arithmetic expressions, typed date comparison, JUnit, or SARIF. These can be added later without weakening the exact-string core.

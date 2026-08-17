@@ -72,7 +72,7 @@ export function renderWorkspaceReportHtml(
       </div>
       <div class="report-run-list">
         ${report.entries.map((entry, index) =>
-          renderEntry(entry, index, index === options.selectedEntryIndex || entry.result?.valid !== true)
+          renderEntry(entry, index, index === options.selectedEntryIndex || entry.result?.valid !== true || (entry.result?.warningCount ?? 0) > 0)
         ).join("")}
       </div>
     </section>
@@ -116,7 +116,7 @@ function renderEntry(entry: WorkspaceReportEntryView, index: number, open: boole
       </span>
       <span class="report-run-stat">${result ? `${result.rowCount.toLocaleString()} rows` : "No result"}</span>
       <span class="report-run-stat">${result ? `${result.testCount} tests` : ""}</span>
-      <span class="report-run-stat">${result ? `${result.issueCount} issues` : ""}</span>
+      <span class="report-run-stat">${result ? `${result.errorCount} errors · ${result.warningCount} warnings` : ""}</span>
       <span class="report-run-chevron" aria-hidden="true"></span>
     </summary>
     <div class="report-run-detail">
@@ -143,10 +143,16 @@ function renderOutcome(entry: WorkspaceReportEntryView): string {
   if (!entry.result) {
     return `<div class="report-outcome report-outcome--fail"><p>No validation result was produced.</p></div>`;
   }
-  if (entry.result.valid) {
+  if (entry.result.valid && entry.result.warningCount === 0) {
     return `<div class="report-outcome report-outcome--pass">
       <strong>All ${entry.result.testCount.toLocaleString()} tests passed.</strong>
       <p>No validation issues were found in this target.</p>
+    </div>`;
+  }
+  if (entry.result.valid) {
+    return `<div class="report-outcome report-outcome--pass">
+      <strong>All ${entry.result.testCount.toLocaleString()} tests passed with ${entry.result.warningCount.toLocaleString()} warning${entry.result.warningCount === 1 ? "" : "s"}.</strong>
+      <ol class="report-issues">${entry.result.issues.map(renderIssue).join("")}</ol>
     </div>`;
   }
   return `<div class="report-outcome report-outcome--fail">
@@ -163,7 +169,7 @@ function renderIssue(issue: ValidationIssue): string {
     issue.testId
   ].filter(Boolean).join(" · ");
   return `<li>
-    <code>${escapeHtml(issue.code)}</code>
+    <code>${escapeHtml(`${(issue.severity ?? "error").toUpperCase()} ${issue.code}`)}</code>
     ${location ? `<span>${escapeHtml(location)}</span>` : ""}
     <p>${escapeHtml(issue.message)}</p>
   </li>`;

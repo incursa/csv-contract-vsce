@@ -1,15 +1,19 @@
 import { stat } from "node:fs/promises";
 import type {
   ColumnConstraints,
+  ConditionalRule,
   CountExpectation,
   CsvContract,
   CsvOptions,
+  GroupRule,
   RowTest,
   ValidationIssue,
   ValidationPerformance,
   ValidationResult
 } from "../core/model";
+import { createPredicateRuntime, evaluatePredicate, predicateColumns, predicateDescription } from "../core/predicate";
 import { readCsvRecords, type CsvPhysicalOptions } from "./csv-stream";
+import { PartitionedGroupStore, type GroupValues } from "./group-store";
 import { PartitionedUniquenessStore, type DuplicateValue } from "./uniqueness-store";
 
 const csvDefaults: Required<CsvOptions> = {
@@ -51,11 +55,15 @@ export interface StreamingValidationOptions {
 class IssueCollector {
   public readonly issues: ValidationIssue[] = [];
   public total = 0;
+  public errors = 0;
+  public warnings = 0;
 
   public constructor(private readonly maximum: number) {}
 
   public add(issue: ValidationIssue): void {
     this.total += 1;
+    if (issue.severity === "warning") this.warnings += 1;
+    else this.errors += 1;
     if (this.issues.length < this.maximum) this.issues.push(issue);
   }
 
@@ -81,12 +89,29 @@ interface PreparedRowTest {
   cells: Array<{ index: number; column: string; expected: string }>;
 }
 
+interface PreparedRule {
+  rule: ConditionalRule;
+  valid: boolean;
+}
+
+interface PreparedGroupRule {
+  rule: GroupRule;
+  valid: boolean;
+  targetId?: number;
+}
+
 interface UniqueCheck {
   targetId: number;
   kind: "column" | "identity";
   state: ContractState;
   column?: string;
   indexes: number[];
+}
+
+interface GroupCheck {
+  targetId: number;
+  prepared: PreparedGroupRule;
+  state: ContractState;
 }
 
 interface ContractState {
@@ -98,6 +123,8 @@ interface ContractState {
   declared: Set<string>;
   columns: PreparedColumn[];
   rowTests: PreparedRowTest[];
+  rules: PreparedRule[];
+  groupRules: PreparedGroupRule[];
   identity?: UniqueCheck;
   rowCount: number;
   initialized: boolean;
@@ -161,6 +188,8 @@ function createState(input: ContractRunInput, maxIssues: number): ContractState 
     declared: new Set(Object.keys(input.contract.schema.columns)),
     columns: [],
     rowTests: [],
+    rules: [],
+    groupRules: [],
     rowCount: 0,
     initialized: false,
     nullValues: new Set(options.nullValues.map((value) => normalize(value, options)))
@@ -175,7 +204,9 @@ function initializeState(
   state: ContractState,
   rawHeaders: string[],
   nextUniqueTarget: () => number,
-  uniqueChecks: Map<number, UniqueCheck>
+  uniqueChecks: Map<number, UniqueCheck>,
+  nextGroupTarget: () => number,
+  groupChecks: Map<number, GroupCheck>
 ): void {
   const { contract } = state.input;
   state.headers = rawHeaders.map((header) => state.options.trimValues ? header.trim() : header);
@@ -190,6 +221,17 @@ function initializeState(
     }
   }
   state.collector.addAll(countIssues("column_count", state.headers.length, contract.schema.columnCount, "file"));
+  if (contract.schema.columnOrder === "exact") {
+    const expected = [...state.declared].filter((header) => state.headerIndex.has(header));
+    const actual = state.headers.filter((header) => state.declared.has(header));
+    if (actual.length !== expected.length || actual.some((header, index) => header !== expected[index])) {
+      state.collector.add({
+        level: "file",
+        code: "COLUMN_ORDER_MISMATCH",
+        message: "CSV headers do not follow the declaration order in schema.columns."
+      });
+    }
+  }
 
   for (const [name, definition] of Object.entries(contract.schema.columns)) {
     const index = state.headerIndex.get(name);
@@ -277,10 +319,57 @@ function initializeState(
         : []
     });
   }
+
+  const advancedRuleIds = new Set<string>();
+  for (const rule of contract.rules ?? []) {
+    let valid = true;
+    if (advancedRuleIds.has(rule.id)) {
+      state.collector.add({ level: "row", code: "DUPLICATE_RULE_ID", message: `Rule id "${rule.id}" is duplicated.`, testId: rule.id });
+      valid = false;
+    }
+    advancedRuleIds.add(rule.id);
+    const references = [...new Set([...predicateColumns(rule.when), ...predicateColumns(rule.expect)])];
+    for (const column of references) {
+      if (!state.declared.has(column)) {
+        state.collector.add({ level: "row", code: "UNDECLARED_RULE_COLUMN", message: `Rule "${rule.id}" references undeclared column "${column}".`, column, testId: rule.id });
+        valid = false;
+      } else if (!state.headerIndex.has(column)) {
+        state.collector.add({ level: "row", code: "RULE_COLUMN_MISSING", message: `Rule "${rule.id}" references optional column "${column}", but it is absent from this CSV.`, column, testId: rule.id });
+        valid = false;
+      }
+    }
+    state.rules.push({ rule, valid });
+  }
+
+  for (const rule of contract.groupRules ?? []) {
+    let valid = true;
+    if (advancedRuleIds.has(rule.id)) {
+      state.collector.add({ level: "row", code: "DUPLICATE_RULE_ID", message: `Rule id "${rule.id}" is duplicated.`, testId: rule.id });
+      valid = false;
+    }
+    advancedRuleIds.add(rule.id);
+    const references = [...new Set([...predicateColumns(rule.when), ...rule.groupBy, rule.require.column])];
+    for (const column of references) {
+      if (!state.declared.has(column)) {
+        state.collector.add({ level: "row", code: "UNDECLARED_RULE_COLUMN", message: `Group rule "${rule.id}" references undeclared column "${column}".`, column, testId: rule.id });
+        valid = false;
+      } else if (!state.headerIndex.has(column)) {
+        state.collector.add({ level: "row", code: "RULE_COLUMN_MISSING", message: `Group rule "${rule.id}" references optional column "${column}", but it is absent from this CSV.`, column, testId: rule.id });
+        valid = false;
+      }
+    }
+    const prepared: PreparedGroupRule = { rule, valid };
+    if (valid) {
+      prepared.targetId = nextGroupTarget();
+      groupChecks.set(prepared.targetId, { targetId: prepared.targetId, prepared, state });
+    }
+    state.groupRules.push(prepared);
+  }
   state.initialized = true;
 }
 
-function processRow(state: ContractState, fields: string[], recordNumber: number, uniqueness?: PartitionedUniquenessStore): void {
+function processRow(state: ContractState, fields: string[], recordNumber: number,
+  uniqueness?: PartitionedUniquenessStore, groups?: PartitionedGroupStore): void {
   state.rowCount += 1;
   if (!state.options.allowRaggedRows && fields.length !== state.headers.length) {
     state.collector.add({
@@ -345,6 +434,36 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
       }
     }
   }
+
+  const runtime = createPredicateRuntime(
+    (column) => fields[state.headerIndex.get(column)!] ?? "",
+    state.options,
+    state.nullValues
+  );
+  for (const prepared of state.rules) {
+    if (!prepared.valid) continue;
+    if (prepared.rule.when && !evaluatePredicate(prepared.rule.when, runtime)) continue;
+    if (evaluatePredicate(prepared.rule.expect, runtime)) continue;
+    state.collector.add({
+      level: "row",
+      code: "RULE_FAILED",
+      message: `Rule "${prepared.rule.name ?? prepared.rule.id}" expected ${predicateDescription(prepared.rule.expect)}.`,
+      row: recordNumber,
+      testId: prepared.rule.id,
+      severity: prepared.rule.severity ?? "error"
+    });
+  }
+
+  for (const prepared of state.groupRules) {
+    if (!prepared.valid || prepared.targetId === undefined) continue;
+    if (prepared.rule.when && !evaluatePredicate(prepared.rule.when, runtime)) continue;
+    const labels = prepared.rule.groupBy.map((column) => fields[state.headerIndex.get(column)!] ?? "");
+    const normalizedLabels = labels.map((value) => normalize(value, state.options));
+    const key = normalizedLabels.map((value) => `${value.length}:${value}`).join("");
+    const display = prepared.rule.groupBy.map((column, index) => `${column}=${displayValue(labels[index])}`).join(", ");
+    const observed = normalize(fields[state.headerIndex.get(prepared.rule.require.column)!] ?? "", state.options);
+    groups?.add(prepared.targetId, key, display, observed, recordNumber);
+  }
 }
 
 function addDuplicateIssue(duplicate: DuplicateValue, checks: Map<number, UniqueCheck>): void {
@@ -369,6 +488,30 @@ function addDuplicateIssue(duplicate: DuplicateValue, checks: Map<number, Unique
   }
 }
 
+function addGroupIssues(group: GroupValues, checks: Map<number, GroupCheck>): void {
+  const check = checks.get(group.targetId);
+  if (!check) throw new Error(`Unknown group target ${group.targetId}.`);
+  const { rule } = check.prepared;
+  const missingValues = (rule.require.values ?? []).filter((required) =>
+    !group.values.has(normalize(required, check.state.options)));
+  const missingFragments = (rule.require.contains ?? []).filter((required) => {
+    const fragment = normalize(required, check.state.options);
+    return ![...group.values].some((value) => value.includes(fragment));
+  });
+  for (const missing of [...missingValues, ...missingFragments]) {
+    check.state.collector.add({
+      level: "row",
+      code: "GROUP_REQUIRED_VALUE_MISSING",
+      message: `Group rule "${rule.name ?? rule.id}" is missing "${missing}" in ${rule.require.column} for ${group.display}.`,
+      row: group.firstRow,
+      column: rule.require.column,
+      testId: rule.id,
+      expected: missing,
+      severity: rule.severity ?? "error"
+    });
+  }
+}
+
 function finalizeState(state: ContractState): ContractRunOutput {
   state.collector.addAll(countIssues("row_count", state.rowCount, state.input.contract.schema.rowCount, "file"));
   for (const prepared of state.rowTests) {
@@ -379,11 +522,14 @@ function finalizeState(state: ContractState): ContractRunOutput {
   return {
     spec: state.input.spec,
     result: {
-      valid: state.collector.total === 0,
+      valid: state.collector.errors === 0,
       rowCount: state.rowCount,
       columnCount: state.headers.length,
-      testCount: Object.keys(state.input.contract.schema.columns).length + (state.input.contract.rowTests?.length ?? 0),
+      testCount: Object.keys(state.input.contract.schema.columns).length + (state.input.contract.rowTests?.length ?? 0) +
+        (state.input.contract.rules?.length ?? 0) + (state.input.contract.groupRules?.length ?? 0),
       issueCount: state.collector.total,
+      errorCount: state.collector.errors,
+      warningCount: state.collector.warnings,
       truncated: state.collector.total > state.collector.issues.length,
       issues: state.collector.issues
     }
@@ -399,12 +545,19 @@ async function validateGroup(
 ): Promise<ContractRunOutput[]> {
   const states = inputs.map((input) => createState(input, options.maxIssues));
   const uniqueChecks = new Map<number, UniqueCheck>();
+  const groupChecks = new Map<number, GroupCheck>();
   let nextTarget = 0;
   const getNextTarget = (): number => {
     if (nextTarget >= 65535) throw new Error("Too many uniqueness checks in one validation pass.");
     return nextTarget++;
   };
+  let nextGroup = 0;
+  const getNextGroup = (): number => {
+    if (nextGroup >= 65535) throw new Error("Too many group checks in one validation pass.");
+    return nextGroup++;
+  };
   let uniqueness: PartitionedUniquenessStore | undefined;
+  let groups: PartitionedGroupStore | undefined;
   let foundHeader = false;
   const physical = physicalOptions(states[0].options);
   try {
@@ -419,24 +572,30 @@ async function validateGroup(
     })) {
       if (!foundHeader) {
         foundHeader = true;
-        states.forEach((state) => initializeState(state, record.fields, getNextTarget, uniqueChecks));
+        states.forEach((state) => initializeState(state, record.fields, getNextTarget, uniqueChecks,
+          getNextGroup, groupChecks));
         if (uniqueChecks.size > 0) {
           uniqueness = new PartitionedUniquenessStore(options.tempDirectory, options.uniquePartitions);
         }
+        if (groupChecks.size > 0) {
+          groups = new PartitionedGroupStore(options.tempDirectory, options.uniquePartitions);
+        }
         continue;
       }
-      states.forEach((state) => processRow(state, record.fields, record.recordNumber, uniqueness));
+      states.forEach((state) => processRow(state, record.fields, record.recordNumber, uniqueness, groups));
     }
     if (!foundHeader) {
       states.forEach((state) => {
-        initializeState(state, [], getNextTarget, uniqueChecks);
+        initializeState(state, [], getNextTarget, uniqueChecks, getNextGroup, groupChecks);
         state.collector.add({ level: "file", code: "CSV_EMPTY", message: "CSV is empty." });
       });
     }
     await uniqueness?.findDuplicates((duplicate) => addDuplicateIssue(duplicate, uniqueChecks));
+    await groups?.readGroups((group) => addGroupIssues(group, groupChecks));
     return states.map(finalizeState);
   } finally {
     uniqueness?.dispose();
+    groups?.dispose();
   }
 }
 

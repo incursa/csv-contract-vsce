@@ -49,6 +49,8 @@ const failedState = {
       columnCount: 5,
       testCount: 7,
       issueCount: 1,
+      errorCount: 1,
+      warningCount: 0,
       truncated: false,
       issues: [{ level: "cell", code: "CELL_NOT_EQUAL", testId: "expected-customer-status", message: "Expected Active; found Inactive." }]
     }

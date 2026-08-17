@@ -133,3 +133,64 @@ test("empty and ragged CSVs produce explicit diagnostics", async () => {
     assert.ok(output.runs[0].result.issues.some((issue) => issue.code === "RAGGED_ROW"));
   });
 });
+
+test("streaming group rules defer completeness checks until every row has been read", async () => {
+  await withTempFile("Person,Balance\n1,City Gross\n2,City Gross\n1,City Subject\n2,City Subject\n1,City Withheld\n2,City Withheld\n", async (path, directory) => {
+    const grouped: CsvContract = {
+      version: 1,
+      schema: { columns: { Person: { presence: "required" }, Balance: { presence: "required" } } },
+      groupRules: [{
+        id: "city-family",
+        when: { column: "Balance", operator: "contains", value: "City" },
+        groupBy: ["Person"],
+        require: { column: "Balance", contains: ["Gross", "Subject", "Withheld"] }
+      }]
+    };
+    const output = await validateCsvFile(path, [{ spec: "grouped", contract: grouped }], {
+      progressInterval: 0,
+      tempDirectory: directory,
+      uniquePartitions: 8
+    });
+    assert.equal(output.valid, true);
+    assert.equal(output.runs[0].result.issueCount, 0);
+  });
+});
+
+test("streaming rules report missing group members and preserve warning-only success", async () => {
+  await withTempFile("Person,Balance,Value\n1,County Gross,-25\n1,County Subject,10\n", async (path, directory) => {
+    const grouped: CsvContract = {
+      version: 1,
+      schema: {
+        columnOrder: "exact",
+        columns: {
+          Person: { presence: "required" },
+          Balance: { presence: "required" },
+          Value: { presence: "required" }
+        }
+      },
+      rules: [{
+        id: "negative-county-gross",
+        severity: "warning",
+        when: { column: "Balance", operator: "equals", value: "County Gross" },
+        expect: { column: "Value", operator: "greaterThanOrEqual", value: 0 }
+      }],
+      groupRules: [{
+        id: "county-family",
+        when: { column: "Balance", operator: "contains", value: "County" },
+        groupBy: ["Person"],
+        require: { column: "Balance", contains: ["Gross", "Subject", "Withheld"] }
+      }]
+    };
+    const output = await validateCsvFile(path, [{ spec: "grouped", contract: grouped }], {
+      progressInterval: 0,
+      tempDirectory: directory,
+      uniquePartitions: 8
+    });
+    const result = output.runs[0].result;
+    assert.equal(result.valid, false);
+    assert.equal(result.warningCount, 1);
+    assert.equal(result.errorCount, 1);
+    assert.ok(result.issues.some((issue) => issue.code === "GROUP_REQUIRED_VALUE_MISSING"));
+    assert.ok(result.issues.some((issue) => issue.severity === "warning"));
+  });
+});

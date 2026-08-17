@@ -206,8 +206,8 @@ async function runContract(output: vscode.OutputChannel): Promise<void> {
     const result = validateCsv(contract, await readTargetText(target));
     valid &&= result.valid;
     output.appendLine(`${result.valid ? "PASS" : "FAIL"} ${target.label}`);
-    output.appendLine(`${result.rowCount} rows · ${result.columnCount} columns · ${result.issueCount} issues`);
-    result.issues.forEach((issue) => output.appendLine(`${issue.code}: ${issue.message}`));
+    output.appendLine(`${result.rowCount} rows · ${result.columnCount} columns · ${result.errorCount} errors · ${result.warningCount} warnings`);
+    result.issues.forEach((issue) => output.appendLine(`${(issue.severity ?? "error").toUpperCase()} ${issue.code}: ${issue.message}`));
     output.appendLine("");
   }
   output.show(true);

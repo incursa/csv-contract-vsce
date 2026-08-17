@@ -162,10 +162,10 @@ async function testCsv(args: ParsedArgs): Promise<void> {
       console.log(`${file.valid ? "PASS" : "FAIL"} ${file.csv}`);
       for (const run of file.runs) {
         const shown = run.result.truncated ? `; showing first ${run.result.issues.length}` : "";
-        console.log(`  ${run.result.valid ? "PASS" : "FAIL"} ${run.spec} — ${run.result.rowCount.toLocaleString()} rows, ${run.result.columnCount} columns, ${run.result.issueCount.toLocaleString()} issues${shown}`);
+        console.log(`  ${run.result.valid ? "PASS" : "FAIL"} ${run.spec} — ${run.result.rowCount.toLocaleString()} rows, ${run.result.columnCount} columns, ${run.result.errorCount.toLocaleString()} errors, ${run.result.warningCount.toLocaleString()} warnings${shown}`);
         for (const issue of run.result.issues) {
           const location = [issue.column, issue.row ? `record ${issue.row}` : undefined, issue.testId].filter(Boolean).join(" · ");
-          console.log(`    ${issue.code}${location ? ` [${location}]` : ""}: ${issue.message}`);
+          console.log(`    ${(issue.severity ?? "error").toUpperCase()} ${issue.code}${location ? ` [${location}]` : ""}: ${issue.message}`);
         }
       }
       console.log(`  Performance: ${(file.performance.durationMs / 1000).toFixed(2)}s, ${file.performance.rowsPerSecond.toLocaleString()} rows/s, ${formatBytes(file.performance.bytesRead)} read, ${formatBytes(file.performance.maxRssBytes)} peak RSS, ${file.performance.passes} pass(es)`);

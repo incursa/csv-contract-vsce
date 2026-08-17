@@ -45,6 +45,39 @@ export interface RowTest {
   expect: RowExpectation;
 }
 
+export type RuleSeverity = "error" | "warning";
+
+export type PredicateOperator =
+  | "equals"
+  | "notEquals"
+  | "in"
+  | "notIn"
+  | "isNull"
+  | "notNull"
+  | "isBlank"
+  | "notBlank"
+  | "equalsColumn"
+  | "notEqualsColumn"
+  | "contains"
+  | "notContains"
+  | "startsWith"
+  | "endsWith"
+  | "matches"
+  | "greaterThan"
+  | "greaterThanOrEqual"
+  | "lessThan"
+  | "lessThanOrEqual";
+
+export interface PredicateLeaf {
+  column: string;
+  operator: PredicateOperator;
+  value?: string | number;
+  values?: string[];
+  otherColumn?: string;
+}
+
+export type Predicate = PredicateLeaf | { all: Predicate[] } | { any: Predicate[] };
+
 export type SqlPredicateOperator =
   | "equals"
   | "notEquals"
@@ -67,10 +100,33 @@ export interface SqlPredicateLeaf {
 
 export type SqlPredicate = SqlPredicateLeaf | { all: SqlPredicate[] } | { any: SqlPredicate[] };
 
+export interface ConditionalRule {
+  id: string;
+  name?: string;
+  severity?: RuleSeverity;
+  when?: Predicate;
+  expect: Predicate;
+}
+
+export interface GroupValueRequirement {
+  column: string;
+  values?: string[];
+  contains?: string[];
+}
+
+export interface GroupRule {
+  id: string;
+  name?: string;
+  severity?: RuleSeverity;
+  when?: Predicate;
+  groupBy: string[];
+  require: GroupValueRequirement;
+}
+
 export interface SqlConditionalRule {
   id: string;
   name?: string;
-  severity?: "error" | "warning";
+  severity?: RuleSeverity;
   when?: SqlPredicate;
   expect: SqlPredicate;
 }
@@ -121,11 +177,14 @@ export interface CsvContract {
   };
   schema: {
     allowAdditionalColumns?: boolean;
+    columnOrder?: "exact";
     rowCount?: CountExpectation;
     columnCount?: CountExpectation;
     columns: Record<string, ColumnContract>;
   };
   rowTests?: RowTest[];
+  rules?: ConditionalRule[];
+  groupRules?: GroupRule[];
   sqlServer?: SqlServerTarget;
 }
 
@@ -147,6 +206,7 @@ export interface ValidationIssue {
   testId?: string;
   actual?: string | number;
   expected?: string | number;
+  severity?: RuleSeverity;
 }
 
 export interface ValidationResult {
@@ -155,6 +215,8 @@ export interface ValidationResult {
   columnCount: number;
   testCount: number;
   issueCount: number;
+  errorCount: number;
+  warningCount: number;
   truncated: boolean;
   issues: ValidationIssue[];
 }

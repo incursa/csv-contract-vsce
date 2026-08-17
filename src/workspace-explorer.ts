@@ -360,10 +360,10 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
       if (entry.error) {
         this.output.appendLine(`  ERROR: ${entry.error}`);
       } else if (entry.result) {
-        this.output.appendLine(`  ${entry.result.rowCount.toLocaleString()} rows · ${entry.result.columnCount} columns · ${entry.result.issueCount.toLocaleString()} issues`);
+        this.output.appendLine(`  ${entry.result.rowCount.toLocaleString()} rows · ${entry.result.columnCount} columns · ${entry.result.errorCount.toLocaleString()} errors · ${entry.result.warningCount.toLocaleString()} warnings`);
         for (const issue of entry.result.issues) {
           const location = [issue.column, issue.row ? `record ${issue.row}` : undefined, issue.testId].filter(Boolean).join(" · ");
-          this.output.appendLine(`    ${issue.code}${location ? ` [${location}]` : ""}: ${issue.message}`);
+          this.output.appendLine(`    ${(issue.severity ?? "error").toUpperCase()} ${issue.code}${location ? ` [${location}]` : ""}: ${issue.message}`);
         }
       }
       this.output.appendLine("");
@@ -509,7 +509,9 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
     const item = new CsvContractTreeItem(issue.code, vscode.TreeItemCollapsibleState.None, { kind: "issue", issue });
     item.description = issue.message;
     item.tooltip = issue.message;
-    item.iconPath = new vscode.ThemeIcon("error", new vscode.ThemeColor("testing.iconFailed"));
+    item.iconPath = issue.severity === "warning"
+      ? new vscode.ThemeIcon("warning", new vscode.ThemeColor("notificationsWarningIcon.foreground"))
+      : new vscode.ThemeIcon("error", new vscode.ThemeColor("testing.iconFailed"));
     return item;
   }
 }

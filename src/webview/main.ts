@@ -1,6 +1,7 @@
 import "@incursa/ui-kit/dist/inc-design-language.css";
 import "./workbench.css";
 import type { CsvContract, ValidationResult } from "../core/model";
+import { predicateDescription } from "../core/predicate";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 
@@ -131,7 +132,10 @@ function render(): void {
   const selected = contract.schema.columns[selectedColumn];
   const constraints = selected?.constraints ?? {};
   const configuredTargets = contract.targets ?? [];
-  const issueCount = runs.reduce((total, run) => total + run.result.issueCount, 0);
+  const conditionalRules = contract.rules ?? [];
+  const groupRules = contract.groupRules ?? [];
+  const errorCount = runs.reduce((total, run) => total + run.result.errorCount, 0);
+  const warningCount = runs.reduce((total, run) => total + run.result.warningCount, 0);
   const rowCount = runs.length > 0
     ? runs.reduce((total, run) => total + run.result.rowCount, 0)
     : "—";
@@ -205,8 +209,8 @@ function render(): void {
         ["Files", targetNames.length || "—"],
         ["Columns", names.length],
         ["Rows scanned", rowCount],
-        ["Rules", names.length + (contract.rowTests?.length ?? 0)],
-        ["Failures", runs.length > 0 ? issueCount : "—"]
+        ["Rules", names.length + (contract.rowTests?.length ?? 0) + (contract.rules?.length ?? 0) + (contract.groupRules?.length ?? 0)],
+        ["Errors / warnings", runs.length > 0 ? `${errorCount} / ${warningCount}` : "—"]
       ].map(([label, value]) => `<article class="inc-card metric"><span>${label}</span><strong>${escape(value)}</strong></article>`).join("")}
     </section>
     <section class="inc-card pane results-pane">
@@ -216,12 +220,31 @@ function render(): void {
           <div class="target-result__heading">
             <span class="${run.result.valid ? "target-result__pass" : "target-result__fail"}">${run.result.valid ? "PASS" : "FAIL"}</span>
             <code title="${escape(run.target)}">${escape(run.target)}</code>
-            <small>${run.result.rowCount.toLocaleString()} rows · ${run.result.issueCount.toLocaleString()} issues</small>
+            <small>${run.result.rowCount.toLocaleString()} rows · ${run.result.errorCount.toLocaleString()} errors · ${run.result.warningCount.toLocaleString()} warnings</small>
           </div>
           ${run.result.issues.length
-            ? run.result.issues.slice(0, 10).map((issue) => `<div class="result result--fail"><span>FAIL</span><code>${escape(issue.testId ?? issue.code)}</code><p>${escape(issue.message)}</p></div>`).join("")
+            ? run.result.issues.slice(0, 10).map((issue) => `<div class="result result--${issue.severity === "warning" ? "warning" : "fail"}"><span>${issue.severity === "warning" ? "WARN" : "FAIL"}</span><code>${escape(issue.testId ?? issue.code)}</code><p>${escape(issue.message)}</p></div>`).join("")
             : `<div class="result result--pass"><span>PASS</span><code>all-tests</code><p>All configured checks passed.</p></div>`}
         </section>`).join("") || `<p class="empty compact-empty">No test results yet.</p>`}
+      </div>
+    </section>
+    <section class="inc-card pane advanced-rules-pane">
+      <div class="pane-heading">
+        <div><h2>Conditional &amp; group rules</h2><p>${conditionalRules.length} conditional · ${groupRules.length} grouped</p></div>
+        <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="open-yaml">Edit advanced rules in YAML</button>
+      </div>
+      <div class="configured-target-list">
+        ${conditionalRules.map((rule) => `<div class="configured-target-row">
+          <span class="target-type">${escape((rule.severity ?? "error").toUpperCase())}</span>
+          <code>${escape(rule.id)}</code>
+          <span>${escape(`${rule.when ? `when ${predicateDescription(rule.when)}; ` : ""}expect ${predicateDescription(rule.expect)}`)}</span>
+        </div>`).join("")}
+        ${groupRules.map((rule) => `<div class="configured-target-row">
+          <span class="target-type">GROUP</span>
+          <code>${escape(rule.id)}</code>
+          <span>${escape(`group by ${rule.groupBy.join(", ")}; require ${[...(rule.require.values ?? []), ...(rule.require.contains ?? []).map((value) => `contains ${value}`)].join(", ")} in ${rule.require.column}`)}</span>
+        </div>`).join("")}
+        ${conditionalRules.length + groupRules.length === 0 ? `<p class="empty compact-empty">No conditional or grouped rules configured.</p>` : ""}
       </div>
     </section>
     <section class="split">
