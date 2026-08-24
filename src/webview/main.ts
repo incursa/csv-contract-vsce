@@ -137,6 +137,7 @@ function render(): void {
   const groupRules = contract.groupRules ?? [];
   const errorCount = runs.reduce((total, run) => total + run.result.errorCount, 0);
   const warningCount = runs.reduce((total, run) => total + run.result.warningCount, 0);
+  const issueCount = runs.reduce((total, run) => total + run.result.issueCount, 0);
   const rowCount = runs.length > 0
     ? runs.reduce((total, run) => total + run.result.rowCount, 0)
     : "—";
@@ -216,7 +217,10 @@ function render(): void {
       ].map(([label, value]) => `<article class="inc-card metric"><span>${label}</span><strong>${escape(value)}</strong></article>`).join("")}
     </section>
     <section class="inc-card pane results-pane">
-      <div class="pane-heading"><div><h2>Latest results</h2><p>${runs.length > 0 ? `${runs.filter((run) => run.result.valid).length} of ${runs.length} targets passed` : "Run the contract to see results."}</p></div></div>
+      <div class="pane-heading">
+        <div><h2>Latest results</h2><p>${runs.length > 0 ? `${runs.filter((run) => run.result.valid).length} of ${runs.length} targets passed` : "Run the contract to see results."}</p></div>
+        ${runs.length > 0 ? `<button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="export-issues">Export results${issueCount > 0 ? ` (${issueCount.toLocaleString()} issues)` : ""}</button>` : ""}
+      </div>
       <div class="results">
         ${runs.map((run) => `<section class="target-result">
           <div class="target-result__heading">
@@ -412,6 +416,7 @@ function bind(): void {
     vscode.postMessage({ type: "updateContract", contract });
   }));
   app.querySelector('[data-action="open-yaml"]')?.addEventListener("click", () => vscode.postMessage({ type: "openYaml" }));
+  app.querySelector('[data-action="export-issues"]')?.addEventListener("click", () => vscode.postMessage({ type: "exportIssues" }));
   app.querySelector('[data-action="run"]')?.addEventListener("click", () => {
     if (running) return;
     running = true;

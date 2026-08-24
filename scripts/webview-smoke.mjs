@@ -48,11 +48,17 @@ const failedState = {
       rowCount: 12480,
       columnCount: 5,
       testCount: 7,
-      issueCount: 1,
-      errorCount: 1,
+      issueCount: 12,
+      errorCount: 12,
       warningCount: 0,
       truncated: false,
-      issues: [{ level: "cell", code: "CELL_NOT_EQUAL", testId: "expected-customer-status", message: "Expected Active; found Inactive." }]
+      issues: Array.from({ length: 12 }, (_, index) => ({
+        level: "cell",
+        code: "CELL_NOT_EQUAL",
+        testId: "expected-customer-status",
+        row: index + 2,
+        message: `Expected Active; found Inactive at row ${index + 2}.`
+      }))
     }
   }]
 };
@@ -128,6 +134,14 @@ await mkdir("images", { recursive: true });
 await page.screenshot({ path: "images/workbench-column-rules.png", fullPage: true });
 
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), failedState);
+if ((await page.locator(".results .result").count()) !== 10) throw new Error("Issue preview must remain limited to 10 items.");
+const exportIssuesButton = page.locator('[data-action="export-issues"]');
+if (!await exportIssuesButton.isVisible() || (await exportIssuesButton.textContent())?.trim() !== "Export results (12 issues)") {
+  throw new Error("Failed results did not expose the complete issue export action.");
+}
+await exportIssuesButton.click();
+const exportMessage = await page.evaluate(() => window.__messages.at(-1));
+if (exportMessage?.type !== "exportIssues") throw new Error("Export issues did not send the expected host message.");
 const resultsPosition = await page.evaluate(() => ({
   resultsTop: document.querySelector(".results-pane").getBoundingClientRect().top,
   columnsTop: document.querySelector(".columns-pane").getBoundingClientRect().top

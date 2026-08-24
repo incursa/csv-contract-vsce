@@ -16,6 +16,7 @@ import type { DesktopComparisonRunner } from "./vscode-comparison";
 import { generateSqlServerValidation } from "./core/sql-server-generator";
 import { mergeImportedSchema, parseSqlSchemaSource, type ImportedSqlTable } from "./core/sql-schema-import";
 import { resolveSqlServerTargets, sqlServerTargetLabel, type ResolvedSqlServerTarget } from "./core/sql-server-targets";
+import { issueRunsToCsv, validationRunExportJson } from "./issue-export";
 
 const viewType = "csv-contract-vsce.contractEditor";
 
@@ -306,8 +307,10 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
     };
     panel.webview.html = this.html(panel.webview);
     let manualTargets: ResolvedTarget[] | undefined;
+    let latestRuns: TargetRun[] = [];
 
-    const postState = async (runs: TargetRun[] = []): Promise<void> => {
+    const postState = async (runs?: TargetRun[]): Promise<void> => {
+      if (runs) latestRuns = runs;
       try {
         const contract = parseContract(document.getText());
         const savedTargets = configuredTargets(document.uri, contract);
@@ -321,7 +324,7 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
           fileTargetCount: activeTargets.length,
           configuredTargetCount: savedTargets.length + sqlTargets.length,
           usingConfiguredTargets: manualTargets === undefined && (savedTargets.length > 0 || sqlTargets.length > 0),
-          runs
+          runs: latestRuns
         });
       } catch (error) {
         await panel.webview.postMessage({ type: "error", message: error instanceof Error ? error.message : String(error) });
@@ -390,9 +393,42 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         } catch (error) {
           void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
         }
+      } else if (message.type === "exportIssues") {
+        const retainedIssueCount = latestRuns.reduce((total, run) => total + run.result.issues.length, 0);
+        if (latestRuns.length === 0) {
+          void vscode.window.showWarningMessage("Run the contract before exporting results.");
+          return;
+        }
+        const format = await vscode.window.showQuickPick([
+          { label: "JSON", description: "Complete target summaries and retained issue details", extension: "results.json" },
+          { label: "CSV", description: "One row per retained validation issue", extension: "issues.csv" }
+        ], { title: "Export validation results", placeHolder: "Choose a machine-readable format" });
+        if (!format) return;
+        const contractFilename = document.uri.path.split("/").at(-1) ?? "contract.csvtest.yaml";
+        const exportFilename = contractFilename.replace(/\.csvtest\.ya?ml$/i, "") + `.${format.extension}`;
+        const outputUri = await vscode.window.showSaveDialog({
+          title: "Export validation results",
+          defaultUri: document.uri.with({ path: document.uri.path.replace(/[^/]+$/, exportFilename) }),
+          filters: format.label === "JSON" ? { "JSON files": ["json"] } : { "CSV files": ["csv"] }
+        });
+        if (!outputUri) return;
+        const content = format.label === "JSON"
+          ? validationRunExportJson(vscode.workspace.asRelativePath(document.uri, false), latestRuns)
+          : issueRunsToCsv(latestRuns);
+        await vscode.workspace.fs.writeFile(outputUri, new TextEncoder().encode(content));
+        const totalIssueCount = latestRuns.reduce((total, run) => total + run.result.issueCount, 0);
+        if (totalIssueCount > retainedIssueCount) {
+          void vscode.window.showWarningMessage(
+            `Exported the run results with ${retainedIssueCount.toLocaleString()} of ${totalIssueCount.toLocaleString()} issue details because the validation issue limit was reached.`
+          );
+        } else {
+          void vscode.window.showInformationMessage(`Exported results for ${latestRuns.length.toLocaleString()} validation target${latestRuns.length === 1 ? "" : "s"}.`);
+        }
       } else if (message.type === "run") {
         const runs: TargetRun[] = [];
         try {
+          latestRuns = [];
+          await postState(runs);
           const contract = parseContract(document.getText());
           const targets = manualTargets ?? configuredTargets(document.uri, contract);
           const sqlTargets = resolveSqlServerTargets(contract, false).filter((target) => target.connection);

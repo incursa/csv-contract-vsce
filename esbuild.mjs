@@ -65,6 +65,7 @@ const builds = [
       "test/outline-generator.test.ts",
       "test/targets.test.ts",
       "test/manifest.test.ts",
+      "test/issue-export.test.ts",
       "test/workspace-report.test.ts",
       "test/semantic-comparison.test.ts",
       "test/sql-server-generator.test.ts",
