@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.0
+
+- Added a Workbench **Add table or view** flow that browses objects from secret-backed SQL Server connection profiles and saves the selected target in contract YAML.
+- Added table- and view-specific column mappings so canonical contract column names can validate differently named SQL Server columns without changing CSV behavior or report labels.
+- Added conservative mapping suggestions for exact, case-insensitive, and standardized names such as `CustomerId` and `customer_id`, with unmatched and ambiguous names called out for review.
+- Added SQL Server view discovery and validation while keeping database access read-only and preserving multiple connections and targets per contract.
+
 ## 0.10.0
 
 - Added direct, read-only SQL Server table validation with the same `ValidationResult` and workspace report used for CSV targets.

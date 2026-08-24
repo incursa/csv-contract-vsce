@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { createContractFromCsv, parseContract, serializeContract, validateCsv } from "./core/contract";
-import type { CsvContract, ValidationResult } from "./core/model";
+import type { CsvContract, SqlServerObjectInfo, SqlServerTableTarget, ValidationResult } from "./core/model";
 import {
   configuredTargets,
   openTargetExternally,
@@ -16,6 +16,7 @@ import type { DesktopComparisonRunner } from "./vscode-comparison";
 import { generateSqlServerValidation } from "./core/sql-server-generator";
 import { mergeImportedSchema, parseSqlSchemaSource, type ImportedSqlTable } from "./core/sql-schema-import";
 import { resolveSqlServerTargets, sqlServerTargetLabel, type ResolvedSqlServerTarget } from "./core/sql-server-targets";
+import { suggestSqlColumnMappings } from "./core/sql-server-column-mapping";
 import { issueRunsToCsv, validationRunExportJson } from "./issue-export";
 
 const viewType = "csv-contract-vsce.contractEditor";
@@ -26,6 +27,7 @@ interface TargetRun {
 }
 
 export type DesktopSqlServerRunner = (contract: CsvContract, target: ResolvedSqlServerTarget) => Promise<ValidationResult>;
+export type DesktopSqlServerBrowser = (profile: string) => Promise<SqlServerObjectInfo[]>;
 
 const sqlConnectionProfilesKey = "csvContract.sqlServer.connectionProfiles";
 const sqlConnectionSecretPrefix = "csvContract.sqlServer.connection.";
@@ -34,10 +36,11 @@ export const sqlConnectionSecretKey = (profile: string): string => `${sqlConnect
 export function activate(
   context: vscode.ExtensionContext,
   desktopComparisonRunner?: DesktopComparisonRunner,
-  sqlServerRunner?: DesktopSqlServerRunner
+  sqlServerRunner?: DesktopSqlServerRunner,
+  sqlServerBrowser?: DesktopSqlServerBrowser
 ): void {
   const output = vscode.window.createOutputChannel("CSV Contract");
-  const provider = new ContractEditorProvider(context, sqlServerRunner);
+  const provider = new ContractEditorProvider(context, sqlServerRunner, sqlServerBrowser);
   registerTargetContentProvider(context);
   context.subscriptions.push(
     output,
@@ -51,7 +54,8 @@ export function activate(
     vscode.commands.registerCommand("csv-contract-vsce.generateSqlServerValidation", (uri?: vscode.Uri) => generateSqlServerScript(uri)),
     vscode.commands.registerCommand("csv-contract-vsce.importSqlServerSchema", (uri?: vscode.Uri) => importSqlServerSchema(uri)),
     vscode.commands.registerCommand("csv-contract-vsce.configureSqlServerConnection", () => configureSqlServerConnection(context)),
-    vscode.commands.registerCommand("csv-contract-vsce.forgetSqlServerConnection", () => forgetSqlServerConnection(context))
+    vscode.commands.registerCommand("csv-contract-vsce.forgetSqlServerConnection", () => forgetSqlServerConnection(context)),
+    vscode.commands.registerCommand("csv-contract-vsce.addSqlServerTarget", (uri?: vscode.Uri) => addSqlServerTarget(context, uri, sqlServerBrowser))
   );
   registerWorkspaceExplorer(context, output, sqlServerRunner);
   registerSemanticComparison(context, desktopComparisonRunner);
@@ -250,14 +254,14 @@ async function runContract(output: vscode.OutputChannel, sqlServerRunner?: Deskt
   );
 }
 
-async function configureSqlServerConnection(context: vscode.ExtensionContext): Promise<void> {
+async function configureSqlServerConnection(context: vscode.ExtensionContext): Promise<string | undefined> {
   const profile = await vscode.window.showInputBox({
     title: "Configure SQL Server connection",
     prompt: "Connection profile name referenced by sqlServer.connection or sqlServer.targets[].connection.",
     placeHolder: "warehouse-readonly",
     validateInput: (value) => /^[A-Za-z0-9._-]+$/.test(value) ? undefined : "Use letters, numbers, dots, underscores, or hyphens."
   });
-  if (!profile) return;
+  if (!profile) return undefined;
   const connectionString = await vscode.window.showInputBox({
     title: `SQL Server connection: ${profile}`,
     prompt: "Stored in VS Code Secret Storage. Use a login with SELECT-only permissions.",
@@ -265,12 +269,13 @@ async function configureSqlServerConnection(context: vscode.ExtensionContext): P
     ignoreFocusOut: true,
     placeHolder: "Server=...;Database=...;User Id=...;Password=...;Encrypt=true"
   });
-  if (!connectionString) return;
+  if (!connectionString) return undefined;
   await context.secrets.store(sqlConnectionSecretKey(profile), connectionString);
   const profiles = new Set(context.globalState.get<string[]>(sqlConnectionProfilesKey, []));
   profiles.add(profile);
   await context.globalState.update(sqlConnectionProfilesKey, [...profiles].sort());
   void vscode.window.showInformationMessage(`Stored SQL Server connection profile '${profile}' in Secret Storage.`);
+  return profile;
 }
 
 async function forgetSqlServerConnection(context: vscode.ExtensionContext): Promise<void> {
@@ -280,6 +285,115 @@ async function forgetSqlServerConnection(context: vscode.ExtensionContext): Prom
   await context.secrets.delete(sqlConnectionSecretKey(profile));
   await context.globalState.update(sqlConnectionProfilesKey, profiles.filter((candidate) => candidate !== profile));
   void vscode.window.showInformationMessage(`Forgot SQL Server connection profile '${profile}'.`);
+}
+
+async function chooseSqlConnectionProfile(context: vscode.ExtensionContext): Promise<string | undefined> {
+  const profiles = context.globalState.get<string[]>(sqlConnectionProfilesKey, []);
+  const configureLabel = "$(add) Configure a new connection";
+  const selected = await vscode.window.showQuickPick([...profiles, configureLabel], {
+    title: "Add SQL Server table or view",
+    placeHolder: profiles.length ? "Choose a read-only connection profile" : "Configure a connection profile first"
+  });
+  if (!selected) return undefined;
+  return selected === configureLabel ? configureSqlServerConnection(context) : selected;
+}
+
+function addConfiguredSqlTarget(contract: CsvContract, target: SqlServerTableTarget): void {
+  const config = contract.sqlServer ??= {};
+  if (config.targets?.length) {
+    const existing = config.targets.findIndex((candidate) =>
+      candidate.connection === target.connection && candidate.schema === target.schema && candidate.table === target.table
+    );
+    if (existing >= 0) config.targets[existing] = target;
+    else config.targets.push(target);
+    return;
+  }
+  if (!config.schema || !config.table || (config.schema === target.schema && config.table === target.table)) {
+    config.connection = target.connection;
+    config.schema = target.schema;
+    config.table = target.table;
+    config.objectType = target.objectType;
+    config.columnMap = target.columnMap;
+    return;
+  }
+  const previous: SqlServerTableTarget = {
+    connection: config.connection ?? target.connection,
+    schema: config.schema,
+    table: config.table,
+    objectType: config.objectType,
+    columnMap: config.columnMap
+  };
+  config.targets = [previous, target];
+  delete config.connection;
+  delete config.schema;
+  delete config.table;
+  delete config.objectType;
+  delete config.columnMap;
+}
+
+async function addSqlServerTarget(
+  context: vscode.ExtensionContext,
+  requestedUri: vscode.Uri | undefined,
+  sqlServerBrowser: DesktopSqlServerBrowser | undefined
+): Promise<void> {
+  if (!sqlServerBrowser) {
+    void vscode.window.showErrorMessage("Browsing SQL Server tables and views requires the desktop extension host.");
+    return;
+  }
+  const active = vscode.window.activeTextEditor?.document.uri;
+  const specUri = requestedUri?.path.match(/\.csvtest\.ya?ml$/i) ? requestedUri
+    : active?.path.match(/\.csvtest\.ya?ml$/i) ? active
+      : await pickFile({ "CSV contracts": ["csvtest.yaml", "csvtest.yml", "yaml", "yml"] });
+  if (!specUri) return;
+  try {
+    const document = await vscode.workspace.openTextDocument(specUri);
+    const contract = parseContract(document.getText());
+    const profile = await chooseSqlConnectionProfile(context);
+    if (!profile) return;
+    const objects = await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: `Reading tables and views from ${profile}`,
+      cancellable: false
+    }, () => sqlServerBrowser(profile));
+    if (objects.length === 0) throw new Error(`Connection profile '${profile}' did not expose any tables or views.`);
+    const selected = (await vscode.window.showQuickPick(objects.map((object) => ({
+      label: `${object.schema}.${object.name}`,
+      description: object.objectType === "view" ? "View" : "Table",
+      detail: `${object.columns.length} columns`,
+      object
+    })), {
+      title: `Add SQL Server table or view · ${profile}`,
+      placeHolder: "Choose a table or view"
+    }))?.object;
+    if (!selected) return;
+    const suggestion = suggestSqlColumnMappings(Object.keys(contract.schema.columns), selected.columns);
+    const nonExact = suggestion.matches.filter((match) => match.method !== "exact");
+    const detail = [
+      `Connection: ${profile}`,
+      `Object: ${selected.schema}.${selected.name} (${selected.objectType})`,
+      `Columns: ${selected.columns.length}; exact matches: ${suggestion.matches.length - nonExact.length}`,
+      nonExact.length ? `Suggested mappings:\n${nonExact.slice(0, 20).map((match) => `  ${match.contractColumn} → ${match.physicalColumn}`).join("\n")}` : "No non-exact mappings are needed.",
+      suggestion.unmatched.length ? `Unmatched contract columns: ${suggestion.unmatched.join(", ")}` : "All contract columns matched.",
+      suggestion.ambiguous.length ? `Ambiguous contract columns (not mapped): ${suggestion.ambiguous.join(", ")}` : undefined
+    ].filter((line): line is string => line !== undefined).join("\n\n");
+    const confirmation = await vscode.window.showInformationMessage(
+      `Add ${selected.schema}.${selected.name} as a contract target?`,
+      { modal: true, detail },
+      "Add Target"
+    );
+    if (confirmation !== "Add Target") return;
+    addConfiguredSqlTarget(contract, {
+      connection: profile,
+      schema: selected.schema,
+      table: selected.name,
+      objectType: selected.objectType,
+      columnMap: Object.keys(suggestion.columnMap).length ? suggestion.columnMap : undefined
+    });
+    await replaceTextDocument(document, serializeContract(contract));
+    void vscode.window.showInformationMessage(`Added ${selected.objectType} ${selected.schema}.${selected.name} using '${profile}'.`);
+  } catch (error) {
+    void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+  }
 }
 
 async function openWorkbench(requestedUri?: vscode.Uri): Promise<void> {
@@ -297,7 +411,8 @@ async function openWorkbench(requestedUri?: vscode.Uri): Promise<void> {
 class ContractEditorProvider implements vscode.CustomTextEditorProvider {
   public constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly sqlServerRunner?: DesktopSqlServerRunner
+    private readonly sqlServerRunner?: DesktopSqlServerRunner,
+    private readonly sqlServerBrowser?: DesktopSqlServerBrowser
   ) {}
 
   public async resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
@@ -473,6 +588,8 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         await generateSqlServerScript(document.uri);
       } else if (message.type === "configureSqlServerConnection") {
         await configureSqlServerConnection(this.context);
+      } else if (message.type === "addSqlServerTarget") {
+        await addSqlServerTarget(this.context, document.uri, this.sqlServerBrowser);
       } else if (message.type === "importSqlServerSchema") {
         await importSqlServerSchema(document.uri);
       }

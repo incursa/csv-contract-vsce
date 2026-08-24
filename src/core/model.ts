@@ -144,7 +144,17 @@ export interface SqlServerTableTarget {
   connection: string;
   schema: string;
   table: string;
+  objectType?: "table" | "view";
+  /** Contract column name to physical SQL Server column name. Exact matches may be omitted. */
+  columnMap?: Record<string, string>;
   scope?: SqlServerScope;
+}
+
+export interface SqlServerObjectInfo {
+  schema: string;
+  name: string;
+  objectType: "table" | "view";
+  columns: string[];
 }
 
 export interface SqlServerTarget {
@@ -153,6 +163,8 @@ export interface SqlServerTarget {
   /** Legacy single-table form. Use targets for more than one table or connection. */
   schema?: string;
   table?: string;
+  objectType?: "table" | "view";
+  columnMap?: Record<string, string>;
   targets?: SqlServerTableTarget[];
   rowLocator?: string[];
   detailLimit?: number;

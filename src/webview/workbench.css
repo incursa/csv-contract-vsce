@@ -47,6 +47,7 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .configured-target-row code { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .configured-target-row__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .4rem; }
 .target-type { color: #4459c6; font-size: .68rem; font-weight: 600; letter-spacing: .04em; }
+.target-mapping-count { color: #656668; font-size: .72rem; white-space: nowrap; }
 .metrics { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem; margin: 0 2rem 1rem; }
 .metric { padding: 1rem; }
 .metric span { display: block; color: #656668; font-size: .8rem; }

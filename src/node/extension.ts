@@ -26,7 +26,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (scopeValue === undefined) throw new Error("SQL Server validation was cancelled because no scope value was supplied.");
     }
     return session.validate(contract, target, { scopeValue });
-  });
+  }, (profile) => session.listObjects(profile));
 }
 
 export { deactivate };

@@ -28,6 +28,26 @@ function escape(value: unknown): string {
   })[character]!);
 }
 
+function configuredSqlTargets(value: CsvContract): Array<{
+  connection: string;
+  schema: string;
+  table: string;
+  objectType?: "table" | "view";
+  columnMap?: Record<string, string>;
+}> {
+  if (value.sqlServer?.targets?.length) return value.sqlServer.targets;
+  if (value.sqlServer?.schema && value.sqlServer.table) {
+    return [{
+      connection: value.sqlServer.connection ?? "",
+      schema: value.sqlServer.schema,
+      table: value.sqlServer.table,
+      objectType: value.sqlServer.objectType,
+      columnMap: value.sqlServer.columnMap
+    }];
+  }
+  return [];
+}
+
 function columnSummary(name: string): string {
   const c = contract!.schema.columns[name].constraints ?? {};
   return [
@@ -133,6 +153,7 @@ function render(): void {
   const selected = contract.schema.columns[selectedColumn];
   const constraints = selected?.constraints ?? {};
   const configuredTargets = contract.targets ?? [];
+  const sqlTargets = configuredSqlTargets(contract);
   const conditionalRules = contract.rules ?? [];
   const groupRules = contract.groupRules ?? [];
   const errorCount = runs.reduce((total, run) => total + run.result.errorCount, 0);
@@ -167,7 +188,7 @@ function render(): void {
       </div>
       <div class="workbench-actions">
         <button class="inc-btn inc-btn--outline-secondary" data-action="choose-csv">Select test CSV</button>
-        ${configuredTargetCount > 0 && !usingConfiguredTargets ? `<button class="inc-btn inc-btn--outline-secondary" data-action="use-configured-targets">Use configured CSVs</button>` : ""}
+        ${configuredTargetCount > 0 && !usingConfiguredTargets ? `<button class="inc-btn inc-btn--outline-secondary" data-action="use-configured-targets">Use configured targets</button>` : ""}
         ${fileTargetCount > 0 ? `<button class="inc-btn inc-btn--outline-secondary" data-action="open-active-target-vscode">Open CSV in VS Code</button>
         <button class="inc-btn inc-btn--outline-secondary" data-action="open-active-target-external">Open CSV externally</button>` : ""}
         <button class="inc-btn inc-btn--outline-secondary" data-action="open-yaml">Open YAML</button>
@@ -204,6 +225,27 @@ function render(): void {
               <button type="button" class="icon-button" data-action="remove-target" data-index="${index}" aria-label="Remove ${type.toLowerCase()} target">×</button>
             </div>`;
           }).join("") || `<p class="empty compact-empty">No saved targets. You can still select CSVs for this session.</p>`}
+        </div>
+      </div>
+      <div class="configured-targets">
+        <div class="configured-targets__heading">
+          <div><span class="field-label">CONFIGURED SQL SERVER TARGETS</span><p>Connection strings remain in Secret Storage. Column mappings are saved in this contract.</p></div>
+          <div class="configured-targets__actions">
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="add-sql-target">Add table or view</button>
+          </div>
+        </div>
+        <div class="configured-target-list sql-target-list">
+          ${sqlTargets.map((target, index) => {
+            const type = (target.objectType ?? "table").toUpperCase();
+            const mappingCount = Object.keys(target.columnMap ?? {}).length;
+            const value = `${target.connection || "unconfigured"}:${target.schema}.${target.table}`;
+            return `<div class="configured-target-row sql-target-row">
+              <span class="target-type">${type}</span>
+              <code title="${escape(value)}">${escape(value)}</code>
+              <span class="target-mapping-count">${mappingCount ? `${mappingCount} mapped` : "exact names"}</span>
+              <button type="button" class="icon-button" data-action="remove-sql-target" data-index="${index}" aria-label="Remove SQL ${type.toLowerCase()} target">×</button>
+            </div>`;
+          }).join("") || `<p class="empty compact-empty">No SQL Server targets. Add a table or view from a configured read-only connection.</p>`}
         </div>
       </div>
     </section>
@@ -399,6 +441,7 @@ function bind(): void {
   );
   app.querySelector('[data-action="add-target-files"]')?.addEventListener("click", () => vscode.postMessage({ type: "addTargetFiles" }));
   app.querySelector('[data-action="add-target-url"]')?.addEventListener("click", () => vscode.postMessage({ type: "addTargetUrl" }));
+  app.querySelector('[data-action="add-sql-target"]')?.addEventListener("click", () => vscode.postMessage({ type: "addSqlServerTarget" }));
   app.querySelector('[data-action="generate-sql"]')?.addEventListener("click", () => vscode.postMessage({ type: "generateSqlServerValidation" }));
   app.querySelector('[data-action="configure-sql"]')?.addEventListener("click", () => vscode.postMessage({ type: "configureSqlServerConnection" }));
   app.querySelector('[data-action="import-sql-schema"]')?.addEventListener("click", () => vscode.postMessage({ type: "importSqlServerSchema" }));
@@ -412,6 +455,23 @@ function bind(): void {
     if (!contract?.targets) return;
     contract.targets.splice(Number(button.dataset.index), 1);
     if (contract.targets.length === 0) contract.targets = undefined;
+    render();
+    vscode.postMessage({ type: "updateContract", contract });
+  }));
+  app.querySelectorAll<HTMLElement>('[data-action="remove-sql-target"]').forEach((button) => button.addEventListener("click", () => {
+    if (!contract?.sqlServer) return;
+    const index = Number(button.dataset.index);
+    if (contract.sqlServer.targets?.length) {
+      contract.sqlServer.targets.splice(index, 1);
+      if (contract.sqlServer.targets.length === 0) contract.sqlServer.targets = undefined;
+    } else if (index === 0) {
+      contract.sqlServer.connection = undefined;
+      contract.sqlServer.schema = undefined;
+      contract.sqlServer.table = undefined;
+      contract.sqlServer.objectType = undefined;
+      contract.sqlServer.columnMap = undefined;
+    }
+    if (Object.values(contract.sqlServer).every((value) => value === undefined)) contract.sqlServer = undefined;
     render();
     vscode.postMessage({ type: "updateContract", contract });
   }));

@@ -7,6 +7,7 @@ import type {
   SqlConditionalRule
 } from "./model";
 import { resolveSqlServerTargets, type ResolvedSqlServerTarget } from "./sql-server-targets";
+import { createPhysicalSqlContract } from "./sql-server-column-mapping";
 
 export interface SqlGeneratedRule {
   id: string;
@@ -171,6 +172,33 @@ function addCountExpectations(rules: GeneratedRule[], prefix: string, name: stri
 }
 
 export function generateSqlServerValidation(contract: CsvContract, options: SqlGenerationOptions = {}): SqlGenerationResult {
+  if (!contract.sqlServer) throw new Error("The contract must declare sqlServer before SQL can be generated.");
+  const logicalTarget = options.target ?? resolveSqlServerTargets(contract, false)[0];
+  const mapped = createPhysicalSqlContract(contract, logicalTarget);
+  const generated = generatePhysicalSqlServerValidation(mapped.contract, { ...options, target: mapped.target });
+  let sql = generated.sql;
+  const rules = generated.rules.map((rule) => {
+    if (!rule.column) return rule;
+    const canonical = mapped.physicalToCanonical[rule.column] ?? rule.column;
+    if (canonical === rule.column) return rule;
+    let id = rule.id;
+    if (id.startsWith(`${rule.column}.`)) id = `${canonical}${id.slice(rule.column.length)}`;
+    else if (id.endsWith(`-${rule.column}`)) id = `${id.slice(0, -rule.column.length)}${canonical}`;
+    const name = rule.name.replaceAll(rule.column, canonical);
+    sql = sql.replaceAll(`${sqlString(rule.id)} AS RuleId`, `${sqlString(id)} AS RuleId`)
+      .replaceAll(`${sqlString(rule.name)} AS RuleName`, `${sqlString(name)} AS RuleName`)
+      .replaceAll(`${sqlString(rule.column)} AS ColumnName`, `${sqlString(canonical)} AS ColumnName`);
+    return { ...rule, id, name, column: canonical };
+  });
+  const warnings = generated.warnings.map((warning) => Object.entries(mapped.physicalToCanonical)
+    .reduce((message, [physical, canonical]) => message.replaceAll(physical, canonical), warning));
+  for (const [index, warning] of generated.warnings.entries()) {
+    sql = sql.replaceAll(`-- WARNING: ${warning}`, `-- WARNING: ${warnings[index]}`);
+  }
+  return { ...generated, sql, warnings, rules };
+}
+
+function generatePhysicalSqlServerValidation(contract: CsvContract, options: SqlGenerationOptions): SqlGenerationResult {
   const config = contract.sqlServer;
   if (!config) throw new Error("The contract must declare sqlServer before SQL can be generated.");
   const target = options.target ?? resolveSqlServerTargets(contract, false)[0];

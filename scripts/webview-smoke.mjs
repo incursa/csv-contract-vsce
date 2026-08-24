@@ -8,9 +8,10 @@ const state = {
   targetNames: [
     "../exports/customers-east.csv",
     "../exports/customers-west.csv",
-    "https://example.com/exports/customers.csv"
+    "https://example.com/exports/customers.csv",
+    "warehouse-readonly:reporting.Customers"
   ],
-  configuredTargetCount: 3,
+  configuredTargetCount: 4,
   usingConfiguredTargets: true,
   runs: [],
   contract: {
@@ -21,6 +22,15 @@ const state = {
       { url: "https://example.com/exports/customers.csv" }
     ],
     csv: { nullValues: [""], trimValues: false, caseSensitive: true },
+    sqlServer: {
+      targets: [{
+        connection: "warehouse-readonly",
+        schema: "reporting",
+        table: "Customers",
+        objectType: "view",
+        columnMap: { CustomerId: "customer_id" }
+      }]
+    },
     schema: {
       allowAdditionalColumns: true,
       columns: {
@@ -91,9 +101,13 @@ await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message"
 await page.locator("text=CSV Contract Workbench").waitFor();
 await page.locator("text=CustomerId").first().click();
 if (await page.locator(".metrics").count() !== 1) throw new Error("Metric layout did not render.");
-if ((await page.locator(".configured-target-row").count()) !== 3) throw new Error("Configured path and URL targets did not render.");
-if ((await page.locator(".target-type").allTextContents()).join(",") !== "PATH,PATH,URL") {
+if ((await page.locator(".workbench-target .configured-target-row").count()) !== 4) throw new Error("Configured CSV and SQL targets did not render.");
+if ((await page.locator(".workbench-target .target-type").allTextContents()).join(",") !== "PATH,PATH,URL,VIEW") {
   throw new Error("Configured target types did not render correctly.");
+}
+if ((await page.locator(".sql-target-row code").textContent()) !== "warehouse-readonly:reporting.Customers"
+  || (await page.locator(".sql-target-row .target-mapping-count").textContent()) !== "1 mapped") {
+  throw new Error("Configured SQL target details did not render correctly.");
 }
 if ((await page.locator('[data-action="open-target-vscode"]').count()) !== 3
   || (await page.locator('[data-action="open-target-external"]').count()) !== 3) {
@@ -129,9 +143,19 @@ openMessage = await page.evaluate(() => window.__messages.at(-1));
 if (openMessage?.type !== "importSqlServerSchema") {
   throw new Error("Importing a table schema did not send the expected host message.");
 }
+await page.locator('[data-action="add-sql-target"]').click();
+openMessage = await page.evaluate(() => window.__messages.at(-1));
+if (openMessage?.type !== "addSqlServerTarget") {
+  throw new Error("Adding a SQL Server table or view did not send the expected host message.");
+}
 await mkdir("artifacts/runtime", { recursive: true });
 await mkdir("images", { recursive: true });
 await page.screenshot({ path: "images/workbench-column-rules.png", fullPage: true });
+await page.locator('[data-action="remove-sql-target"]').click();
+const removeSqlMessage = await page.evaluate(() => window.__messages.at(-1));
+if (removeSqlMessage?.type !== "updateContract" || removeSqlMessage.contract.sqlServer !== undefined) {
+  throw new Error("Removing the SQL Server target did not emit the updated contract.");
+}
 
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), failedState);
 if ((await page.locator(".results .result").count()) !== 10) throw new Error("Issue preview must remain limited to 10 items.");

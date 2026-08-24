@@ -1,13 +1,21 @@
 import sql from "mssql";
 import Papa from "papaparse";
 import { validateCsv } from "../core/contract";
-import type { CountExpectation, CsvContract, ValidationIssue, ValidationResult } from "../core/model";
+import type { CountExpectation, CsvContract, SqlServerObjectInfo, ValidationIssue, ValidationResult } from "../core/model";
 import { generateSqlServerValidation, sqlIdentifier } from "../core/sql-server-generator";
-import type { ResolvedSqlServerTarget } from "../core/sql-server-targets";
+import { canonicalSqlServerColumn, physicalSqlServerColumn, type ResolvedSqlServerTarget } from "../core/sql-server-targets";
 
 export interface SqlServerValidationOptions {
   maxIssues?: number;
   scopeValue?: string;
+}
+
+interface ObjectMetadataRow {
+  schemaName: string;
+  objectName: string;
+  objectType: "table" | "view";
+  columnName: string;
+  ordinal: number;
 }
 
 interface SummaryRow {
@@ -41,8 +49,8 @@ export class SqlServerValidationSession {
   ): Promise<ValidationResult> {
     const pool = await this.getPool(target.connection);
     const metadata = await readMetadata(pool, target);
-    if (metadata.length === 0) throw new Error(`SQL Server table ${target.schema}.${target.table} does not exist or is not visible to this connection.`);
-    const metadataIssues = validateMetadata(contract, metadata);
+    if (metadata.length === 0) throw new Error(`SQL Server object ${target.schema}.${target.table} does not exist or is not visible to this connection.`);
+    const metadataIssues = validateMetadata(contract, target, metadata);
     const generated = generateSqlServerValidation(contract, {
       target,
       declareScopeParameter: false,
@@ -50,7 +58,7 @@ export class SqlServerValidationSession {
     });
     const declared = Object.keys(contract.schema.columns);
     const present = new Set(metadata.map((column) => column.name));
-    const mustFallback = generated.warnings.length > 0 || declared.some((column) => !present.has(column));
+    const mustFallback = generated.warnings.length > 0 || declared.some((column) => !present.has(physicalSqlServerColumn(target, column)));
     const scopeValue = resolveScopeValue(target, options.scopeValue);
     if (mustFallback) {
       const fallback = await validateClientSide(pool, contract, target, metadata, scopeValue);
@@ -60,7 +68,7 @@ export class SqlServerValidationSession {
       const fallbackNotice: ValidationIssue = {
         level: "file",
         code: "SQL_CLIENT_FALLBACK",
-        message: `Used an exact read-only client fallback for this table. ${reason}`,
+        message: `Used an exact read-only client fallback for this database object. ${reason}`,
         severity: "warning"
       };
       const withNotice: ValidationResult = {
@@ -86,7 +94,7 @@ export class SqlServerValidationSession {
         level: summary.ColumnName ? "cell" : "row",
         code: summary.Code,
         message: `${summary.RuleName} failed for ${failures.toLocaleString()} ${failures === 1 ? "row or group" : "rows or groups"}.`,
-        column: summary.ColumnName || undefined,
+        column: summary.ColumnName ? canonicalSqlServerColumn(target, summary.ColumnName) : undefined,
         testId: summary.RuleId,
         actual: failures,
         expected: 0,
@@ -109,6 +117,35 @@ export class SqlServerValidationSession {
       truncated: issueCount > issues.length,
       issues
     };
+  }
+
+  public async listObjects(profile: string): Promise<SqlServerObjectInfo[]> {
+    const pool = await this.getPool(profile);
+    const result = await pool.request().query<ObjectMetadataRow>(`
+SELECT
+  s.name AS schemaName,
+  o.name AS objectName,
+  CASE WHEN o.type = N'V' THEN N'view' ELSE N'table' END AS objectType,
+  c.name AS columnName,
+  c.column_id AS ordinal
+FROM sys.objects AS o
+JOIN sys.schemas AS s ON s.schema_id = o.schema_id
+JOIN sys.columns AS c ON c.object_id = o.object_id
+WHERE o.type IN (N'U', N'V') AND o.is_ms_shipped = 0
+ORDER BY s.name, o.name, c.column_id;`);
+    const objects = new Map<string, SqlServerObjectInfo>();
+    for (const row of result.recordset) {
+      const key = `${row.schemaName}\u0000${row.objectName}`;
+      const object = objects.get(key) ?? {
+        schema: row.schemaName,
+        name: row.objectName,
+        objectType: row.objectType,
+        columns: []
+      };
+      object.columns.push(row.columnName);
+      objects.set(key, object);
+    }
+    return [...objects.values()];
   }
 
   private async getPool(profile: string): Promise<sql.ConnectionPool> {
@@ -149,9 +186,9 @@ async function readMetadata(pool: sql.ConnectionPool, target: ResolvedSqlServerT
     .query<MetadataRow>(`
 SELECT c.name, c.column_id AS ordinal
 FROM sys.columns AS c
-JOIN sys.tables AS t ON t.object_id = c.object_id
-JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-WHERE s.name = @schema AND t.name = @table
+JOIN sys.objects AS o ON o.object_id = c.object_id AND o.type IN (N'U', N'V')
+JOIN sys.schemas AS s ON s.schema_id = o.schema_id
+WHERE s.name = @schema AND o.name = @table
 ORDER BY c.column_id;`);
   return result.recordset;
 }
@@ -160,7 +197,7 @@ async function readRowCount(pool: sql.ConnectionPool, target: ResolvedSqlServerT
   const request = pool.request();
   bindScope(request, target, scopeValue);
   const scope = target.scope
-    ? `WHERE CONVERT(nvarchar(max), t.${sqlIdentifier(target.scope.column)}) = CONVERT(nvarchar(max), @${target.scope.parameter})`
+    ? `WHERE CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, target.scope.column))}) = CONVERT(nvarchar(max), @${target.scope.parameter})`
     : "";
   const result = await request.query<{ count: number | string }>(`SELECT COUNT_BIG(*) AS count FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope};`);
   return Number(result.recordset[0]?.count ?? 0);
@@ -175,23 +212,24 @@ function countIssues(name: string, actual: number, expectation: CountExpectation
   return issues;
 }
 
-function validateMetadata(contract: CsvContract, metadata: MetadataRow[]): ValidationIssue[] {
+function validateMetadata(contract: CsvContract, target: ResolvedSqlServerTarget, metadata: MetadataRow[]): ValidationIssue[] {
   const issues = countIssues("COLUMN_COUNT", metadata.length, contract.schema.columnCount);
   const actual = metadata.map((column) => column.name);
   const actualSet = new Set(actual);
   const declared = Object.keys(contract.schema.columns);
   for (const [column, definition] of Object.entries(contract.schema.columns)) {
-    if (definition.presence === "required" && !actualSet.has(column)) {
-      issues.push({ level: "column", code: "REQUIRED_COLUMN_MISSING", message: `Required column "${column}" is missing.`, column });
+    const physical = physicalSqlServerColumn(target, column);
+    if (definition.presence === "required" && !actualSet.has(physical)) {
+      issues.push({ level: "column", code: "REQUIRED_COLUMN_MISSING", message: `Required column "${column}" is missing (expected SQL column "${physical}").`, column });
     }
   }
   if (contract.schema.allowAdditionalColumns === false) {
-    const declaredSet = new Set(declared);
+    const declaredSet = new Set(declared.map((column) => physicalSqlServerColumn(target, column)));
     for (const column of actual) if (!declaredSet.has(column)) issues.push({ level: "column", code: "ADDITIONAL_COLUMN", message: `Undeclared column "${column}" is not allowed.`, column });
   }
   if (contract.schema.columnOrder === "exact") {
-    const expected = declared.filter((column) => actualSet.has(column));
-    const filteredActual = actual.filter((column) => new Set(declared).has(column));
+    const expected = declared.map((column) => physicalSqlServerColumn(target, column)).filter((column) => actualSet.has(column));
+    const filteredActual = actual.filter((column) => new Set(declared.map((name) => physicalSqlServerColumn(target, name))).has(column));
     if (expected.some((column, index) => filteredActual[index] !== column) || expected.length !== filteredActual.length) {
       issues.push({ level: "file", code: "COLUMN_ORDER_MISMATCH", message: "SQL Server columns do not follow the declaration order in schema.columns." });
     }
@@ -207,13 +245,13 @@ async function validateClientSide(
   scopeValue: string | undefined
 ): Promise<ValidationResult> {
   const present = new Set(metadata.map((column) => column.name));
-  const columns = Object.keys(contract.schema.columns).filter((column) => present.has(column));
+  const columns = Object.keys(contract.schema.columns).filter((column) => present.has(physicalSqlServerColumn(target, column)));
   if (columns.length === 0) {
     return { valid: false, rowCount: await readRowCount(pool, target, scopeValue), columnCount: metadata.length, testCount: contractTestCount(contract), issueCount: 0, errorCount: 0, warningCount: 0, truncated: false, issues: [] };
   }
-  const projection = columns.map((column) => `CONVERT(nvarchar(max), t.${sqlIdentifier(column)}) AS ${sqlIdentifier(column)}`).join(", ");
+  const projection = columns.map((column) => `CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, column))}) AS ${sqlIdentifier(column)}`).join(", ");
   const scope = target.scope
-    ? `WHERE CONVERT(nvarchar(max), t.${sqlIdentifier(target.scope.column)}) = CONVERT(nvarchar(max), @${target.scope.parameter})`
+    ? `WHERE CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, target.scope.column))}) = CONVERT(nvarchar(max), @${target.scope.parameter})`
     : "";
   const request = pool.request();
   bindScope(request, target, scopeValue);

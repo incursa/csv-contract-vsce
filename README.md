@@ -46,13 +46,17 @@ The aggregate result view keeps diagnostics redacted and bounded. Open complete 
 
 ## Generate SQL Server staging validation and validate tables
 
-Use the same reviewed contract against a SQL Server table. Add a secret-backed connection profile and table, run **CSV Contract: Configure SQL Server Connection**, then execute the contract from **Workspace Tests** or **CSV Contract: Run Contract**. Validation is read-only, runs translatable rules server-side, and feeds the normal workbench report. JavaScript regex rules use an exact read-only client fallback.
+Use the same reviewed contract against SQL Server tables and views. In the Workbench, select **Add table or view**, choose or configure a secret-backed read-only connection, and pick the database object. The extension previews exact and suggested column matches before saving the target. Execute the contract from the Workbench, **Workspace Tests**, or **CSV Contract: Run Contract**. Validation is read-only, runs translatable rules server-side, and feeds the normal report. JavaScript regex rules use an exact read-only client fallback.
 
 ```yaml
 sqlServer:
   connection: warehouse-readonly
   schema: staging
   table: PayrollImport
+  objectType: table
+  columnMap:
+    EmployeeId: employee_id
+    CompletionDate: completion_date
   rowLocator: [LoadId, SourceRow]
   detailLimit: 100
   scope:
@@ -87,7 +91,7 @@ Connection strings are stored in VS Code Secret Storage, not contract YAML. The 
 npm run cli -- dbtest --spec .\examples\sql-server-staging.csvtest.yaml --scope LoadId=2026-08-24
 ```
 
-The optional scope limits every check to one load or batch and binds the value as a query parameter. Server-side translation covers row counts, null, length, allowed-value, uniqueness, shared and SQL-specific conditional rules, row tests, and grouped completeness rules. Use `sqlServer.targets` to apply one contract to multiple tables or connection profiles.
+`columnMap` maps canonical contract names to physical SQL Server names for that target. CSV headers and report output continue to use the canonical names. The optional scope limits every check to one load or batch and binds the value as a query parameter. Server-side translation covers row counts, null, length, allowed-value, uniqueness, shared and SQL-specific conditional rules, row tests, and grouped completeness rules. Use `sqlServer.targets` to apply one contract to multiple tables, views, or connection profiles.
 
 You can still generate a standalone read-only script with **CSV Contract: Generate SQL Server Staging Validation** or `csv-contract sql`. The script creates a rule summary plus bounded failing-row samples and does not connect automatically.
 

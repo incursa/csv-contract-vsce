@@ -95,9 +95,9 @@ The Workbench reads each target into memory one at a time. VS Code desktop can r
 - Length constraints count JavaScript string characters after optional trimming.
 - Uniqueness ignores configured null values; use `notNull` when nulls must also fail.
 
-## SQL Server table targets
+## SQL Server table and view targets
 
-`sqlServer` applies the contract schema, row tests, conditional rules, and group rules to a table. The single-table form uses `connection`, `schema`, and `table`. Use `sqlServer.targets` for multiple tables or connection profiles:
+`sqlServer` applies the contract schema, row tests, conditional rules, and group rules to a table or view. The single-object form uses `connection`, `schema`, and `table`. Use `sqlServer.targets` for multiple objects or connection profiles:
 
 ```yaml
 sqlServer:
@@ -107,14 +107,21 @@ sqlServer:
     - connection: test-readonly
       schema: dbo
       table: Employees
+      objectType: table
     - connection: prod-readonly
       schema: reporting
-      table: Employees
+      table: EmployeeExport
+      objectType: view
+      columnMap:
+        EmployeeId: employee_id
+        EmailAddress: email_address
 ```
 
 VS Code connection profiles live in Secret Storage. CLI profile names map to `CSV_CONTRACT_SQLSERVER_<NORMALIZED_PROFILE>`. A scope can take its runtime value from `valueEnvironment`; `dbtest --scope Parameter=value` overrides it.
 
-Table metadata supplies the physical column names and order. Translatable validations run as aggregate `SELECT` queries in SQL Server. A contract that uses JavaScript regex rules is projected read-only and evaluated by the existing validator so its behavior stays exact.
+`columnMap` is specific to a target and maps canonical contract column names to physical SQL Server column names. Exact mappings can be omitted. The Workbench suggests case-insensitive and standardized matches, such as `EmployeeId` to `employee_id`, but leaves ambiguous or unmatched names unmapped for review. Contract rules, CSV headers, and report labels continue to use the canonical names.
+
+Table or view metadata supplies the physical column names and order. Translatable validations run as aggregate `SELECT` queries in SQL Server. A contract that uses JavaScript regex rules is projected read-only and evaluated by the existing validator so its behavior stays exact.
 
 ## Column behavior
 

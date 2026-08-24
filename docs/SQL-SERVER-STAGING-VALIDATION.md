@@ -1,17 +1,22 @@
 # SQL Server staging validation
 
-CSV Contract Workbench can apply the same reviewed contract to CSV files and SQL Server tables. Direct table runs are read-only and prefer server-side validation: aggregate rule queries execute in SQL Server and return the standard workbench report. Rules containing JavaScript regular expressions use an exact read-only client fallback because SQL Server does not provide identical JavaScript regex semantics. The report includes an `SQL_CLIENT_FALLBACK` warning when this happens; the fallback projects only declared columns, but it must hold the scoped result in extension memory, so avoid regex rules on unscoped very large tables.
+CSV Contract Workbench can apply the same reviewed contract to CSV files and SQL Server tables or views. Direct database runs are read-only and prefer server-side validation: aggregate rule queries execute in SQL Server and return the standard workbench report. Rules containing JavaScript regular expressions use an exact read-only client fallback because SQL Server does not provide identical JavaScript regex semantics. The report includes an `SQL_CLIENT_FALLBACK` warning when this happens; the fallback projects only declared columns, but it must hold the scoped result in extension memory, so avoid regex rules on unscoped very large objects.
 
 ## Configure a connection without storing credentials in YAML
 
-Add a profile name to the contract, then run **CSV Contract: Configure SQL Server Connection**. The extension stores the connection string in VS Code Secret Storage. Use a SQL login with `SELECT` access only; the validator issues metadata queries and `SELECT` statements and never generates data-changing SQL.
+In the Workbench, select **Add table or view**. Choose an existing profile or configure a new one, then select a live database object. The extension previews column matches and updates the contract only after confirmation. Connection strings are stored in VS Code Secret Storage. Use a SQL login with `SELECT` access only; the validator issues metadata queries and `SELECT` statements and never generates data-changing SQL.
 
 ```yaml
 sqlServer:
   connection: warehouse-readonly
   schema: staging
   table: PayrollImport
+  objectType: table
+  columnMap:
+    EmployeeId: employee_id
 ```
+
+`columnMap` translates canonical contract columns to target-specific physical names. The validator uses the physical identifiers in SQL while CSV validation and report labels retain the canonical contract names. Exact-name matches do not need entries. The add-target preview can suggest case-only and separator differences, but ambiguous and unmatched names remain explicit so they can be reviewed.
 
 For the CLI, profile names map to environment variables. `warehouse-readonly` becomes `CSV_CONTRACT_SQLSERVER_WAREHOUSE_READONLY`:
 
@@ -22,9 +27,9 @@ npm run cli -- dbtest --spec ./examples/sql-server-staging.csvtest.yaml
 
 The `dbtest` command supports repeated `--spec` arguments and emits text or JSON. Its exit code is `0` when every contract/table run passes, `1` for validation failures, and `2` for configuration or execution errors.
 
-## Test multiple tables and connections
+## Test multiple tables, views, and connections
 
-Use `sqlServer.targets` when the same contract applies to several tables. Every target can use a different secret-backed connection profile and an optional display name.
+Use `sqlServer.targets` when the same contract applies to several tables or views. Every target can use a different secret-backed connection profile, column map, and optional display name.
 
 ```yaml
 sqlServer:
@@ -38,10 +43,13 @@ sqlServer:
     - name: production employees
       connection: production-readonly
       schema: reporting
-      table: Employees
+      table: EmployeeExport
+      objectType: view
+      columnMap:
+        EmployeeId: employee_id
 ```
 
-Workspace Tests treats each table as a target and includes every run in the normal HTML and Output reports.
+Workspace Tests treats each database object as a target and includes every run in the normal HTML and Output reports.
 
 ## Import the table definition first
 

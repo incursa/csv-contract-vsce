@@ -5,6 +5,7 @@ import type { CsvContract } from "../src/core/model";
 import { parseContract } from "../src/core/contract";
 import { generateSqlServerValidation } from "../src/core/sql-server-generator";
 import { resolveSqlServerTargets } from "../src/core/sql-server-targets";
+import { suggestSqlColumnMappings } from "../src/core/sql-server-column-mapping";
 
 function contract(): CsvContract {
   return {
@@ -130,4 +131,56 @@ test("resolves multiple tables and connection profiles without changing shared r
     ["prod", "prod-readonly", "reporting", "Payroll"]
   ]);
   assert.match(generateSqlServerValidation(input, { target: targets[1] }).sql, /\[reporting\]\.\[Payroll\]/);
+});
+
+test("uses target-specific physical column names while preserving canonical report names", () => {
+  const input = contract();
+  input.sqlServer!.columnMap = {
+    LoadId: "load_id",
+    SourceRow: "source_row",
+    Status: "status_code",
+    CompletionDate: "completion_date",
+    SourceType: "source_type",
+    Category: "category_code"
+  };
+  const result = generateSqlServerValidation(input);
+  assert.match(result.sql, /t\.\[load_id\]/);
+  assert.match(result.sql, /t\.\[status_code\]/);
+  assert.match(result.sql, /N'LoadId\.not-null' AS RuleId/);
+  assert.match(result.sql, /N'LoadId' AS ColumnName/);
+  assert.doesNotMatch(result.sql, /t\.\[LoadId\]/);
+  assert.equal(result.rules.find((rule) => rule.id === "LoadId.not-null")?.column, "LoadId");
+});
+
+test("suggests conservative exact, case-insensitive, and standardized column mappings", () => {
+  const suggestion = suggestSqlColumnMappings(
+    ["CustomerId", "EmailAddress", "Status", "Unmapped"],
+    ["customer_id", "EMAILADDRESS", "Status", "DifferentColumn"]
+  );
+  assert.deepEqual(suggestion.matches, [
+    { contractColumn: "CustomerId", physicalColumn: "customer_id", method: "standardized" },
+    { contractColumn: "EmailAddress", physicalColumn: "EMAILADDRESS", method: "case-insensitive" },
+    { contractColumn: "Status", physicalColumn: "Status", method: "exact" }
+  ]);
+  assert.deepEqual(suggestion.columnMap, { CustomerId: "customer_id", EmailAddress: "EMAILADDRESS" });
+  assert.deepEqual(suggestion.unmatched, ["Unmapped"]);
+  assert.deepEqual(suggestion.ambiguous, []);
+});
+
+test("column mapping suggestions reserve exact matches before standardized matches", () => {
+  const suggestion = suggestSqlColumnMappings(["customer_id", "CustomerId"], ["CustomerId"]);
+  assert.deepEqual(suggestion.matches, [
+    { contractColumn: "CustomerId", physicalColumn: "CustomerId", method: "exact" }
+  ]);
+  assert.deepEqual(suggestion.unmatched, ["customer_id"]);
+});
+
+test("rejects invalid target column maps before querying SQL Server", () => {
+  const undeclared = contract();
+  undeclared.sqlServer!.columnMap = { Missing: "missing_column" };
+  assert.throws(() => resolveSqlServerTargets(undeclared, false), /maps undeclared contract columns: Missing/);
+
+  const duplicate = contract();
+  duplicate.sqlServer!.columnMap = { LoadId: "shared_column", SourceRow: "SHARED_COLUMN" };
+  assert.throws(() => resolveSqlServerTargets(duplicate, false), /more than one contract column/);
 });
