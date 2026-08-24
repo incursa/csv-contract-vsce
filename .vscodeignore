@@ -1,6 +1,7 @@
 .github/**
 .vscode/**
 .vscode-test-web/**
+node_modules/**
 artifacts/**
 src/**
 test/**

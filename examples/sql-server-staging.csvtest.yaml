@@ -33,6 +33,7 @@ schema:
     CompletionDate:
       presence: optional
 sqlServer:
+  connection: warehouse-readonly
   schema: staging
   table: PayrollImport
   rowLocator:

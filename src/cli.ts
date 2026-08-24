@@ -7,6 +7,8 @@ import { createTargetPlans } from "./node/target-plan";
 import { withMaterializedTarget } from "./node/target-source";
 import { generateSqlServerValidation } from "./core/sql-server-generator";
 import { mergeImportedSchema, parseSqlSchemaSource } from "./core/sql-schema-import";
+import { resolveSqlServerTargets, sqlServerTargetLabel } from "./core/sql-server-targets";
+import { SqlServerValidationSession } from "./node/sql-server-validator";
 
 interface ParsedArgs {
   command: string;
@@ -23,6 +25,7 @@ interface ParsedArgs {
   includeSampleTests: boolean;
   source?: string;
   table?: string;
+  scopes: Record<string, string>;
 }
 
 function usage(): never {
@@ -34,12 +37,15 @@ Usage:
                     [--unique-partitions 128] [--temp-directory <path>]
   csv-contract init --csv <file.csv> --out <contract.csvtest.yaml>
                     [--sample-rows 10000] [--infer-constraints] [--no-sample-tests]
-  csv-contract sql --spec <contract.csvtest.yaml> --out <validation.sql>
+  csv-contract sql --spec <contract.csvtest.yaml> --out <validation.sql> [--table <target-name-or-schema.table>]
+  csv-contract dbtest --spec <contract.csvtest.yaml> [--spec <another.csvtest.yaml>]
+                      [--scope <parameter=value>] [--format text|json] [--max-issues 1000]
   csv-contract schema --source <table.sql-or-json> --out <contract.csvtest.yaml>
                       [--spec <existing.csvtest.yaml>] [--table <schema.name>]
 
 Repeat --csv to test multiple explicit files or URLs. When --csv is omitted, targets come from each contract.
 Compatible contracts targeting the same CSV are applied in one pass.
+SQL Server connection profile 'warehouse' resolves from CSV_CONTRACT_SQLSERVER_WAREHOUSE.
 Progress is written to stderr so JSON stdout remains machine-readable.
 `);
   process.exit(2);
@@ -66,7 +72,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     uniquePartitions: 128,
     sampleRows: 10000,
     inferConstraints: false,
-    includeSampleTests: true
+    includeSampleTests: true,
+    scopes: {}
   };
   while (argv.length) {
     const token = argv.shift()!;
@@ -91,6 +98,11 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (token === "--sample-rows") result.sampleRows = positiveInteger(value, "sampleRows");
     else if (token === "--source") result.source = value;
     else if (token === "--table") result.table = value;
+    else if (token === "--scope") {
+      const separator = value.indexOf("=");
+      if (separator < 1) throw new Error("--scope must use parameter=value.");
+      result.scopes[value.slice(0, separator)] = value.slice(separator + 1);
+    }
     else usage();
   }
   return result;
@@ -179,10 +191,63 @@ async function generateSql(args: ParsedArgs): Promise<void> {
   if (args.specs.length !== 1 || !args.out) usage();
   const spec = resolve(args.specs[0]);
   const output = resolve(args.out);
-  const generated = generateSqlServerValidation(parseContract(await readFile(spec, "utf8")));
+  const contract = parseContract(await readFile(spec, "utf8"));
+  const targets = resolveSqlServerTargets(contract, false);
+  const target = args.table
+    ? targets.find((candidate) =>
+        candidate.name?.toLocaleLowerCase() === args.table!.toLocaleLowerCase() ||
+        `${candidate.schema}.${candidate.table}`.toLocaleLowerCase() === args.table!.toLocaleLowerCase()
+      )
+    : targets.length === 1 ? targets[0] : undefined;
+  if (!target) {
+    const choices = targets.map((candidate) => candidate.name ?? `${candidate.schema}.${candidate.table}`).join(", ");
+    throw new Error(args.table ? `SQL target '${args.table}' was not found. Available targets: ${choices}` : `The contract has multiple SQL targets; use --table. Available targets: ${choices}`);
+  }
+  const generated = generateSqlServerValidation(contract, { target });
   await writeFile(output, generated.sql, "utf8");
   console.log(`Created ${output} (${generated.ruleCount} SQL validation rules).`);
   for (const warning of generated.warnings) console.error(`WARNING: ${warning}`);
+}
+
+async function testSqlServer(args: ParsedArgs): Promise<void> {
+  if (args.specs.length === 0) usage();
+  const session = new SqlServerValidationSession((profile) => {
+    const environmentName = `CSV_CONTRACT_SQLSERVER_${profile.replace(/[^A-Za-z0-9]/g, "_").toUpperCase()}`;
+    const connectionString = process.env[environmentName];
+    if (!connectionString) throw new Error(`Connection profile '${profile}' requires environment variable ${environmentName}.`);
+    return connectionString;
+  });
+  const runs = [];
+  try {
+    for (const specInput of args.specs) {
+      const spec = resolve(specInput);
+      const contract = parseContract(await readFile(spec, "utf8"));
+      for (const target of resolveSqlServerTargets(contract)) {
+        const startedAt = Date.now();
+        const result = await session.validate(contract, target, {
+          maxIssues: args.maxIssues,
+          scopeValue: target.scope ? args.scopes[target.scope.parameter] : undefined
+        });
+        runs.push({ spec, target: sqlServerTargetLabel(target), durationMs: Date.now() - startedAt, result });
+      }
+    }
+  } finally {
+    await session.dispose();
+  }
+  const valid = runs.length > 0 && runs.every((run) => run.result.valid);
+  if (args.format === "json") {
+    console.log(JSON.stringify({ valid, runs }, null, 2));
+  } else {
+    for (const run of runs) {
+      console.log(`${run.result.valid ? "PASS" : "FAIL"} ${run.target}`);
+      console.log(`  ${run.spec} — ${run.result.rowCount.toLocaleString()} rows, ${run.result.columnCount} columns, ${run.result.errorCount.toLocaleString()} errors, ${run.result.warningCount.toLocaleString()} warnings (${(run.durationMs / 1000).toFixed(2)}s)`);
+      for (const issue of run.result.issues) {
+        const location = [issue.column, issue.testId].filter(Boolean).join(" · ");
+        console.log(`    ${(issue.severity ?? "error").toUpperCase()} ${issue.code}${location ? ` [${location}]` : ""}: ${issue.message}`);
+      }
+    }
+  }
+  process.exitCode = valid ? 0 : 1;
 }
 
 async function importSchema(args: ParsedArgs): Promise<void> {
@@ -222,6 +287,10 @@ async function main(): Promise<void> {
   }
   if (args.command === "sql") {
     await generateSql(args);
+    return;
+  }
+  if (args.command === "dbtest") {
+    await testSqlServer(args);
     return;
   }
   if (args.command === "schema") {

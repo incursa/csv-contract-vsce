@@ -10,6 +10,8 @@ import {
   type ResolvedTarget
 } from "./vscode-targets";
 import { renderWorkspaceReportHtml } from "./workspace-report";
+import { resolveSqlServerTargets, sqlServerTargetLabel, type ResolvedSqlServerTarget } from "./core/sql-server-targets";
+import type { DesktopSqlServerRunner } from "./extension";
 
 export const explorerContainerId = "csvContractExplorer";
 export const explorerViewId = "csvContractExplorer.contracts";
@@ -30,6 +32,7 @@ interface ContractSnapshot {
   relativePath: string;
   targetCount: number;
   targets: ResolvedTarget[];
+  sqlTargets: ResolvedSqlServerTarget[];
   parseError?: string;
 }
 
@@ -40,6 +43,11 @@ interface PreparedContract {
 
 interface TargetGroup {
   target: ResolvedTarget;
+  contracts: PreparedContract[];
+}
+
+interface SqlTargetGroup {
+  target: ResolvedSqlServerTarget;
   contracts: PreparedContract[];
 }
 
@@ -66,6 +74,7 @@ type ExplorerNodeData =
   | { kind: "workspace"; folder: vscode.WorkspaceFolder }
   | { kind: "contract"; snapshot: ContractSnapshot }
   | { kind: "target"; target: ResolvedTarget }
+  | { kind: "sqlTarget"; target: ResolvedSqlServerTarget }
   | { kind: "reportEntry"; entry: WorkspaceReportEntry }
   | { kind: "issue"; issue: ValidationIssue };
 
@@ -81,9 +90,10 @@ class CsvContractTreeItem extends vscode.TreeItem {
 
 export function registerWorkspaceExplorer(
   context: vscode.ExtensionContext,
-  output: vscode.OutputChannel
+  output: vscode.OutputChannel,
+  sqlServerRunner?: DesktopSqlServerRunner
 ): WorkspaceExplorerProvider {
-  const provider = new WorkspaceExplorerProvider(context, output);
+  const provider = new WorkspaceExplorerProvider(context, output, sqlServerRunner);
   const treeView = vscode.window.createTreeView<CsvContractTreeItem>(explorerViewId, {
     treeDataProvider: provider,
     showCollapseAll: true
@@ -123,7 +133,8 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
 
   public constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly output: vscode.OutputChannel
+    private readonly output: vscode.OutputChannel,
+    private readonly sqlServerRunner?: DesktopSqlServerRunner
   ) {
     this.checked = new Set(context.workspaceState.get<string[]>(checkedContractsKey, []));
     const watcher = vscode.workspace.createFileSystemWatcher(contractPattern);
@@ -173,7 +184,10 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
         .map((contract) => this.createContractNode(contract));
     }
     if (element.data.kind === "contract") {
-      return element.data.snapshot.targets.map((target) => this.createTargetNode(target));
+      return [
+        ...element.data.snapshot.targets.map((target) => this.createTargetNode(target)),
+        ...element.data.snapshot.sqlTargets.map((target) => this.createSqlTargetNode(target))
+      ];
     }
     if (element.data.kind === "reportEntry" && element.data.entry.result) {
       return element.data.entry.result.issues.map((issue) => this.createIssueNode(issue));
@@ -197,13 +211,13 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
   public async runSelected(): Promise<void> {
     const contracts = (await this.getContracts()).filter((contract) => this.checked.has(contract.uri.toString()));
     if (contracts.length === 0) {
-      void vscode.window.showWarningMessage("Check one or more CSV contracts in the Workspace Tests view first.");
+      void vscode.window.showWarningMessage("Check one or more contracts in the Workspace Tests view first.");
       return;
     }
 
     const report = await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
-      title: `Running ${contracts.length} selected CSV contract${contracts.length === 1 ? "" : "s"}`,
+      title: `Running ${contracts.length} selected contract${contracts.length === 1 ? "" : "s"}`,
       cancellable: false
     }, async (progress) => this.executeContracts(contracts, progress));
     this.lastReport = report;
@@ -212,7 +226,7 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
     this.showReport();
 
     const summary = report.valid
-      ? `All ${report.selectedContracts} selected CSV contracts passed across ${report.targets} target${report.targets === 1 ? "" : "s"}.`
+      ? `All ${report.selectedContracts} selected contracts passed across ${report.targets} target${report.targets === 1 ? "" : "s"}.`
       : `${report.entries.filter((entry) => !entry.result?.valid).length} of ${report.entries.length} contract-target runs failed.`;
     const action = report.valid
       ? await vscode.window.showInformationMessage(summary, "View report")
@@ -222,7 +236,7 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
 
   public showReport(argument?: WorkspaceReportEntry | CsvContractTreeItem): void {
     if (!this.lastReport) {
-      void vscode.window.showInformationMessage("Run selected CSV contracts to create a workspace report.");
+      void vscode.window.showInformationMessage("Run selected contracts to create a workspace report.");
       return;
     }
     const entry = argument instanceof CsvContractTreeItem
@@ -267,12 +281,14 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
     const reportStartedAt = Date.now();
     const entries: WorkspaceReportEntry[] = [];
     const groups = new Map<string, TargetGroup>();
+    const sqlGroups = new Map<string, SqlTargetGroup>();
 
     for (const snapshot of snapshots) {
       try {
         const contract = parseContract(new TextDecoder().decode(await vscode.workspace.fs.readFile(snapshot.uri)));
         const targets = configuredTargets(snapshot.uri, contract);
-        if (targets.length === 0) {
+        const sqlTargets = resolveSqlServerTargets(contract, false).filter((target) => target.connection);
+        if (targets.length === 0 && sqlTargets.length === 0) {
           entries.push({
             contractUri: snapshot.uri,
             contractLabel: snapshot.relativePath,
@@ -289,6 +305,14 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
           }
           groups.set(key, group);
         }
+        for (const target of sqlTargets) {
+          const key = `${target.connection}\u0000${target.schema}\u0000${target.table}\u0000${JSON.stringify(target.scope ?? {})}`;
+          const group = sqlGroups.get(key) ?? { target, contracts: [] };
+          if (!group.contracts.some((candidate) => candidate.snapshot.uri.toString() === snapshot.uri.toString())) {
+            group.contracts.push({ snapshot, contract });
+          }
+          sqlGroups.set(key, group);
+        }
       } catch (error) {
         entries.push({
           contractUri: snapshot.uri,
@@ -299,7 +323,8 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
       }
     }
 
-    const increment = groups.size > 0 ? 100 / groups.size : 100;
+    const totalGroups = groups.size + sqlGroups.size;
+    const increment = totalGroups > 0 ? 100 / totalGroups : 100;
     for (const group of groups.values()) {
       progress.report({ message: group.target.label });
       const groupStartedAt = Date.now();
@@ -334,6 +359,34 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
       progress.report({ increment });
     }
 
+    for (const group of sqlGroups.values()) {
+      const label = sqlServerTargetLabel(group.target);
+      progress.report({ message: label });
+      for (const prepared of group.contracts) {
+        const startedAt = Date.now();
+        try {
+          if (!this.sqlServerRunner) throw new Error("Direct SQL Server validation requires the desktop extension host.");
+          const result = await this.sqlServerRunner(prepared.contract, group.target);
+          entries.push({
+            contractUri: prepared.snapshot.uri,
+            contractLabel: prepared.snapshot.relativePath,
+            target: label,
+            result,
+            durationMs: Date.now() - startedAt
+          });
+        } catch (error) {
+          entries.push({
+            contractUri: prepared.snapshot.uri,
+            contractLabel: prepared.snapshot.relativePath,
+            target: label,
+            error: error instanceof Error ? error.message : String(error),
+            durationMs: Date.now() - startedAt
+          });
+        }
+      }
+      progress.report({ increment });
+    }
+
     entries.sort((left, right) =>
       left.contractLabel.localeCompare(right.contractLabel) || left.target.localeCompare(right.target)
     );
@@ -341,7 +394,7 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
       completedAt: new Date(),
       durationMs: Date.now() - reportStartedAt,
       selectedContracts: snapshots.length,
-      targets: groups.size,
+      targets: totalGroups,
       entries,
       valid: entries.length > 0 && entries.every((entry) => entry.result?.valid === true)
     };
@@ -387,7 +440,8 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
         try {
           const contract = parseContract(new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)));
           const targets = configuredTargets(uri, contract);
-          snapshots.push({ uri, folder, relativePath, targetCount: targets.length, targets });
+          const sqlTargets = resolveSqlServerTargets(contract, false).filter((target) => target.connection);
+          snapshots.push({ uri, folder, relativePath, targetCount: targets.length + sqlTargets.length, targets, sqlTargets });
         } catch (error) {
           snapshots.push({
             uri,
@@ -395,6 +449,7 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
             relativePath,
             targetCount: 0,
             targets: [],
+            sqlTargets: [],
             parseError: error instanceof Error ? error.message : String(error)
           });
         }
@@ -444,7 +499,7 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
     const label = snapshot.relativePath.split("/").pop() ?? snapshot.relativePath;
     const item = new CsvContractTreeItem(
       label,
-      snapshot.targets.length > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+      snapshot.targetCount > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
       { kind: "contract", snapshot }
     );
     const reportEntries = this.lastReport?.entries.filter((entry) => entry.contractUri.toString() === snapshot.uri.toString()) ?? [];
@@ -484,6 +539,19 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
       title: "Open Target in VS Code",
       arguments: [target]
     };
+    return item;
+  }
+
+  private createSqlTargetNode(target: ResolvedSqlServerTarget): CsvContractTreeItem {
+    const item = new CsvContractTreeItem(
+      target.name ?? `${target.schema}.${target.table}`,
+      vscode.TreeItemCollapsibleState.None,
+      { kind: "sqlTarget", target }
+    );
+    item.description = `SQL Server · ${target.connection}`;
+    item.tooltip = `${target.schema}.${target.table}\nConnection profile: ${target.connection}\nRead-only contract validation`;
+    item.iconPath = new vscode.ThemeIcon("database");
+    item.contextValue = "csvContractSqlTarget";
     return item;
   }
 

@@ -95,6 +95,27 @@ The Workbench reads each target into memory one at a time. VS Code desktop can r
 - Length constraints count JavaScript string characters after optional trimming.
 - Uniqueness ignores configured null values; use `notNull` when nulls must also fail.
 
+## SQL Server table targets
+
+`sqlServer` applies the contract schema, row tests, conditional rules, and group rules to a table. The single-table form uses `connection`, `schema`, and `table`. Use `sqlServer.targets` for multiple tables or connection profiles:
+
+```yaml
+sqlServer:
+  rowLocator: [EmployeeId]
+  detailLimit: 100
+  targets:
+    - connection: test-readonly
+      schema: dbo
+      table: Employees
+    - connection: prod-readonly
+      schema: reporting
+      table: Employees
+```
+
+VS Code connection profiles live in Secret Storage. CLI profile names map to `CSV_CONTRACT_SQLSERVER_<NORMALIZED_PROFILE>`. A scope can take its runtime value from `valueEnvironment`; `dbtest --scope Parameter=value` overrides it.
+
+Table metadata supplies the physical column names and order. Translatable validations run as aggregate `SELECT` queries in SQL Server. A contract that uses JavaScript regex rules is projected read-only and evaluated by the existing validator so its behavior stays exact.
+
 ## Column behavior
 
 | Contract condition | Behavior |

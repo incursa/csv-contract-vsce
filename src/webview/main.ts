@@ -10,6 +10,7 @@ const app = document.querySelector<HTMLElement>("#app")!;
 let contract: CsvContract | undefined;
 let contractName = "contract.csvtest.yaml";
 let targetNames: string[] = [];
+let fileTargetCount = 0;
 let configuredTargetCount = 0;
 let usingConfiguredTargets = false;
 let runs: Array<{ target: string; result: ValidationResult }> = [];
@@ -140,10 +141,10 @@ function render(): void {
     ? runs.reduce((total, run) => total + run.result.rowCount, 0)
     : "—";
   const sourceLabel = targetNames.length === 0
-    ? "No test CSV selected"
+    ? "No test target selected"
     : targetNames.length === 1
       ? targetNames[0]
-      : `${targetNames.length} test CSVs`;
+      : `${targetNames.length} test targets`;
   const runningDetail = runningTarget
     ? `Testing ${runningTargetIndex} of ${runningTargetCount}: ${runningTarget}`
     : `Preparing ${runningTargetCount || targetNames.length} test target${(runningTargetCount || targetNames.length) === 1 ? "" : "s"}…`;
@@ -151,12 +152,12 @@ function render(): void {
   app.innerHTML = `
     <header class="workbench-header">
       <h1>CSV Contract Workbench</h1>
-      <p>Build, inspect, and run reusable YAML contracts against CSV exports.</p>
+      <p>Build, inspect, and run reusable YAML contracts against CSV exports and SQL Server tables.</p>
     </header>
     <section class="inc-card workbench-target">
       <div>
         <h2>Test target</h2>
-        <span class="field-label">SOURCE CSV</span>
+        <span class="field-label">TARGET</span>
         <code>${escape(sourceLabel)}</code>
       </div>
       <div>
@@ -166,10 +167,11 @@ function render(): void {
       <div class="workbench-actions">
         <button class="inc-btn inc-btn--outline-secondary" data-action="choose-csv">Select test CSV</button>
         ${configuredTargetCount > 0 && !usingConfiguredTargets ? `<button class="inc-btn inc-btn--outline-secondary" data-action="use-configured-targets">Use configured CSVs</button>` : ""}
-        ${targetNames.length > 0 ? `<button class="inc-btn inc-btn--outline-secondary" data-action="open-active-target-vscode">Open CSV in VS Code</button>
+        ${fileTargetCount > 0 ? `<button class="inc-btn inc-btn--outline-secondary" data-action="open-active-target-vscode">Open CSV in VS Code</button>
         <button class="inc-btn inc-btn--outline-secondary" data-action="open-active-target-external">Open CSV externally</button>` : ""}
         <button class="inc-btn inc-btn--outline-secondary" data-action="open-yaml">Open YAML</button>
         <button class="inc-btn inc-btn--outline-secondary" data-action="generate-sql">Generate staging SQL</button>
+        <button class="inc-btn inc-btn--outline-secondary" data-action="configure-sql">Configure SQL connection</button>
         <button class="inc-btn inc-btn--outline-secondary" data-action="import-sql-schema">Import table schema</button>
         <button class="inc-btn inc-btn--primary run-button" data-action="run" ${running ? "disabled aria-busy=\"true\"" : ""}>
           ${running ? `<span class="run-spinner run-spinner--button" aria-hidden="true"></span><span>Running…</span>` : "Run tests"}
@@ -177,7 +179,7 @@ function render(): void {
       </div>
       ${running ? `<div class="workbench-run-status" role="status" aria-live="polite">
         <span class="run-spinner" aria-hidden="true"></span>
-        <div><strong>Running CSV tests</strong><span title="${escape(runningTarget)}">${escape(runningDetail)}</span></div>
+        <div><strong>Running contract tests</strong><span title="${escape(runningTarget)}">${escape(runningDetail)}</span></div>
       </div>` : ""}
       <div class="configured-targets">
         <div class="configured-targets__heading">
@@ -206,7 +208,7 @@ function render(): void {
     </section>
     <section class="metrics" aria-label="Contract metrics">
       ${[
-        ["Files", targetNames.length || "—"],
+        ["Targets", targetNames.length || "—"],
         ["Columns", names.length],
         ["Rows scanned", rowCount],
         ["Rules", names.length + (contract.rowTests?.length ?? 0) + (contract.rules?.length ?? 0) + (contract.groupRules?.length ?? 0)],
@@ -394,6 +396,7 @@ function bind(): void {
   app.querySelector('[data-action="add-target-files"]')?.addEventListener("click", () => vscode.postMessage({ type: "addTargetFiles" }));
   app.querySelector('[data-action="add-target-url"]')?.addEventListener("click", () => vscode.postMessage({ type: "addTargetUrl" }));
   app.querySelector('[data-action="generate-sql"]')?.addEventListener("click", () => vscode.postMessage({ type: "generateSqlServerValidation" }));
+  app.querySelector('[data-action="configure-sql"]')?.addEventListener("click", () => vscode.postMessage({ type: "configureSqlServerConnection" }));
   app.querySelector('[data-action="import-sql-schema"]')?.addEventListener("click", () => vscode.postMessage({ type: "importSqlServerSchema" }));
   app.querySelectorAll<HTMLElement>('[data-action="open-target-vscode"]').forEach((button) => button.addEventListener("click", () =>
     vscode.postMessage({ type: "openTargetInVsCode", index: Number(button.dataset.index) })
@@ -481,6 +484,7 @@ window.addEventListener("message", (event) => {
     contract = message.contract;
     contractName = message.contractName;
     targetNames = message.targetNames ?? [];
+    fileTargetCount = message.fileTargetCount ?? targetNames.length;
     configuredTargetCount = message.configuredTargetCount ?? 0;
     usingConfiguredTargets = message.usingConfiguredTargets ?? false;
     runs = message.runs ?? [];

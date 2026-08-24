@@ -15,6 +15,7 @@ import { registerSemanticComparison } from "./vscode-comparison";
 import type { DesktopComparisonRunner } from "./vscode-comparison";
 import { generateSqlServerValidation } from "./core/sql-server-generator";
 import { mergeImportedSchema, parseSqlSchemaSource, type ImportedSqlTable } from "./core/sql-schema-import";
+import { resolveSqlServerTargets, sqlServerTargetLabel, type ResolvedSqlServerTarget } from "./core/sql-server-targets";
 
 const viewType = "csv-contract-vsce.contractEditor";
 
@@ -23,9 +24,19 @@ interface TargetRun {
   result: ValidationResult;
 }
 
-export function activate(context: vscode.ExtensionContext, desktopComparisonRunner?: DesktopComparisonRunner): void {
+export type DesktopSqlServerRunner = (contract: CsvContract, target: ResolvedSqlServerTarget) => Promise<ValidationResult>;
+
+const sqlConnectionProfilesKey = "csvContract.sqlServer.connectionProfiles";
+const sqlConnectionSecretPrefix = "csvContract.sqlServer.connection.";
+export const sqlConnectionSecretKey = (profile: string): string => `${sqlConnectionSecretPrefix}${profile}`;
+
+export function activate(
+  context: vscode.ExtensionContext,
+  desktopComparisonRunner?: DesktopComparisonRunner,
+  sqlServerRunner?: DesktopSqlServerRunner
+): void {
   const output = vscode.window.createOutputChannel("CSV Contract");
-  const provider = new ContractEditorProvider(context);
+  const provider = new ContractEditorProvider(context, sqlServerRunner);
   registerTargetContentProvider(context);
   context.subscriptions.push(
     output,
@@ -34,12 +45,14 @@ export function activate(context: vscode.ExtensionContext, desktopComparisonRunn
       supportsMultipleEditorsPerDocument: false
     }),
     vscode.commands.registerCommand("csv-contract-vsce.createFromCsv", () => createFromCsv()),
-    vscode.commands.registerCommand("csv-contract-vsce.runContract", () => runContract(output)),
+    vscode.commands.registerCommand("csv-contract-vsce.runContract", () => runContract(output, sqlServerRunner)),
     vscode.commands.registerCommand("csv-contract-vsce.openWorkbench", (uri?: vscode.Uri) => openWorkbench(uri)),
     vscode.commands.registerCommand("csv-contract-vsce.generateSqlServerValidation", (uri?: vscode.Uri) => generateSqlServerScript(uri)),
-    vscode.commands.registerCommand("csv-contract-vsce.importSqlServerSchema", (uri?: vscode.Uri) => importSqlServerSchema(uri))
+    vscode.commands.registerCommand("csv-contract-vsce.importSqlServerSchema", (uri?: vscode.Uri) => importSqlServerSchema(uri)),
+    vscode.commands.registerCommand("csv-contract-vsce.configureSqlServerConnection", () => configureSqlServerConnection(context)),
+    vscode.commands.registerCommand("csv-contract-vsce.forgetSqlServerConnection", () => forgetSqlServerConnection(context))
   );
-  registerWorkspaceExplorer(context, output);
+  registerWorkspaceExplorer(context, output, sqlServerRunner);
   registerSemanticComparison(context, desktopComparisonRunner);
 }
 
@@ -145,7 +158,17 @@ async function generateSqlServerScript(requestedUri?: vscode.Uri): Promise<void>
   if (!specUri) return;
   try {
     const contract = parseContract(new TextDecoder().decode(await vscode.workspace.fs.readFile(specUri)));
-    const generated = generateSqlServerValidation(contract);
+    const sqlTargets = resolveSqlServerTargets(contract, false);
+    const target = sqlTargets.length === 1 ? sqlTargets[0] : (await vscode.window.showQuickPick(
+      sqlTargets.map((candidate) => ({
+        label: candidate.name ?? `${candidate.schema}.${candidate.table}`,
+        description: candidate.connection || "standalone script",
+        target: candidate
+      })),
+      { title: "Generate SQL Server validation", placeHolder: "Choose the table for this script" }
+    ))?.target;
+    if (!target) return;
+    const generated = generateSqlServerValidation(contract, { target });
     const filename = (specUri.path.split("/").pop() ?? "staging.csvtest.yaml").replace(/\.csvtest\.ya?ml$/i, ".validation.sql");
     const outputUri = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.joinPath(specUri, "..", filename),
@@ -190,12 +213,13 @@ async function createFromCsv(): Promise<void> {
   await vscode.commands.executeCommand("vscode.openWith", outputUri, viewType);
 }
 
-async function runContract(output: vscode.OutputChannel): Promise<void> {
+async function runContract(output: vscode.OutputChannel, sqlServerRunner?: DesktopSqlServerRunner): Promise<void> {
   const specUri = await pickFile({ "CSV contracts": ["csvtest.yaml", "csvtest.yml", "yaml", "yml"] });
   if (!specUri) return;
   const contract = parseContract(new TextDecoder().decode(await vscode.workspace.fs.readFile(specUri)));
   let targets = configuredTargets(specUri, contract);
-  if (targets.length === 0) {
+  const sqlTargets = resolveSqlServerTargets(contract, false).filter((target) => target.connection);
+  if (targets.length === 0 && sqlTargets.length === 0) {
     const csvUris = await pickFiles({ "CSV files": ["csv"] });
     if (!csvUris?.length) return;
     targets = csvUris.map((uri) => ({ label: vscode.workspace.asRelativePath(uri, false), source: uri }));
@@ -210,10 +234,51 @@ async function runContract(output: vscode.OutputChannel): Promise<void> {
     result.issues.forEach((issue) => output.appendLine(`${(issue.severity ?? "error").toUpperCase()} ${issue.code}: ${issue.message}`));
     output.appendLine("");
   }
+  for (const target of sqlTargets) {
+    if (!sqlServerRunner) throw new Error("Direct SQL Server validation requires the desktop extension host.");
+    const result = await sqlServerRunner(contract, target);
+    valid &&= result.valid;
+    output.appendLine(`${result.valid ? "PASS" : "FAIL"} ${sqlServerTargetLabel(target)}`);
+    output.appendLine(`${result.rowCount} rows · ${result.columnCount} columns · ${result.errorCount} errors · ${result.warningCount} warnings`);
+    result.issues.forEach((issue) => output.appendLine(`${(issue.severity ?? "error").toUpperCase()} ${issue.code}: ${issue.message}`));
+    output.appendLine("");
+  }
   output.show(true);
   void vscode.window.showInformationMessage(
-    valid ? `CSV contract passed for ${targets.length} target(s).` : "CSV contract failed. See the CSV Contract output channel."
+    valid ? `CSV contract passed for ${targets.length + sqlTargets.length} target(s).` : "CSV contract failed. See the CSV Contract output channel."
   );
+}
+
+async function configureSqlServerConnection(context: vscode.ExtensionContext): Promise<void> {
+  const profile = await vscode.window.showInputBox({
+    title: "Configure SQL Server connection",
+    prompt: "Connection profile name referenced by sqlServer.connection or sqlServer.targets[].connection.",
+    placeHolder: "warehouse-readonly",
+    validateInput: (value) => /^[A-Za-z0-9._-]+$/.test(value) ? undefined : "Use letters, numbers, dots, underscores, or hyphens."
+  });
+  if (!profile) return;
+  const connectionString = await vscode.window.showInputBox({
+    title: `SQL Server connection: ${profile}`,
+    prompt: "Stored in VS Code Secret Storage. Use a login with SELECT-only permissions.",
+    password: true,
+    ignoreFocusOut: true,
+    placeHolder: "Server=...;Database=...;User Id=...;Password=...;Encrypt=true"
+  });
+  if (!connectionString) return;
+  await context.secrets.store(sqlConnectionSecretKey(profile), connectionString);
+  const profiles = new Set(context.globalState.get<string[]>(sqlConnectionProfilesKey, []));
+  profiles.add(profile);
+  await context.globalState.update(sqlConnectionProfilesKey, [...profiles].sort());
+  void vscode.window.showInformationMessage(`Stored SQL Server connection profile '${profile}' in Secret Storage.`);
+}
+
+async function forgetSqlServerConnection(context: vscode.ExtensionContext): Promise<void> {
+  const profiles = context.globalState.get<string[]>(sqlConnectionProfilesKey, []);
+  const profile = await vscode.window.showQuickPick(profiles, { title: "Forget SQL Server connection", placeHolder: "Choose a secret-backed profile to remove" });
+  if (!profile) return;
+  await context.secrets.delete(sqlConnectionSecretKey(profile));
+  await context.globalState.update(sqlConnectionProfilesKey, profiles.filter((candidate) => candidate !== profile));
+  void vscode.window.showInformationMessage(`Forgot SQL Server connection profile '${profile}'.`);
 }
 
 async function openWorkbench(requestedUri?: vscode.Uri): Promise<void> {
@@ -229,7 +294,10 @@ async function openWorkbench(requestedUri?: vscode.Uri): Promise<void> {
 }
 
 class ContractEditorProvider implements vscode.CustomTextEditorProvider {
-  public constructor(private readonly context: vscode.ExtensionContext) {}
+  public constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly sqlServerRunner?: DesktopSqlServerRunner
+  ) {}
 
   public async resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
     panel.webview.options = {
@@ -244,13 +312,15 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         const contract = parseContract(document.getText());
         const savedTargets = configuredTargets(document.uri, contract);
         const activeTargets = manualTargets ?? savedTargets;
+        const sqlTargets = resolveSqlServerTargets(contract, false).filter((target) => target.connection);
         await panel.webview.postMessage({
           type: "state",
           contract,
           contractName: vscode.workspace.asRelativePath(document.uri, false),
-          targetNames: activeTargets.map((target) => target.label),
-          configuredTargetCount: savedTargets.length,
-          usingConfiguredTargets: manualTargets === undefined && savedTargets.length > 0,
+          targetNames: [...activeTargets.map((target) => target.label), ...sqlTargets.map(sqlServerTargetLabel)],
+          fileTargetCount: activeTargets.length,
+          configuredTargetCount: savedTargets.length + sqlTargets.length,
+          usingConfiguredTargets: manualTargets === undefined && (savedTargets.length > 0 || sqlTargets.length > 0),
           runs
         });
       } catch (error) {
@@ -325,19 +395,31 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         try {
           const contract = parseContract(document.getText());
           const targets = manualTargets ?? configuredTargets(document.uri, contract);
-          if (targets.length === 0) {
-            void vscode.window.showWarningMessage("Select a test CSV or add configured file paths or URLs before running the contract.");
+          const sqlTargets = resolveSqlServerTargets(contract, false).filter((target) => target.connection);
+          if (targets.length === 0 && sqlTargets.length === 0) {
+            void vscode.window.showWarningMessage("Select a CSV or add a configured CSV or SQL Server target before running the contract.");
             return;
           }
-          for (const [index, target] of targets.entries()) {
+          const total = targets.length + sqlTargets.length;
+          let index = 0;
+          for (const target of targets) {
+            index += 1;
             await panel.webview.postMessage({
               type: "runState",
               running: true,
               target: target.label,
-              index: index + 1,
-              total: targets.length
+              index,
+              total
             });
             runs.push({ target: target.label, result: validateCsv(contract, await readTargetText(target)) });
+            await postState(runs);
+          }
+          for (const target of sqlTargets) {
+            index += 1;
+            if (!this.sqlServerRunner) throw new Error("Direct SQL Server validation requires the desktop extension host.");
+            const label = sqlServerTargetLabel(target);
+            await panel.webview.postMessage({ type: "runState", running: true, target: label, index, total });
+            runs.push({ target: label, result: await this.sqlServerRunner(contract, target) });
             await postState(runs);
           }
         } catch (error) {
@@ -353,6 +435,8 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         await vscode.commands.executeCommand("vscode.openWith", document.uri, "default");
       } else if (message.type === "generateSqlServerValidation") {
         await generateSqlServerScript(document.uri);
+      } else if (message.type === "configureSqlServerConnection") {
+        await configureSqlServerConnection(this.context);
       } else if (message.type === "importSqlServerSchema") {
         await importSqlServerSchema(document.uri);
       }

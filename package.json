@@ -1,8 +1,8 @@
 {
   "name": "csv-contract-vsce",
   "displayName": "CSV Contract Workbench",
-  "description": "Design and run reusable YAML contracts for CSV files in VS Code, PowerShell, or Node.",
-  "version": "0.9.0",
+  "description": "Design and run reusable YAML contracts for CSV files and SQL Server tables.",
+  "version": "0.10.0",
   "publisher": "incursa",
   "license": "Apache-2.0",
   "engines": {
@@ -30,6 +30,7 @@
   "keywords": [
     "csv",
     "data quality",
+    "sql server",
     "contract testing",
     "yaml",
     "validation"
@@ -102,6 +103,16 @@
       {
         "command": "csv-contract-vsce.importSqlServerSchema",
         "title": "Import SQL Server Table Schema",
+        "category": "CSV Contract"
+      },
+      {
+        "command": "csv-contract-vsce.configureSqlServerConnection",
+        "title": "Configure SQL Server Connection",
+        "category": "CSV Contract"
+      },
+      {
+        "command": "csv-contract-vsce.forgetSqlServerConnection",
+        "title": "Forget SQL Server Connection",
         "category": "CSV Contract"
       }
     ],
@@ -207,7 +218,9 @@
     "onCommand:csv-contract-vsce.openTargetExternally",
     "onCommand:csv-contract-vsce.compareCsv",
     "onCommand:csv-contract-vsce.generateSqlServerValidation",
-    "onCommand:csv-contract-vsce.importSqlServerSchema"
+    "onCommand:csv-contract-vsce.importSqlServerSchema",
+    "onCommand:csv-contract-vsce.configureSqlServerConnection",
+    "onCommand:csv-contract-vsce.forgetSqlServerConnection"
   ],
   "scripts": {
     "clean": "node scripts/clean.mjs",
@@ -233,6 +246,7 @@
   },
   "devDependencies": {
     "@incursa/ui-kit": "^1.9.0",
+    "@types/mssql": "^9.1.11",
     "@types/node": "^24.10.1",
     "@types/papaparse": "^5.3.16",
     "@types/vscode": "^1.110.0",
@@ -246,5 +260,8 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.1",
     "yaml": "^2.8.1"
+  },
+  "dependencies": {
+    "mssql": "^11.0.1"
   }
 }

@@ -131,16 +131,32 @@ export interface SqlConditionalRule {
   expect: SqlPredicate;
 }
 
-export interface SqlServerTarget {
+export interface SqlServerScope {
+  column: string;
+  parameter: string;
+  sqlType: string;
+  /** Resolve the runtime value from this environment variable. Never stores a secret in the contract. */
+  valueEnvironment?: string;
+}
+
+export interface SqlServerTableTarget {
+  name?: string;
+  connection: string;
   schema: string;
   table: string;
+  scope?: SqlServerScope;
+}
+
+export interface SqlServerTarget {
+  /** Connection profile used by the legacy single-table form. */
+  connection?: string;
+  /** Legacy single-table form. Use targets for more than one table or connection. */
+  schema?: string;
+  table?: string;
+  targets?: SqlServerTableTarget[];
   rowLocator?: string[];
   detailLimit?: number;
-  scope?: {
-    column: string;
-    parameter: string;
-    sqlType: string;
-  };
+  scope?: SqlServerScope;
   conditionalRules?: SqlConditionalRule[];
   importedSchema?: SqlServerImportedSchema;
 }

@@ -1,6 +1,47 @@
 # SQL Server staging validation
 
-CSV Contract Workbench can translate reviewed CSV contract constraints and SQL-specific conditional rules into a deterministic, read-only T-SQL script. Generation is offline: the extension and CLI do not connect to SQL Server or execute the generated code.
+CSV Contract Workbench can apply the same reviewed contract to CSV files and SQL Server tables. Direct table runs are read-only and prefer server-side validation: aggregate rule queries execute in SQL Server and return the standard workbench report. Rules containing JavaScript regular expressions use an exact read-only client fallback because SQL Server does not provide identical JavaScript regex semantics. The report includes an `SQL_CLIENT_FALLBACK` warning when this happens; the fallback projects only declared columns, but it must hold the scoped result in extension memory, so avoid regex rules on unscoped very large tables.
+
+## Configure a connection without storing credentials in YAML
+
+Add a profile name to the contract, then run **CSV Contract: Configure SQL Server Connection**. The extension stores the connection string in VS Code Secret Storage. Use a SQL login with `SELECT` access only; the validator issues metadata queries and `SELECT` statements and never generates data-changing SQL.
+
+```yaml
+sqlServer:
+  connection: warehouse-readonly
+  schema: staging
+  table: PayrollImport
+```
+
+For the CLI, profile names map to environment variables. `warehouse-readonly` becomes `CSV_CONTRACT_SQLSERVER_WAREHOUSE_READONLY`:
+
+```powershell
+$env:CSV_CONTRACT_SQLSERVER_WAREHOUSE_READONLY = "Server=...;Database=...;User Id=...;Password=...;Encrypt=true"
+npm run cli -- dbtest --spec ./examples/sql-server-staging.csvtest.yaml
+```
+
+The `dbtest` command supports repeated `--spec` arguments and emits text or JSON. Its exit code is `0` when every contract/table run passes, `1` for validation failures, and `2` for configuration or execution errors.
+
+## Test multiple tables and connections
+
+Use `sqlServer.targets` when the same contract applies to several tables. Every target can use a different secret-backed connection profile and an optional display name.
+
+```yaml
+sqlServer:
+  detailLimit: 100
+  rowLocator: [EmployeeId]
+  targets:
+    - name: integration employees
+      connection: integration-readonly
+      schema: dbo
+      table: Employees
+    - name: production employees
+      connection: production-readonly
+      schema: reporting
+      table: Employees
+```
+
+Workspace Tests treats each table as a target and includes every run in the normal HTML and Output reports.
 
 ## Import the table definition first
 
@@ -12,13 +53,23 @@ Start with [the staging example](../examples/sql-server-staging.csvtest.yaml), s
 
 ## Limit validation to one load
 
-Use `sqlServer.scope` when a staging table retains more than one load or batch. The generated script declares the configured parameter as `NULL` and throws before querying until you set it:
+Use `sqlServer.scope` when a staging table retains more than one load or batch. Generated scripts declare the configured parameter as `NULL` and throw before querying until you set it:
 
 ```sql
 DECLARE @LoadId nvarchar(100) = NULL; -- REQUIRED: set the load/batch value.
 ```
 
-The contract stores the parameter name and SQL type, not a load value. Supported types are intentionally restricted to integers, `bit`, `uniqueidentifier`, `date`, `datetime2`, `varchar`, and `nvarchar` so contract text cannot inject arbitrary SQL.
+For direct execution, set `valueEnvironment` so the value stays outside the contract, or pass `--scope LoadId=value` to `dbtest`. The extension securely prompts for a value when neither is configured. Scope values are bound query parameters, never interpolated into SQL.
+
+```yaml
+scope:
+  column: LoadId
+  parameter: LoadId
+  sqlType: nvarchar(100)
+  valueEnvironment: PAYROLL_LOAD_ID
+```
+
+Supported generated-script types are intentionally restricted to integers, `bit`, `uniqueidentifier`, `date`, `datetime2`, `varchar`, and `nvarchar` so contract text cannot inject arbitrary SQL.
 
 ## Conditional predicates
 
@@ -39,4 +90,4 @@ String comparisons honor `csv.caseSensitive` and `csv.trimValues`. The generator
 
 The first result set contains one row per rule with `RuleId`, `RuleName`, `Severity`, and `FailureCount`. A zero count passes. The remaining result sets return at most `detailLimit` failing rows per rule for diagnosis.
 
-Translated column rules include configured null markers, minimum and maximum lengths, allowed values, per-column uniqueness, and composite identity uniqueness. Regular expressions and CSV `rowTests` are not silently approximated; the generated script contains explicit warning comments for them.
+Translated rules include row counts, configured null markers, minimum and maximum lengths, allowed values, per-column and composite uniqueness, shared conditional rules, row-test counts and cell expectations, SQL-specific conditional rules, and grouped completeness rules. Generated scripts explicitly warn about JavaScript regular expressions; direct execution preserves their semantics with client fallback.

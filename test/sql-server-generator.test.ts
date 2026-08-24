@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import type { CsvContract } from "../src/core/model";
 import { parseContract } from "../src/core/contract";
 import { generateSqlServerValidation } from "../src/core/sql-server-generator";
+import { resolveSqlServerTargets } from "../src/core/sql-server-targets";
 
 function contract(): CsvContract {
   return {
@@ -58,7 +59,7 @@ test("generates read-only scoped SQL for column and conditional rules", () => {
   assert.match(result.sql, /LOWER\(LTRIM\(RTRIM\(CONVERT\(nvarchar\(max\), t\.\[Status\]\)\)\)\)/);
   assert.doesNotMatch(result.sql, /\b(?:INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|CREATE)\b/i);
   assert.deepEqual(result.warnings, [
-    "Category.matches was not generated because JavaScript regular expressions do not have an exact SQL Server equivalent."
+    "Category.matches uses a JavaScript regular expression and requires exact client-side fallback when executed."
   ]);
 });
 
@@ -82,16 +83,51 @@ test("rejects unsafe scope types and malformed predicates", () => {
   assert.throws(() => generateSqlServerValidation(missingValue), /requires value/);
 });
 
-test("reports CSV-only row tests as explicit translation warnings", () => {
+test("translates row tests to server-side count rules", () => {
   const input = contract();
   input.rowTests = [{ id: "one-row", select: { Status: "Open" }, expect: { count: { exact: 1 } } }];
   const result = generateSqlServerValidation(input);
-  assert.ok(result.warnings.some((warning) => warning.startsWith("rowTests were not generated")));
-  assert.match(result.sql, /-- WARNING: rowTests were not generated/);
+  assert.equal(result.ruleCount, 7);
+  assert.match(result.sql, /N'one-row-count-exact'/);
+  assert.doesNotMatch(result.sql, /rowTests were not generated/);
+});
+
+test("translates shared conditional and grouped rules", () => {
+  const input = contract();
+  input.rules = [{
+    id: "status-prefix",
+    expect: { column: "Status", operator: "startsWith", value: "O" }
+  }];
+  input.groupRules = [{
+    id: "source-status",
+    groupBy: ["SourceType"],
+    require: { column: "Status", values: ["Open"] }
+  }];
+  const result = generateSqlServerValidation(input);
+  assert.match(result.sql, /N'status-prefix'/);
+  assert.match(result.sql, /GROUP_REQUIRED_VALUE_MISSING/);
+  assert.match(result.sql, /CHARINDEX|LEFT/);
 });
 
 test("the documented staging example parses and generates seven rules", async () => {
   const input = parseContract(await readFile("examples/sql-server-staging.csvtest.yaml", "utf8"));
   assert.equal(generateSqlServerValidation(input).ruleCount, 7);
   JSON.parse(await readFile("schemas/csvtest.schema.json", "utf8"));
+});
+
+test("resolves multiple tables and connection profiles without changing shared rules", () => {
+  const input = contract();
+  input.sqlServer = {
+    rowLocator: ["SourceRow"],
+    targets: [
+      { name: "test", connection: "test-readonly", schema: "dbo", table: "Payroll" },
+      { name: "prod", connection: "prod-readonly", schema: "reporting", table: "Payroll" }
+    ]
+  };
+  const targets = resolveSqlServerTargets(input);
+  assert.deepEqual(targets.map((target) => [target.name, target.connection, target.schema, target.table]), [
+    ["test", "test-readonly", "dbo", "Payroll"],
+    ["prod", "prod-readonly", "reporting", "Payroll"]
+  ]);
+  assert.match(generateSqlServerValidation(input, { target: targets[1] }).sql, /\[reporting\]\.\[Payroll\]/);
 });

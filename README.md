@@ -44,12 +44,13 @@ The aggregate result view keeps diagnostics redacted and bounded. Open complete 
 - Exact header order when the receiving system requires a fixed layout
 - Raw string values such as identifiers with leading zeroes
 
-## Generate SQL Server staging validation
+## Generate SQL Server staging validation and validate tables
 
-Use the same reviewed contract to generate a read-only T-SQL validation script for a staging table. Add a `sqlServer` target with optional `conditionalRules`, then run **CSV Contract: Generate SQL Server Staging Validation** from the Command Palette or select **Generate staging SQL** in the workbench. The generator creates a rule summary plus bounded failing-row samples; it never connects to SQL Server or executes the script.
+Use the same reviewed contract against a SQL Server table. Add a secret-backed connection profile and table, run **CSV Contract: Configure SQL Server Connection**, then execute the contract from **Workspace Tests** or **CSV Contract: Run Contract**. Validation is read-only, runs translatable rules server-side, and feeds the normal workbench report. JavaScript regex rules use an exact read-only client fallback.
 
 ```yaml
 sqlServer:
+  connection: warehouse-readonly
   schema: staging
   table: PayrollImport
   rowLocator: [LoadId, SourceRow]
@@ -80,7 +81,15 @@ sqlServer:
         value: Labor
 ```
 
-The optional scope emits a required SQL variable initialized to `NULL`; set it before running the script so each check is limited to one load or batch. Supported predicates are exact equality/inequality, value lists, null/blank checks, column-to-column equality, and nested `all`/`any` groups. Column constraints translate to null, length, allowed-value, uniqueness, and composite-identity checks. JavaScript regular expressions and CSV `rowTests` are identified in comments as translation warnings because SQL Server has no exact equivalent for their current semantics.
+Connection strings are stored in VS Code Secret Storage, not contract YAML. The CLI resolves `warehouse-readonly` from `CSV_CONTRACT_SQLSERVER_WAREHOUSE_READONLY` and supports repeated specs, multiple tables/connections, JSON output, and scoped runs:
+
+```powershell
+npm run cli -- dbtest --spec .\examples\sql-server-staging.csvtest.yaml --scope LoadId=2026-08-24
+```
+
+The optional scope limits every check to one load or batch and binds the value as a query parameter. Server-side translation covers row counts, null, length, allowed-value, uniqueness, shared and SQL-specific conditional rules, row tests, and grouped completeness rules. Use `sqlServer.targets` to apply one contract to multiple tables or connection profiles.
+
+You can still generate a standalone read-only script with **CSV Contract: Generate SQL Server Staging Validation** or `csv-contract sql`. The script creates a rule summary plus bounded failing-row samples and does not connect automatically.
 
 The bundled CLI supports unattended generation without a database connection:
 

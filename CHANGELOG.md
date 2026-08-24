@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.0
+
+- Added direct, read-only SQL Server table validation with the same `ValidationResult` and workspace report used for CSV targets.
+- Added secret-backed VS Code connection profiles and environment-backed CLI profiles so credentials never need to appear in contract YAML.
+- Added multiple SQL Server table and connection targets per contract.
+- Added server-side translation for shared conditional rules, row counts, row tests, grouped completeness, and the existing column and uniqueness rules.
+- Added exact client-side fallback for JavaScript regex semantics while keeping all database access read-only.
+- Added the `dbtest` CLI command with repeated contracts, scoped parameter binding, JSON output, and CI-friendly exit codes.
+
 ## 0.9.0
 
 - Added generic conditional CSV rules with nested predicates, cross-column checks, string matching, numeric comparisons, and error/warning severity.
