@@ -62,6 +62,7 @@ const builds = [
     entryPoints: [
       "test/core.test.ts",
       "test/suite.test.ts",
+      "test/suite-workbench.test.ts",
       "test/suite-acceptance.test.ts",
       "test/generator.test.ts",
       "test/streaming.test.ts",
@@ -79,7 +80,7 @@ const builds = [
     outExtension: { ".js": ".cjs" },
     format: "cjs",
     platform: "node",
-    external: ["msnodesqlv8"]
+    external: ["msnodesqlv8", "jsdom"]
   }
 ];
 

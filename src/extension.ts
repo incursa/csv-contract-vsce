@@ -1,5 +1,5 @@
 import { isSuiteText } from "./core/suite";
-import { registerSuiteDiagnostics, showSuiteRun, showSuiteSql } from "./vscode-suites";
+import { registerSuiteDiagnostics, resolveSuiteEditor, showSuiteRun, showSuiteSql } from "./vscode-suites";
 import * as vscode from "vscode";
 import { createContractFromCsv, parseContract, serializeContract, validateCsv } from "./core/contract";
 import type { CsvContract, SqlServerObjectInfo, SqlServerTableTarget, ValidationResult } from "./core/model";
@@ -410,7 +410,7 @@ async function addSqlServerTarget(
 
 async function openWorkbench(requestedUri?: vscode.Uri): Promise<void> {
   if (/\.csvsuite\.ya?ml$/i.test((requestedUri ?? vscode.window.activeTextEditor?.document.uri)?.path ?? "")) {
-    await vscode.commands.executeCommand("vscode.openWith", requestedUri ?? vscode.window.activeTextEditor!.document.uri, "default");
+    await vscode.commands.executeCommand("vscode.openWith", requestedUri ?? vscode.window.activeTextEditor!.document.uri, viewType);
     return;
   }
   if (requestedUri?.path.match(/\.csvtest\.ya?ml$/i)) {
@@ -420,7 +420,7 @@ async function openWorkbench(requestedUri?: vscode.Uri): Promise<void> {
   const active = vscode.window.activeTextEditor?.document.uri;
   const uri = active?.path.match(/\.csvtest\.ya?ml$/i)
     ? active
-    : await pickFile({ "CSV contracts": ["csvtest.yaml", "csvtest.yml"] });
+    : await pickFile({ "CSV contracts and suites": ["csvtest.yaml", "csvtest.yml", "csvsuite.yaml", "csvsuite.yml"] });
   if (uri) await vscode.commands.executeCommand("vscode.openWith", uri, viewType);
 }
 
@@ -432,9 +432,8 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
   ) {}
 
   public async resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
-    if (isSuiteText(document.getText())) {
-      await vscode.commands.executeCommand("vscode.openWith", document.uri, "default");
-      panel.dispose();
+    if (/\.csvsuite\.ya?ml$/i.test(document.uri.path) || isSuiteText(document.getText())) {
+      await resolveSuiteEditor(document, panel, this.sqlServerRunner);
       return;
     }
     panel.webview.options = {

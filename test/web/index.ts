@@ -24,6 +24,18 @@ export async function run(): Promise<void> {
   // Diagnostics run asynchronously after opening; bounded wait for the actual provider output.
   for (let attempt = 0; attempt < 30 && !vscode.languages.getDiagnostics(suiteUri).length; attempt++) await new Promise((done) => setTimeout(done, 100));
   assert(vscode.languages.getDiagnostics(suiteUri).some((d) => d.message.includes("missing")), "Suite reference diagnostics were not published.");
+  await vscode.commands.executeCommand("csv-contract-vsce.openWorkbench", suiteUri);
+  assert(vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof vscode.TabInputCustom, "Open Workbench must display the suite custom editor, not the YAML editor.");
+  for (const extension of ["yaml", "yml"]) {
+    const automaticUri = vscode.Uri.joinPath(folder, `automatic.csvsuite.${extension}`);
+    await vscode.workspace.fs.writeFile(automaticUri, new TextEncoder().encode("suiteVersion: 1\nid: automatic\nmembers: [{id: one, ref: ./does-not-exist.csvtest.yaml}]\n"));
+    await vscode.commands.executeCommand("vscode.open", automaticUri);
+    const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+    assert(tab?.input instanceof vscode.TabInputCustom, `${extension} suites must open in the Workbench by default.`);
+    assert(tab.input.viewType === "csv-contract-vsce.contractEditor", "Suite opened in the wrong custom editor.");
+    await vscode.window.tabGroups.close(tab);
+    await vscode.workspace.fs.delete(automaticUri);
+  }
   await vscode.workspace.fs.delete(suiteUri);
 
   const leftUri = vscode.Uri.joinPath(folder, "left.csv");

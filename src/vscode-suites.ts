@@ -1,9 +1,81 @@
 import * as vscode from "vscode";
-import { generateSuiteSql, loadSuite, runSuite, type SuiteIO } from "./core/suite";
+import { generateSuiteSql, loadSuite, parseSuite, runSuite, yamlDocument, type SuiteIO } from "./core/suite";
 import type { DesktopSqlServerRunner } from "./extension";
 import { renderWorkspaceReportHtml } from "./workspace-report";
 import { configuredTargets, readTargetText } from "./vscode-targets";
 import { validateCsv } from "./core/contract";
+import { renderSuiteWorkbench } from "./suite-workbench";
+
+export async function resolveSuiteEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel, runner?: DesktopSqlServerRunner): Promise<void> {
+  panel.webview.options = { enableScripts: true, localResourceRoots: [] };
+  let running = false;
+  let disposed = false;
+  let generation = 0;
+  let renderVersion = 0;
+  let notice: string | undefined;
+  let report: Awaited<ReturnType<typeof executeVscodeSuite>> | undefined;
+  const render = async (): Promise<void> => {
+    const version = ++renderVersion;
+    const nonce = globalThis.crypto.randomUUID().replaceAll("-", "");
+    try {
+      const parsed = parseSuite(document.getText());
+      const suite = await loadSuite(document.uri.toString(), vscodeSuiteIO);
+      if (disposed || version !== renderVersion) return;
+      panel.webview.html = renderSuiteWorkbench({ suite, name: parsed.name, description: parsed.description,
+        references: parsed.members.map((m) => m.ref), running, runs: report?.runs, notice }, nonce);
+    } catch (error) {
+      if (!disposed && version === renderVersion) panel.webview.html = renderSuiteWorkbench({ error: String(error), running }, nonce);
+    }
+  };
+  const refresh = (): void => {
+    generation++;
+    if (report) notice = "Contracts changed. Run the suite again for current results.";
+    report = undefined;
+    void render();
+  };
+  const watcher = vscode.workspace.createFileSystemWatcher("**/*.{yaml,yml}");
+  const subscriptions = [watcher, watcher.onDidChange(refresh), watcher.onDidCreate(refresh), watcher.onDidDelete(refresh),
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      if (/\.ya?ml$/i.test(event.document.uri.path)) refresh();
+    }), panel.webview.onDidReceiveMessage(async (message: { type?: string; index?: number }) => {
+      try {
+        if (message.type === "run" && !running) {
+          running = true; notice = undefined; report = undefined;
+          const startedGeneration = generation;
+          await render();
+          try {
+            const result = await executeVscodeSuite(document.uri, runner);
+            if (startedGeneration === generation) report = result;
+            else notice = "Contracts changed during execution. Run again for current results.";
+          } finally { running = false; await render(); }
+        } else if (message.type === "sql" && !running) await showSuiteSql(document.uri);
+        else if (message.type === "yaml" || message.type === "member") {
+          let selection: vscode.Range | undefined;
+          if (message.type === "member") {
+            const parsed = parseSuite(document.getText());
+            if (!Number.isInteger(message.index) || message.index! < 0 || message.index! >= parsed.members.length) return;
+            const member = parsed.members[message.index!];
+            if (member.ref) {
+              await vscode.commands.executeCommand("vscode.openWith", vscode.Uri.parse(vscodeSuiteIO.resolve(document.uri.toString(), member.ref)), "csv-contract-vsce.contractEditor");
+              return;
+            }
+            const node = yamlDocument(document.getText()).getIn(["members", message.index!, "contract"], true);
+            if (node && typeof node === "object" && "range" in node && Array.isArray(node.range)) {
+              const position = document.positionAt(node.range[0]);
+              selection = new vscode.Range(position, position);
+            }
+          }
+          await vscode.window.showTextDocument(document, { viewColumn: vscode.ViewColumn.Beside, selection, preview: false });
+        }
+      } catch (error) {
+        notice = String(error);
+        await render();
+        void vscode.window.showErrorMessage(notice);
+      }
+    })];
+  panel.onDidDispose(() => { disposed = true; subscriptions.forEach((s) => s.dispose()); });
+  await render();
+}
 
 export const vscodeSuiteIO: SuiteIO = {
   read: async (source) => {

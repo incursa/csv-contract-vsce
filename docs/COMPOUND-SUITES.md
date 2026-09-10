@@ -178,7 +178,17 @@ that connection. A single text script across different connections is refused.
 
 ## VS Code
 
-Open a suite in the native YAML editor for schema validation and completion.
+Open a `*.csvsuite.yaml` or `*.csvsuite.yml` file in the Suite Workbench. The
+overview lists every member and target; expand members to inspect their schemas
+and rules. **Run suite** displays member results and failure details in the editor.
+**Generate SQL** opens the generated script or connection-specific batch manifest.
+**Open contract** opens referenced members in their existing Workbench; **Edit inline
+contract** opens the embedded mapping in YAML beside the suite. **Edit suite YAML**
+provides schema validation and completion. Opening a suite does not execute tests.
+
+If VS Code kept an existing text-editor association, use **Reopen Editor With →
+CSV Contract Workbench**, or **CSV Contract: Open Workbench**, after updating to
+0.13.1 or later.
 Reference diagnostics identify the failing member and path and refresh when YAML
 files change. **Run Contract**, **Workspace Tests → Run Selected**, and
 **Generate SQL Server Staging Validation** accept either suite representation.
@@ -186,7 +196,7 @@ Workspace Tests shows all suite tables and reports member/table results using th
 existing report UI, distinguishing execution errors from assertion failures.
 Desktop suite runs execute configured SQL and CSV targets; web runs report an
 explicit error for database members. The single-contract visual form remains
-unchanged; suite composition is edited as YAML.
+unchanged; suite composition and inline contract edits use the YAML editor.
 
 ## Offline McKee acceptance
 

@@ -4,6 +4,12 @@ import { readFile } from "node:fs/promises";
 
 test("contributes the workspace test Activity Bar view and commands", async () => {
   const manifest = JSON.parse(await readFile("package.json", "utf8"));
+  const editors = manifest.contributes.customEditors;
+  const workbench = editors.find((editor: { viewType: string }) => editor.viewType === "csv-contract-vsce.contractEditor");
+  assert.equal(workbench.priority, "default");
+  for (const extension of ["csvtest.yaml", "csvtest.yml", "csvsuite.yaml", "csvsuite.yml"]) {
+    assert.ok(workbench.selector.some((selector: { filenamePattern: string }) => selector.filenamePattern === `*.${extension}`), `Workbench must open ${extension} files`);
+  }
   const commands = new Set(manifest.contributes.commands.map((entry: { command: string }) => entry.command));
   assert.ok(commands.has("csv-contract-vsce.runSelectedContracts"));
   assert.ok(commands.has("csv-contract-vsce.showWorkspaceReport"));

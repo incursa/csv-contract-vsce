@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.1
+
+- Fixed suite files opening as plain YAML: registered both suite suffixes with the default Workbench editor and removed the text-editor redirect.
+- Added a Suite Workbench with searchable members, schema/rule inspection, execution results, SQL generation, and referenced/inline editing links. Opening a suite never executes tests.
+- Added rendered-control tests and real VS Code web-host checks for automatic suite editor selection.
+
 ## 0.13.0
 
 - Added referenced and portable inline compound suites with independent member schemas, rules and SQL targets.
