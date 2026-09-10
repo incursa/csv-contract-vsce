@@ -139,9 +139,22 @@ export interface SqlServerScope {
   valueEnvironment?: string;
 }
 
+export interface SqlServerIntegratedConnection {
+  /** SQL Server host, optionally including a named instance (for example server\\instance). */
+  server: string;
+  database: string;
+  /** Installed ODBC driver used by msnodesqlv8. */
+  odbcDriver?: string;
+  encrypt?: boolean;
+  trustServerCertificate?: boolean;
+}
+
 export interface SqlServerTableTarget {
   name?: string;
-  connection: string;
+  /** Secret-backed profile for SQL authentication or a custom connection string. */
+  connection?: string;
+  /** Non-secret Windows integrated connection; no profile is required. */
+  integratedConnection?: SqlServerIntegratedConnection;
   schema: string;
   table: string;
   objectType?: "table" | "view";
@@ -160,6 +173,8 @@ export interface SqlServerObjectInfo {
 export interface SqlServerTarget {
   /** Connection profile used by the legacy single-table form. */
   connection?: string;
+  /** Windows integrated connection used by the legacy single-table form. */
+  integratedConnection?: SqlServerIntegratedConnection;
   /** Legacy single-table form. Use targets for more than one table or connection. */
   schema?: string;
   table?: string;
@@ -197,6 +212,8 @@ export type CsvTarget =
 
 export interface CsvContract {
   version: 1;
+  /** Opaque annotations, preserved without execution behavior. */
+  metadata?: Record<string, unknown>;
   targets?: CsvTarget[];
   csv?: CsvOptions;
   identity?: {

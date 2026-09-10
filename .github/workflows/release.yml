@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # The optional Windows integrated driver bundled in the universal VSIX must
+    # be built on Windows. Other platforms use the pure-JS connection profiles.
+    runs-on: windows-latest
     environment: marketplace
     env:
       VSCE_PAT: ${{ secrets.VSCE_PAT }}
@@ -28,6 +30,7 @@ jobs:
           files: csv-contract-vsce.vsix
           generate_release_notes: true
       - name: Publish to Visual Studio Marketplace
+        shell: bash
         run: |
           if [ -z "$VSCE_PAT" ]; then
             echo "::error::VSCE_PAT is not configured for this repository or organization."

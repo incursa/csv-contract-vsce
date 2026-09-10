@@ -1,13 +1,21 @@
 import sql from "mssql";
+import { assertCompleteSqlSummaries } from "../core/sql-server-results";
 import Papa from "papaparse";
 import { validateCsv } from "../core/contract";
-import type { CountExpectation, CsvContract, SqlServerObjectInfo, ValidationIssue, ValidationResult } from "../core/model";
+import type { CountExpectation, CsvContract, SqlServerIntegratedConnection, SqlServerObjectInfo, ValidationIssue, ValidationResult } from "../core/model";
 import { generateSqlServerValidation, sqlIdentifier } from "../core/sql-server-generator";
 import { canonicalSqlServerColumn, physicalSqlServerColumn, type ResolvedSqlServerTarget } from "../core/sql-server-targets";
 
 export interface SqlServerValidationOptions {
   maxIssues?: number;
   scopeValue?: string;
+}
+
+type SqlApi = typeof sql;
+
+interface SqlPoolHandle {
+  api: SqlApi;
+  pool: sql.ConnectionPool;
 }
 
 interface ObjectMetadataRow {
@@ -33,12 +41,12 @@ interface MetadataRow {
 }
 
 export class SqlServerValidationSession {
-  private readonly pools = new Map<string, sql.ConnectionPool>();
+  private readonly pools = new Map<string, SqlPoolHandle>();
 
   public constructor(private readonly resolveConnectionString: (profile: string) => Promise<string> | string) {}
 
   public async dispose(): Promise<void> {
-    await Promise.all([...this.pools.values()].map((pool) => pool.close()));
+    await Promise.all([...this.pools.values()].map(({ pool }) => pool.close()));
     this.pools.clear();
   }
 
@@ -47,8 +55,8 @@ export class SqlServerValidationSession {
     target: ResolvedSqlServerTarget,
     options: SqlServerValidationOptions = {}
   ): Promise<ValidationResult> {
-    const pool = await this.getPool(target.connection);
-    const metadata = await readMetadata(pool, target);
+    const handle = await this.getPool(target.connection, target.integratedConnection);
+    const metadata = await readMetadata(handle, target);
     if (metadata.length === 0) throw new Error(`SQL Server object ${target.schema}.${target.table} does not exist or is not visible to this connection.`);
     const metadataIssues = validateMetadata(contract, target, metadata);
     const generated = generateSqlServerValidation(contract, {
@@ -61,7 +69,7 @@ export class SqlServerValidationSession {
     const mustFallback = generated.warnings.length > 0 || declared.some((column) => !present.has(physicalSqlServerColumn(target, column)));
     const scopeValue = resolveScopeValue(target, options.scopeValue);
     if (mustFallback) {
-      const fallback = await validateClientSide(pool, contract, target, metadata, scopeValue);
+      const fallback = await validateClientSide(handle, contract, target, metadata, scopeValue);
       const reason = generated.warnings.length
         ? generated.warnings.join(" ")
         : "One or more declared columns are absent, so rules that reference optional columns must preserve CSV-compatible behavior.";
@@ -80,10 +88,11 @@ export class SqlServerValidationSession {
       return mergeMetadataIssues(withNotice, metadataIssues, metadata.length, options.maxIssues ?? 1000);
     }
 
-    const request = pool.request();
-    bindScope(request, target, scopeValue);
+    const request = handle.pool.request();
+    bindScope(request, handle.api, target, scopeValue);
     const executed = await request.query(generated.sql);
     const summaries = (((executed.recordsets as sql.IRecordSet<unknown>[])[0]) ?? []) as unknown as SummaryRow[];
+    assertCompleteSqlSummaries(generated.rules.map((rule) => rule.id), summaries);
     const issues = [...metadataIssues];
     let errorCount = metadataIssues.filter((issue) => issue.severity !== "warning").length;
     let warningCount = metadataIssues.length - errorCount;
@@ -104,7 +113,7 @@ export class SqlServerValidationSession {
       if (summary.Severity === "warning") warningCount += failures;
       else errorCount += failures;
     }
-    const rowCount = await readRowCount(pool, target, scopeValue);
+    const rowCount = await readRowCount(handle, target, scopeValue);
     const issueCount = errorCount + warningCount;
     return {
       valid: errorCount === 0,
@@ -120,8 +129,8 @@ export class SqlServerValidationSession {
   }
 
   public async listObjects(profile: string): Promise<SqlServerObjectInfo[]> {
-    const pool = await this.getPool(profile);
-    const result = await pool.request().query<ObjectMetadataRow>(`
+    const handle = await this.getPool(profile);
+    const result = await handle.pool.request().query<ObjectMetadataRow>(`
 SELECT
   s.name AS schemaName,
   o.name AS objectName,
@@ -148,15 +157,56 @@ ORDER BY s.name, o.name, c.column_id;`);
     return [...objects.values()];
   }
 
-  private async getPool(profile: string): Promise<sql.ConnectionPool> {
-    const existing = this.pools.get(profile);
+  private async getPool(profile: string, integrated?: SqlServerIntegratedConnection): Promise<SqlPoolHandle> {
+    const key = integrated ? `integrated:${JSON.stringify(integrated)}` : `profile:${profile}`;
+    const existing = this.pools.get(key);
     if (existing) return existing;
-    const connectionString = await this.resolveConnectionString(profile);
-    if (!connectionString.trim()) throw new Error(`SQL Server connection profile '${profile}' is empty.`);
-    const pool = await new sql.ConnectionPool(connectionString).connect();
-    this.pools.set(profile, pool);
-    return pool;
+    let handle: SqlPoolHandle;
+    if (integrated) {
+      if (process.platform !== "win32" || process.arch !== "x64") throw new Error("Bundled Windows integrated authentication requires Windows x64. Use a connection profile on other platforms.");
+      const nativeSql = (await import("mssql/msnodesqlv8")).default;
+      const connectionString = integratedConnectionString(integrated);
+      const nativeConfig = {
+        server: integrated.server,
+        database: integrated.database,
+        driver: "msnodesqlv8",
+        connectionString,
+        options: {
+          trustedConnection: true,
+          encrypt: integrated.encrypt ?? true,
+          trustServerCertificate: integrated.trustServerCertificate ?? false
+        }
+      } as sql.config & { connectionString: string };
+      const pool = await new nativeSql.ConnectionPool(nativeConfig).connect();
+      handle = { api: nativeSql as SqlApi, pool: pool as sql.ConnectionPool };
+    } else {
+      const connectionString = await this.resolveConnectionString(profile);
+      if (!connectionString.trim()) throw new Error(`SQL Server connection profile '${profile}' is empty.`);
+      handle = { api: sql, pool: await new sql.ConnectionPool(connectionString).connect() };
+    }
+    this.pools.set(key, handle);
+    return handle;
   }
+}
+
+function odbcValue(value: string): string {
+  if (!value.trim() || [...value].some((character) => character.charCodeAt(0) < 32)) {
+    throw new Error("Integrated SQL Server connection values must be non-empty and cannot contain control characters.");
+  }
+  return `{${value.replaceAll("}", "}}")}}`;
+}
+
+export function integratedConnectionString(connection: SqlServerIntegratedConnection): string {
+  const driver = connection.odbcDriver?.trim() || "ODBC Driver 18 for SQL Server";
+  return [
+    `Driver=${odbcValue(driver)}`,
+    `Server=${odbcValue(connection.server)}`,
+    `Database=${odbcValue(connection.database)}`,
+    "Trusted_Connection=Yes",
+    `Encrypt=${connection.encrypt ?? true ? "Yes" : "No"}`,
+    `TrustServerCertificate=${connection.trustServerCertificate ?? false ? "Yes" : "No"}`,
+    `Application Name=${odbcValue("CSV Contract Workbench")}`
+  ].join(";") + ";";
 }
 
 function contractTestCount(contract: CsvContract): number {
@@ -175,14 +225,14 @@ function resolveScopeValue(target: ResolvedSqlServerTarget, explicit: string | u
   return value;
 }
 
-function bindScope(request: sql.Request, target: ResolvedSqlServerTarget, value: string | undefined): void {
-  if (target.scope) request.input(target.scope.parameter, sql.NVarChar(sql.MAX), value);
+function bindScope(request: sql.Request, api: SqlApi, target: ResolvedSqlServerTarget, value: string | undefined): void {
+  if (target.scope) request.input(target.scope.parameter, api.NVarChar(api.MAX), value);
 }
 
-async function readMetadata(pool: sql.ConnectionPool, target: ResolvedSqlServerTarget): Promise<MetadataRow[]> {
-  const result = await pool.request()
-    .input("schema", sql.NVarChar(128), target.schema)
-    .input("table", sql.NVarChar(128), target.table)
+async function readMetadata(handle: SqlPoolHandle, target: ResolvedSqlServerTarget): Promise<MetadataRow[]> {
+  const result = await handle.pool.request()
+    .input("schema", handle.api.NVarChar(128), target.schema)
+    .input("table", handle.api.NVarChar(128), target.table)
     .query<MetadataRow>(`
 SELECT c.name, c.column_id AS ordinal
 FROM sys.columns AS c
@@ -193,9 +243,9 @@ ORDER BY c.column_id;`);
   return result.recordset;
 }
 
-async function readRowCount(pool: sql.ConnectionPool, target: ResolvedSqlServerTarget, scopeValue: string | undefined): Promise<number> {
-  const request = pool.request();
-  bindScope(request, target, scopeValue);
+async function readRowCount(handle: SqlPoolHandle, target: ResolvedSqlServerTarget, scopeValue: string | undefined): Promise<number> {
+  const request = handle.pool.request();
+  bindScope(request, handle.api, target, scopeValue);
   const scope = target.scope
     ? `WHERE CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, target.scope.column))}) = CONVERT(nvarchar(max), @${target.scope.parameter})`
     : "";
@@ -238,7 +288,7 @@ function validateMetadata(contract: CsvContract, target: ResolvedSqlServerTarget
 }
 
 async function validateClientSide(
-  pool: sql.ConnectionPool,
+  handle: SqlPoolHandle,
   contract: CsvContract,
   target: ResolvedSqlServerTarget,
   metadata: MetadataRow[],
@@ -247,14 +297,14 @@ async function validateClientSide(
   const present = new Set(metadata.map((column) => column.name));
   const columns = Object.keys(contract.schema.columns).filter((column) => present.has(physicalSqlServerColumn(target, column)));
   if (columns.length === 0) {
-    return { valid: false, rowCount: await readRowCount(pool, target, scopeValue), columnCount: metadata.length, testCount: contractTestCount(contract), issueCount: 0, errorCount: 0, warningCount: 0, truncated: false, issues: [] };
+    return { valid: false, rowCount: await readRowCount(handle, target, scopeValue), columnCount: metadata.length, testCount: contractTestCount(contract), issueCount: 0, errorCount: 0, warningCount: 0, truncated: false, issues: [] };
   }
   const projection = columns.map((column) => `CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, column))}) AS ${sqlIdentifier(column)}`).join(", ");
   const scope = target.scope
     ? `WHERE CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, target.scope.column))}) = CONVERT(nvarchar(max), @${target.scope.parameter})`
     : "";
-  const request = pool.request();
-  bindScope(request, target, scopeValue);
+  const request = handle.pool.request();
+  bindScope(request, handle.api, target, scopeValue);
   const result = await request.query<Record<string, string | null>>(`SELECT ${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope};`);
   const rows = result.recordset.map((row) => columns.map((column) => row[column] ?? ""));
   const fallbackContract: CsvContract = {

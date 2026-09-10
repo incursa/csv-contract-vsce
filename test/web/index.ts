@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { executeVscodeSuite } from "../../src/vscode-suites";
 import type { ComparisonResult } from "../../src/comparison/model";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -13,6 +14,17 @@ export async function run(): Promise<void> {
   assert(extension, "The CSV Contract Workbench extension was not installed in the web host.");
   await extension.activate();
   assert(extension.isActive, "The browser extension entry point did not activate.");
+  const suiteUri = vscode.Uri.joinPath(folder, "offline.csvsuite.yaml");
+  await vscode.workspace.fs.writeFile(suiteUri, new TextEncoder().encode("suiteVersion: 1\nid: web-check\nmembers:\n  - id: missing\n    ref: ./does-not-exist.csvtest.yaml\n  - id: database\n    contract:\n      version: 1\n      schema: {columns: {Id: {presence: required}}}\n      sqlServer: {connection: offline, schema: dbo, table: Synthetic}\n"));
+  const suiteReport = await executeVscodeSuite(suiteUri);
+  assert(!suiteReport.valid && suiteReport.runs.length === 2, "A suite with unavailable members must not pass or omit them.");
+  assert(suiteReport.runs.every((entry) => entry.status === "ERROR"), "Missing references and database runs in web must report ERROR.");
+  const suiteDocument = await vscode.workspace.openTextDocument(suiteUri);
+  await vscode.window.showTextDocument(suiteDocument);
+  // Diagnostics run asynchronously after opening; bounded wait for the actual provider output.
+  for (let attempt = 0; attempt < 30 && !vscode.languages.getDiagnostics(suiteUri).length; attempt++) await new Promise((done) => setTimeout(done, 100));
+  assert(vscode.languages.getDiagnostics(suiteUri).some((d) => d.message.includes("missing")), "Suite reference diagnostics were not published.");
+  await vscode.workspace.fs.delete(suiteUri);
 
   const leftUri = vscode.Uri.joinPath(folder, "left.csv");
   const rightUri = vscode.Uri.joinPath(folder, "right.csv");

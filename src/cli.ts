@@ -3,11 +3,13 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path
 import { parseContract, serializeContract } from "./core/contract";
 import { createContractOutlineFromFile } from "./node/contract-generator";
 import { validateCsvFile } from "./node/streaming-validator";
-import { createTargetPlans } from "./node/target-plan";
+import { createTargetPlans, resolveConfiguredTarget } from "./node/target-plan";
 import { withMaterializedTarget } from "./node/target-source";
 import { generateSqlServerValidation } from "./core/sql-server-generator";
 import { mergeImportedSchema, parseSqlSchemaSource } from "./core/sql-schema-import";
-import { resolveSqlServerTargets, sqlServerTargetLabel } from "./core/sql-server-targets";
+import { resolveSqlServerTargets } from "./core/sql-server-targets";
+import { loadSuite, runSuite, generateSuiteSql } from "./core/suite";
+import { fileSuiteIO, combineSuite, splitSuite } from "./node/suite-files";
 import { SqlServerValidationSession } from "./node/sql-server-validator";
 
 interface ParsedArgs {
@@ -26,12 +28,18 @@ interface ParsedArgs {
   source?: string;
   table?: string;
   scopes: Record<string, string>;
+  force: boolean;
+  failFast: boolean;
+  allowExternal: boolean;
 }
 
 function usage(): never {
   console.error(`CSV Contract Workbench
 
 Usage:
+  csv-contract combine --spec <master.csvsuite.yaml> --out <portable.csvsuite.yaml> [--force] [--allow-external]
+  csv-contract split --spec <portable.csvsuite.yaml> --out <directory> [--force]
+  csv-contract dbtest --spec <suite.csvsuite.yaml> [--fail-fast] [--format json]
   csv-contract test [--csv <file-or-url>] --spec <contract.csvtest.yaml> [--spec <spot-check.yaml>]
                     [--format text|json] [--max-issues 1000] [--progress-interval 250000]
                     [--unique-partitions 128] [--temp-directory <path>]
@@ -73,10 +81,13 @@ function parseArgs(argv: string[]): ParsedArgs {
     sampleRows: 10000,
     inferConstraints: false,
     includeSampleTests: true,
-    scopes: {}
+    scopes: {}, force: false, failFast: false, allowExternal: false
   };
   while (argv.length) {
     const token = argv.shift()!;
+    if (token === "--force") { result.force = true; continue; }
+    if (token === "--fail-fast") { result.failFast = true; continue; }
+    if (token === "--allow-external") { result.allowExternal = true; continue; }
     if (token === "--infer-constraints") {
       result.inferConstraints = true;
       continue;
@@ -145,10 +156,18 @@ async function initialize(args: ParsedArgs, csvPath: string): Promise<void> {
 
 async function testCsv(args: ParsedArgs): Promise<void> {
   if (args.specs.length === 0) usage();
+  if (args.failFast) throw new Error("--fail-fast is supported by dbtest; CSV test retains its existing streaming behavior.");
   const inputs = [];
   for (const specInput of args.specs) {
     const spec = resolve(specInput);
-    inputs.push({ spec, contract: parseContract(await readFile(spec, "utf8")) });
+    const suite = await loadSuite(spec, fileSuiteIO);
+    for (const member of suite.members) {
+      if (member.error || !member.contract) throw new Error(`${suite.id}/${member.id}: ${member.error}`);
+      const contract = structuredClone(member.contract);
+      if (contract.targets) contract.targets = contract.targets.map((target) => target.path !== undefined
+        ? { path: resolveConfiguredTarget(member.source, target) } : target);
+      inputs.push({ spec: suite.isSuite ? `${spec}#${suite.id}:${member.id}` : spec, contract });
+    }
   }
   const plans = createTargetPlans(inputs, args.csvs);
   const files = [];
@@ -191,6 +210,17 @@ async function generateSql(args: ParsedArgs): Promise<void> {
   if (args.specs.length !== 1 || !args.out) usage();
   const spec = resolve(args.specs[0]);
   const output = resolve(args.out);
+  const suite = await loadSuite(spec, fileSuiteIO);
+  if (suite.isSuite) {
+    if (args.table) throw new Error("Suite SQL generation includes all targets; --table is only for single contracts.");
+    const generated = generateSuiteSql(suite);
+    const connections = new Set(generated.batches.map((b) => JSON.stringify(b.integratedConnection ?? b.connection)));
+    if (connections.size > 1 && args.format !== "json") throw new Error("Suite targets different connections. Use --format json to generate a complete batch manifest; execute each batch only on its declared connection.");
+    await writeFile(output, args.format === "json" ? JSON.stringify(generated, null, 2) : generated.sql, { flag: args.force ? "w" : "wx" });
+    console.log("Created " + output + " (" + generated.ruleCount + " rules, " + generated.batches.length + " isolated batches).");
+    generated.warnings.forEach((warning) => console.error("WARNING: " + warning));
+    return;
+  }
   const contract = parseContract(await readFile(spec, "utf8"));
   const targets = resolveSqlServerTargets(contract, false);
   const target = args.table
@@ -217,37 +247,39 @@ async function testSqlServer(args: ParsedArgs): Promise<void> {
     if (!connectionString) throw new Error(`Connection profile '${profile}' requires environment variable ${environmentName}.`);
     return connectionString;
   });
-  const runs = [];
+  const reports = [];
   try {
     for (const specInput of args.specs) {
-      const spec = resolve(specInput);
-      const contract = parseContract(await readFile(spec, "utf8"));
-      for (const target of resolveSqlServerTargets(contract)) {
-        const startedAt = Date.now();
-        const result = await session.validate(contract, target, {
+      try {
+        const suite = await loadSuite(resolve(specInput), fileSuiteIO);
+        reports.push(await runSuite(suite, (contract, target) => session.validate(contract, target, {
           maxIssues: args.maxIssues,
           scopeValue: target.scope ? args.scopes[target.scope.parameter] : undefined
-        });
-        runs.push({ spec, target: sqlServerTargetLabel(target), durationMs: Date.now() - startedAt, result });
+        }), args.failFast));
+      } catch (error) {
+        reports.push(await runSuite({ id: specInput, source: specInput, isSuite: true,
+          members: [{ id: specInput, source: specInput, error: error instanceof Error ? error.message : String(error) }] },
+          async () => { throw new Error("Invalid suite"); }));
       }
     }
   } finally {
     await session.dispose();
   }
-  const valid = runs.length > 0 && runs.every((run) => run.result.valid);
-  if (args.format === "json") {
-    console.log(JSON.stringify({ valid, runs }, null, 2));
-  } else {
-    for (const run of runs) {
-      console.log(`${run.result.valid ? "PASS" : "FAIL"} ${run.target}`);
-      console.log(`  ${run.spec} — ${run.result.rowCount.toLocaleString()} rows, ${run.result.columnCount} columns, ${run.result.errorCount.toLocaleString()} errors, ${run.result.warningCount.toLocaleString()} warnings (${(run.durationMs / 1000).toFixed(2)}s)`);
-      for (const issue of run.result.issues) {
-        const location = [issue.column, issue.testId].filter(Boolean).join(" · ");
-        console.log(`    ${(issue.severity ?? "error").toUpperCase()} ${issue.code}${location ? ` [${location}]` : ""}: ${issue.message}`);
+  const valid = reports.length > 0 && reports.every((report) => report.valid);
+  const runs = reports.flatMap((report) => report.runs);
+  if (args.format === "json") console.log(JSON.stringify({ valid, reports, runs }, null, 2));
+  else {
+    for (const report of reports) {
+      console.log(report.status + " " + report.suite + ": " + JSON.stringify(report.summary));
+      for (const run of report.runs) {
+        const location = run.suite + "/" + run.member + "/" + (run.table ?? "unresolved");
+        console.log("  " + run.status + " " + location + (run.error ? ": " + run.error : ""));
+        for (const issue of run.result?.issues ?? []) console.log("    " + location + "/" + (issue.testId ?? issue.code) + ": " + issue.message);
       }
     }
+    console.log((valid ? "PASS" : "FAIL") + " overall (" + runs.length + " runs).");
   }
-  process.exitCode = valid ? 0 : 1;
+  process.exitCode = Math.max(...reports.map((report) => report.exitCode), 0);
 }
 
 async function importSchema(args: ParsedArgs): Promise<void> {
@@ -275,6 +307,14 @@ async function importSchema(args: ParsedArgs): Promise<void> {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  if (args.command === "combine" || args.command === "split") {
+    if (args.specs.length !== 1 || !args.out) usage();
+    const result = args.command === "combine"
+      ? await combineSuite(args.specs[0], args.out, { force: args.force, allowExternal: args.allowExternal })
+      : await splitSuite(args.specs[0], args.out, args.force);
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
   if (args.command === "init") {
     if (args.csvs.length !== 1) usage();
     const csvPath = resolve(args.csvs[0]);

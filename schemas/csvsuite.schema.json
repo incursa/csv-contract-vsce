@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/incursa/csv-contract-vsce/main/schemas/csvsuite.schema.json",
+  "title": "Compound contract suite",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "suiteVersion",
+    "id",
+    "members"
+  ],
+  "properties": {
+    "suiteVersion": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "name": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "defaults": {
+      "$ref": "#/$defs/connection"
+    },
+    "members": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id"
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "ref"
+            ]
+          },
+          {
+            "required": [
+              "contract"
+            ]
+          }
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/properties/id"
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Individual contract path, relative to this suite."
+          },
+          "contract": {
+            "$ref": "./csvtest.schema.json"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "not": {
+        "required": [
+          "connection",
+          "integratedConnection"
+        ]
+      },
+      "properties": {
+        "connection": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "description": "Secret-backed profile; overridden by explicit contract/target connection settings."
+        },
+        "integratedConnection": {
+          "$ref": "./csvtest.schema.json#/$defs/sqlServerIntegratedConnection"
+        }
+      }
+    }
+  }
+}

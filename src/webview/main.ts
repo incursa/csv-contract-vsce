@@ -1,6 +1,6 @@
 import "@incursa/ui-kit/dist/inc-design-language.css";
 import "./workbench.css";
-import type { CsvContract, ValidationResult } from "../core/model";
+import type { CsvContract, SqlServerIntegratedConnection, ValidationResult } from "../core/model";
 import { predicateDescription } from "../core/predicate";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
@@ -29,7 +29,8 @@ function escape(value: unknown): string {
 }
 
 function configuredSqlTargets(value: CsvContract): Array<{
-  connection: string;
+  connection?: string;
+  integratedConnection?: SqlServerIntegratedConnection;
   schema: string;
   table: string;
   objectType?: "table" | "view";
@@ -39,6 +40,7 @@ function configuredSqlTargets(value: CsvContract): Array<{
   if (value.sqlServer?.schema && value.sqlServer.table) {
     return [{
       connection: value.sqlServer.connection ?? "",
+      integratedConnection: value.sqlServer.integratedConnection,
       schema: value.sqlServer.schema,
       table: value.sqlServer.table,
       objectType: value.sqlServer.objectType,
@@ -229,7 +231,7 @@ function render(): void {
       </div>
       <div class="configured-targets">
         <div class="configured-targets__heading">
-          <div><span class="field-label">CONFIGURED SQL SERVER TARGETS</span><p>Connection strings remain in Secret Storage. Column mappings are saved in this contract.</p></div>
+          <div><span class="field-label">CONFIGURED SQL SERVER TARGETS</span><p>SQL-login secrets remain in Secret Storage. Windows-integrated targets store only server and database names.</p></div>
           <div class="configured-targets__actions">
             <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="add-sql-target">Add table or view</button>
           </div>
@@ -238,7 +240,10 @@ function render(): void {
           ${sqlTargets.map((target, index) => {
             const type = (target.objectType ?? "table").toUpperCase();
             const mappingCount = Object.keys(target.columnMap ?? {}).length;
-            const value = `${target.connection || "unconfigured"}:${target.schema}.${target.table}`;
+            const connectionLabel = target.integratedConnection
+              ? `${target.integratedConnection.server}/${target.integratedConnection.database} (Windows)`
+              : target.connection || "unconfigured";
+            const value = `${connectionLabel}:${target.schema}.${target.table}`;
             return `<div class="configured-target-row sql-target-row">
               <span class="target-type">${type}</span>
               <code title="${escape(value)}">${escape(value)}</code>
@@ -466,6 +471,7 @@ function bind(): void {
       if (contract.sqlServer.targets.length === 0) contract.sqlServer.targets = undefined;
     } else if (index === 0) {
       contract.sqlServer.connection = undefined;
+      contract.sqlServer.integratedConnection = undefined;
       contract.sqlServer.schema = undefined;
       contract.sqlServer.table = undefined;
       contract.sqlServer.objectType = undefined;

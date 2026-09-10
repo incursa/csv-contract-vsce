@@ -1,8 +1,9 @@
-import type { CsvContract, SqlServerScope, SqlServerTableTarget } from "./model";
+import type { CsvContract, SqlServerIntegratedConnection, SqlServerScope, SqlServerTableTarget } from "./model";
 
 export interface ResolvedSqlServerTarget {
   name?: string;
   connection: string;
+  integratedConnection?: SqlServerIntegratedConnection;
   schema: string;
   table: string;
   objectType?: "table" | "view";
@@ -10,8 +11,23 @@ export interface ResolvedSqlServerTarget {
   scope?: SqlServerScope;
 }
 
+export function hasSqlServerConnection(target: ResolvedSqlServerTarget): boolean {
+  return Boolean(target.connection || target.integratedConnection);
+}
+
+export function sqlServerConnectionLabel(target: ResolvedSqlServerTarget): string {
+  const integrated = target.integratedConnection;
+  return integrated ? `${integrated.server}/${integrated.database} (Windows)` : target.connection || "unconfigured";
+}
+
+export function sqlServerConnectionKey(target: ResolvedSqlServerTarget): string {
+  return target.integratedConnection
+    ? `integrated:${JSON.stringify(target.integratedConnection)}`
+    : `profile:${target.connection}`;
+}
+
 export function sqlServerTargetLabel(target: ResolvedSqlServerTarget): string {
-  return target.name ?? `${target.connection}:${target.schema}.${target.table}`;
+  return target.name ?? `${sqlServerConnectionLabel(target)}:${target.schema}.${target.table}`;
 }
 
 export function resolveSqlServerTargets(contract: CsvContract, requireConnection = true): ResolvedSqlServerTarget[] {
@@ -22,6 +38,7 @@ export function resolveSqlServerTargets(contract: CsvContract, requireConnection
     : sqlServer.schema && sqlServer.table
       ? [{
           connection: sqlServer.connection ?? "",
+          integratedConnection: sqlServer.integratedConnection,
           schema: sqlServer.schema,
           table: sqlServer.table,
           objectType: sqlServer.objectType,
@@ -36,8 +53,16 @@ export function resolveSqlServerTargets(contract: CsvContract, requireConnection
     if (!target.schema?.trim() || !target.table?.trim()) {
       throw new Error(`SQL Server target ${index + 1} must declare non-empty schema and table names.`);
     }
-    if (requireConnection && !target.connection?.trim()) {
-      throw new Error(`SQL Server target ${target.schema}.${target.table} must declare a connection profile.`);
+    const connection = target.connection?.trim() ?? "";
+    const integrated = target.integratedConnection;
+    if (connection && integrated) {
+      throw new Error(`SQL Server target ${target.schema}.${target.table} cannot declare both connection and integratedConnection.`);
+    }
+    if (integrated && (!integrated.server?.trim() || !integrated.database?.trim())) {
+      throw new Error(`SQL Server target ${target.schema}.${target.table} must declare non-empty integratedConnection.server and integratedConnection.database values.`);
+    }
+    if (requireConnection && !connection && !integrated) {
+      throw new Error(`SQL Server target ${target.schema}.${target.table} must declare a connection profile or integratedConnection.`);
     }
     const columnMap = target.columnMap ?? {};
     const undeclaredMappings = Object.keys(columnMap).filter((column) => !contract.schema.columns[column]);
@@ -51,7 +76,14 @@ export function resolveSqlServerTargets(contract: CsvContract, requireConnection
     if (duplicatePhysical.length) throw new Error(`SQL Server target ${target.schema}.${target.table} maps more than one contract column to the same physical column.`);
     return {
       name: target.name,
-      connection: target.connection?.trim() ?? "",
+      connection,
+      integratedConnection: integrated ? {
+        server: integrated.server.trim(),
+        database: integrated.database.trim(),
+        ...(integrated.odbcDriver?.trim() ? { odbcDriver: integrated.odbcDriver.trim() } : {}),
+        ...(integrated.encrypt !== undefined ? { encrypt: integrated.encrypt } : {}),
+        ...(integrated.trustServerCertificate !== undefined ? { trustServerCertificate: integrated.trustServerCertificate } : {})
+      } : undefined,
       schema: target.schema.trim(),
       table: target.table.trim(),
       objectType: target.objectType,

@@ -2,7 +2,7 @@
   "name": "csv-contract-vsce",
   "displayName": "CSV Contract Workbench",
   "description": "Design and run reusable YAML contracts for CSV files and SQL Server tables.",
-  "version": "0.11.0",
+  "version": "0.13.0",
   "publisher": "incursa",
   "license": "Apache-2.0",
   "engines": {
@@ -191,6 +191,13 @@
           "*.csvtest.yml"
         ],
         "url": "./schemas/csvtest.schema.json"
+      },
+      {
+        "fileMatch": [
+          "*.csvsuite.yaml",
+          "*.csvsuite.yml"
+        ],
+        "url": "./schemas/csvsuite.schema.json"
       }
     ],
     "configuration": {
@@ -258,6 +265,7 @@
     "@types/vscode": "^1.110.0",
     "@vscode/test-web": "^0.0.81",
     "@vscode/vsce": "^3.7.1",
+    "ajv": "^8.20.0",
     "esbuild": "^0.28.1",
     "eslint": "^9.39.3",
     "jsdom": "^27.4.0",
@@ -268,6 +276,10 @@
     "yaml": "^2.8.1"
   },
   "dependencies": {
+    "msnodesqlv8": "^5.3.0",
     "mssql": "^11.0.1"
+  },
+  "allowScripts": {
+    "msnodesqlv8@5.3.0": true
   }
 }

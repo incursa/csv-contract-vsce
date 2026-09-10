@@ -14,7 +14,8 @@
     "types": [
       "node",
       "vscode"
-    ]
+    ],
+    "resolveJsonModule": true
   },
   "include": [
     "src/**/*.ts",

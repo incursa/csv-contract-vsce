@@ -1,0 +1,13 @@
+version: 1
+schema:
+  allowAdditionalColumns: false
+  columns:
+    Code:
+      presence: required
+      constraints: {notNull: true, unique: true}
+    Name:
+      presence: required
+      constraints: {notNull: true, maxLength: 100}
+sqlServer:
+  schema: reference
+  table: Departments

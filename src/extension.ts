@@ -1,3 +1,5 @@
+import { isSuiteText } from "./core/suite";
+import { registerSuiteDiagnostics, showSuiteRun, showSuiteSql } from "./vscode-suites";
 import * as vscode from "vscode";
 import { createContractFromCsv, parseContract, serializeContract, validateCsv } from "./core/contract";
 import type { CsvContract, SqlServerObjectInfo, SqlServerTableTarget, ValidationResult } from "./core/model";
@@ -15,7 +17,7 @@ import { registerSemanticComparison } from "./vscode-comparison";
 import type { DesktopComparisonRunner } from "./vscode-comparison";
 import { generateSqlServerValidation } from "./core/sql-server-generator";
 import { mergeImportedSchema, parseSqlSchemaSource, type ImportedSqlTable } from "./core/sql-schema-import";
-import { resolveSqlServerTargets, sqlServerTargetLabel, type ResolvedSqlServerTarget } from "./core/sql-server-targets";
+import { hasSqlServerConnection, resolveSqlServerTargets, sqlServerTargetLabel, type ResolvedSqlServerTarget } from "./core/sql-server-targets";
 import { suggestSqlColumnMappings } from "./core/sql-server-column-mapping";
 import { issueRunsToCsv, validationRunExportJson } from "./issue-export";
 
@@ -42,6 +44,7 @@ export function activate(
   const output = vscode.window.createOutputChannel("CSV Contract");
   const provider = new ContractEditorProvider(context, sqlServerRunner, sqlServerBrowser);
   registerTargetContentProvider(context);
+  registerSuiteDiagnostics(context);
   context.subscriptions.push(
     output,
     vscode.window.registerCustomEditorProvider(viewType, provider, {
@@ -49,7 +52,7 @@ export function activate(
       supportsMultipleEditorsPerDocument: false
     }),
     vscode.commands.registerCommand("csv-contract-vsce.createFromCsv", () => createFromCsv()),
-    vscode.commands.registerCommand("csv-contract-vsce.runContract", () => runContract(output, sqlServerRunner)),
+    vscode.commands.registerCommand("csv-contract-vsce.runContract", () => runContract(output, sqlServerRunner, context)),
     vscode.commands.registerCommand("csv-contract-vsce.openWorkbench", (uri?: vscode.Uri) => openWorkbench(uri)),
     vscode.commands.registerCommand("csv-contract-vsce.generateSqlServerValidation", (uri?: vscode.Uri) => generateSqlServerScript(uri)),
     vscode.commands.registerCommand("csv-contract-vsce.importSqlServerSchema", (uri?: vscode.Uri) => importSqlServerSchema(uri)),
@@ -155,14 +158,16 @@ async function importSqlServerSchema(requestedUri?: vscode.Uri): Promise<void> {
 
 async function generateSqlServerScript(requestedUri?: vscode.Uri): Promise<void> {
   const active = vscode.window.activeTextEditor?.document.uri;
-  const specUri = requestedUri?.path.match(/\.csvtest\.ya?ml$/i)
+  const specUri = requestedUri?.path.match(/\.(?:csvtest|csvsuite)\.ya?ml$/i)
     ? requestedUri
-    : active?.path.match(/\.csvtest\.ya?ml$/i)
+    : active?.path.match(/\.(?:csvtest|csvsuite)\.ya?ml$/i)
       ? active
       : await pickFile({ "CSV contracts": ["csvtest.yaml", "csvtest.yml", "yaml", "yml"] });
   if (!specUri) return;
   try {
-    const contract = parseContract(new TextDecoder().decode(await vscode.workspace.fs.readFile(specUri)));
+    const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(specUri));
+    if (isSuiteText(text)) { await showSuiteSql(specUri); return; }
+    const contract = parseContract(text);
     const sqlTargets = resolveSqlServerTargets(contract, false);
     const target = sqlTargets.length === 1 ? sqlTargets[0] : (await vscode.window.showQuickPick(
       sqlTargets.map((candidate) => ({
@@ -174,7 +179,7 @@ async function generateSqlServerScript(requestedUri?: vscode.Uri): Promise<void>
     ))?.target;
     if (!target) return;
     const generated = generateSqlServerValidation(contract, { target });
-    const filename = (specUri.path.split("/").pop() ?? "staging.csvtest.yaml").replace(/\.csvtest\.ya?ml$/i, ".validation.sql");
+    const filename = (specUri.path.split("/").pop() ?? "staging.csvtest.yaml").replace(/\.(?:csvtest|csvsuite)\.ya?ml$/i, ".validation.sql");
     const outputUri = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.joinPath(specUri, "..", filename),
       filters: { "SQL Server validation script": ["sql"] },
@@ -218,12 +223,14 @@ async function createFromCsv(): Promise<void> {
   await vscode.commands.executeCommand("vscode.openWith", outputUri, viewType);
 }
 
-async function runContract(output: vscode.OutputChannel, sqlServerRunner?: DesktopSqlServerRunner): Promise<void> {
+async function runContract(output: vscode.OutputChannel, sqlServerRunner?: DesktopSqlServerRunner, context?: vscode.ExtensionContext): Promise<void> {
   const specUri = await pickFile({ "CSV contracts": ["csvtest.yaml", "csvtest.yml", "yaml", "yml"] });
   if (!specUri) return;
-  const contract = parseContract(new TextDecoder().decode(await vscode.workspace.fs.readFile(specUri)));
+  const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(specUri));
+  if (isSuiteText(text) && context) { await showSuiteRun(context, specUri, sqlServerRunner); return; }
+  const contract = parseContract(text);
   let targets = configuredTargets(specUri, contract);
-  const sqlTargets = resolveSqlServerTargets(contract, false).filter((target) => target.connection);
+  const sqlTargets = resolveSqlServerTargets(contract, false).filter(hasSqlServerConnection);
   if (targets.length === 0 && sqlTargets.length === 0) {
     const csvUris = await pickFiles({ "CSV files": ["csv"] });
     if (!csvUris?.length) return;
@@ -302,7 +309,9 @@ function addConfiguredSqlTarget(contract: CsvContract, target: SqlServerTableTar
   const config = contract.sqlServer ??= {};
   if (config.targets?.length) {
     const existing = config.targets.findIndex((candidate) =>
-      candidate.connection === target.connection && candidate.schema === target.schema && candidate.table === target.table
+      candidate.connection === target.connection &&
+      JSON.stringify(candidate.integratedConnection) === JSON.stringify(target.integratedConnection) &&
+      candidate.schema === target.schema && candidate.table === target.table
     );
     if (existing >= 0) config.targets[existing] = target;
     else config.targets.push(target);
@@ -310,6 +319,7 @@ function addConfiguredSqlTarget(contract: CsvContract, target: SqlServerTableTar
   }
   if (!config.schema || !config.table || (config.schema === target.schema && config.table === target.table)) {
     config.connection = target.connection;
+    config.integratedConnection = target.integratedConnection;
     config.schema = target.schema;
     config.table = target.table;
     config.objectType = target.objectType;
@@ -317,7 +327,8 @@ function addConfiguredSqlTarget(contract: CsvContract, target: SqlServerTableTar
     return;
   }
   const previous: SqlServerTableTarget = {
-    connection: config.connection ?? target.connection,
+    connection: config.connection,
+    integratedConnection: config.integratedConnection,
     schema: config.schema,
     table: config.table,
     objectType: config.objectType,
@@ -325,6 +336,7 @@ function addConfiguredSqlTarget(contract: CsvContract, target: SqlServerTableTar
   };
   config.targets = [previous, target];
   delete config.connection;
+  delete config.integratedConnection;
   delete config.schema;
   delete config.table;
   delete config.objectType;
@@ -397,6 +409,10 @@ async function addSqlServerTarget(
 }
 
 async function openWorkbench(requestedUri?: vscode.Uri): Promise<void> {
+  if (/\.csvsuite\.ya?ml$/i.test((requestedUri ?? vscode.window.activeTextEditor?.document.uri)?.path ?? "")) {
+    await vscode.commands.executeCommand("vscode.openWith", requestedUri ?? vscode.window.activeTextEditor!.document.uri, "default");
+    return;
+  }
   if (requestedUri?.path.match(/\.csvtest\.ya?ml$/i)) {
     await vscode.commands.executeCommand("vscode.openWith", requestedUri, viewType);
     return;
@@ -416,6 +432,11 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
   ) {}
 
   public async resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
+    if (isSuiteText(document.getText())) {
+      await vscode.commands.executeCommand("vscode.openWith", document.uri, "default");
+      panel.dispose();
+      return;
+    }
     panel.webview.options = {
       enableScripts: true,
       localResourceRoots: [this.context.extensionUri]
@@ -430,7 +451,7 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         const contract = parseContract(document.getText());
         const savedTargets = configuredTargets(document.uri, contract);
         const activeTargets = manualTargets ?? savedTargets;
-        const sqlTargets = resolveSqlServerTargets(contract, false).filter((target) => target.connection);
+        const sqlTargets = resolveSqlServerTargets(contract, false).filter(hasSqlServerConnection);
         await panel.webview.postMessage({
           type: "state",
           contract,
@@ -546,7 +567,7 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
           await postState(runs);
           const contract = parseContract(document.getText());
           const targets = manualTargets ?? configuredTargets(document.uri, contract);
-          const sqlTargets = resolveSqlServerTargets(contract, false).filter((target) => target.connection);
+          const sqlTargets = resolveSqlServerTargets(contract, false).filter(hasSqlServerConnection);
           if (targets.length === 0 && sqlTargets.length === 0) {
             void vscode.window.showWarningMessage("Select a CSV or add a configured CSV or SQL Server target before running the contract.");
             return;

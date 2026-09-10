@@ -46,11 +46,14 @@ The aggregate result view keeps diagnostics redacted and bounded. Open complete 
 
 ## Generate SQL Server staging validation and validate tables
 
-Use the same reviewed contract against SQL Server tables and views. In the Workbench, select **Add table or view**, choose or configure a secret-backed read-only connection, and pick the database object. The extension previews exact and suggested column matches before saving the target. Execute the contract from the Workbench, **Workspace Tests**, or **CSV Contract: Run Contract**. Validation is read-only, runs translatable rules server-side, and feeds the normal report. JavaScript regex rules use an exact read-only client fallback.
+Use the same reviewed contract against SQL Server tables and views. A Windows integrated target can be declared directly with non-secret server and database names; SQL logins and custom connection strings continue to use a secret-backed named profile. In the Workbench, **Add table or view** uses a profile to browse objects. Execute the contract from the Workbench, **Workspace Tests**, or **CSV Contract: Run Contract**. Validation is read-only, runs translatable rules server-side, and feeds the normal report. JavaScript regex rules use an exact read-only client fallback.
 
 ```yaml
 sqlServer:
-  connection: warehouse-readonly
+  integratedConnection:
+    server: sqlhost\\instance
+    database: Warehouse
+    trustServerCertificate: true
   schema: staging
   table: PayrollImport
   objectType: table
@@ -85,10 +88,12 @@ sqlServer:
         value: Labor
 ```
 
-Connection strings are stored in VS Code Secret Storage, not contract YAML. The CLI resolves `warehouse-readonly` from `CSV_CONTRACT_SQLSERVER_WAREHOUSE_READONLY` and supports repeated specs, multiple tables/connections, JSON output, and scoped runs:
+`integratedConnection` uses the Windows identity running the desktop extension or CLI and requires ODBC Driver 18 for SQL Server by default. Override `odbcDriver` when another installed driver is required. No connection profile is needed.
+
+For SQL logins, use `connection: warehouse-readonly`. Connection strings are stored in VS Code Secret Storage, not contract YAML. The CLI resolves that profile from `CSV_CONTRACT_SQLSERVER_WAREHOUSE_READONLY` and supports repeated specs, multiple tables/connections, JSON output, and scoped runs:
 
 ```powershell
-npm run cli -- dbtest --spec .\examples\sql-server-staging.csvtest.yaml --scope LoadId=2026-08-24
+node .\dist\cli\csv-contract.cjs dbtest --spec .\examples\sql-server-staging.csvtest.yaml --scope LoadId=2026-08-24
 ```
 
 `columnMap` maps canonical contract names to physical SQL Server names for that target. CSV headers and report output continue to use the canonical names. The optional scope limits every check to one load or batch and binds the value as a query parameter. Server-side translation covers row counts, null, length, allowed-value, uniqueness, shared and SQL-specific conditional rules, row tests, and grouped completeness rules. Use `sqlServer.targets` to apply one contract to multiple tables, views, or connection profiles.
@@ -173,3 +178,7 @@ Run several contracts together:
 ```
 
 Configured file paths and URLs are used automatically. Supply `-Csv` only when you want to override them for a particular run.
+
+## Compound suites
+
+Use an ordered `*.csvsuite.yaml` master to reference contracts with different schemas and tables, or combine them into a portable inline bundle. Both forms run through Workspace Tests and the CLI. See [Compound suites](docs/COMPOUND-SUITES.md) for formats, connection precedence, combine/split commands, round-trip guarantees and execution reporting.

@@ -6,6 +6,7 @@ import { parseContract } from "../src/core/contract";
 import { generateSqlServerValidation } from "../src/core/sql-server-generator";
 import { resolveSqlServerTargets } from "../src/core/sql-server-targets";
 import { suggestSqlColumnMappings } from "../src/core/sql-server-column-mapping";
+import { integratedConnectionString } from "../src/node/sql-server-validator";
 
 function contract(): CsvContract {
   return {
@@ -131,6 +132,29 @@ test("resolves multiple tables and connection profiles without changing shared r
     ["prod", "prod-readonly", "reporting", "Payroll"]
   ]);
   assert.match(generateSqlServerValidation(input, { target: targets[1] }).sql, /\[reporting\]\.\[Payroll\]/);
+});
+
+test("resolves a non-secret Windows integrated connection without a profile", () => {
+  const input = contract();
+  input.sqlServer!.integratedConnection = {
+    server: "sqlhost\\instance",
+    database: "Warehouse",
+    trustServerCertificate: true
+  };
+  const target = resolveSqlServerTargets(input)[0];
+  assert.equal(target.connection, "");
+  assert.deepEqual(target.integratedConnection, input.sqlServer!.integratedConnection);
+  assert.equal(
+    integratedConnectionString(target.integratedConnection!),
+    "Driver={ODBC Driver 18 for SQL Server};Server={sqlhost\\instance};Database={Warehouse};Trusted_Connection=Yes;Encrypt=Yes;TrustServerCertificate=Yes;Application Name={CSV Contract Workbench};"
+  );
+});
+
+test("rejects ambiguous SQL Server authentication settings", () => {
+  const input = contract();
+  input.sqlServer!.connection = "warehouse-readonly";
+  input.sqlServer!.integratedConnection = { server: "sqlhost", database: "Warehouse" };
+  assert.throws(() => resolveSqlServerTargets(input), /cannot declare both connection and integratedConnection/);
 });
 
 test("uses target-specific physical column names while preserving canonical report names", () => {

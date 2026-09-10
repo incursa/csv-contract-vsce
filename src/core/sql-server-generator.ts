@@ -19,6 +19,8 @@ export interface SqlGeneratedRule {
 
 export interface SqlGenerationOptions {
   target?: ResolvedSqlServerTarget;
+  /** Adds provenance columns without changing any check predicate. */
+  suite?: { id: string; member: string };
   /** Generated files declare a placeholder. Runtime execution supplies a bound parameter instead. */
   declareScopeParameter?: boolean;
   /** Standalone scripts include diagnostic rows; direct report execution only needs aggregate results. */
@@ -289,7 +291,7 @@ function generatePhysicalSqlServerValidation(contract: CsvContract, options: Sql
       "-- One row per validation rule. FailureCount = 0 means the rule passed.",
       ...rules.flatMap((rule, index) => [
         index === 0 ? "SELECT" : "UNION ALL SELECT",
-        `  ${sqlString(rule.id)} AS RuleId, ${sqlString(rule.name)} AS RuleName, ${sqlString(rule.severity)} AS Severity, ${sqlString(rule.code)} AS Code,`,
+        `  ${options.suite ? `${sqlString(options.suite.id)} AS SuiteId, ${sqlString(options.suite.member)} AS MemberId, ${sqlString(`${target.schema}.${target.table}`)} AS TableName, ` : ""}${sqlString(rule.id)} AS RuleId, ${sqlString(rule.name)} AS RuleName, ${sqlString(rule.severity)} AS Severity, ${sqlString(rule.code)} AS Code,`,
         `  ${sqlString(rule.column ?? "")} AS ColumnName, ${rule.failureCountSql ?? `(SELECT COUNT_BIG(*) FROM ${table} AS t WHERE (${scopeSql}) AND (${rule.violation}))`} AS FailureCount`
       ]),
       "ORDER BY Severity, RuleId;"

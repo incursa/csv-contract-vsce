@@ -1,0 +1,14 @@
+version: 1
+schema:
+  allowAdditionalColumns: false
+  rowCount: {min: 1}
+  columns:
+    EmployeeId:
+      presence: required
+      constraints: {notNull: true, unique: true}
+    DepartmentCode:
+      presence: required
+      constraints: {notNull: true}
+sqlServer:
+  schema: staging
+  table: Employees

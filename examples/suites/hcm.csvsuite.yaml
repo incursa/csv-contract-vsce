@@ -1,0 +1,10 @@
+suiteVersion: 1
+id: example-hcm
+name: Heterogeneous HCM database checks
+defaults:
+  connection: staging-readonly
+members:
+  - id: employees
+    ref: ./employees.csvtest.yaml
+  - id: departments
+    ref: ./departments.csvtest.yaml

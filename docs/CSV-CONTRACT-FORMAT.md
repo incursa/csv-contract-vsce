@@ -97,7 +97,7 @@ The Workbench reads each target into memory one at a time. VS Code desktop can r
 
 ## SQL Server table and view targets
 
-`sqlServer` applies the contract schema, row tests, conditional rules, and group rules to a table or view. The single-object form uses `connection`, `schema`, and `table`. Use `sqlServer.targets` for multiple objects or connection profiles:
+`sqlServer` applies the contract schema, row tests, conditional rules, and group rules to a table or view. The single-object form uses either a secret-backed `connection` profile or a non-secret Windows `integratedConnection`, plus `schema` and `table`. Use `sqlServer.targets` for multiple objects or connections:
 
 ```yaml
 sqlServer:
@@ -118,6 +118,18 @@ sqlServer:
 ```
 
 VS Code connection profiles live in Secret Storage. CLI profile names map to `CSV_CONTRACT_SQLSERVER_<NORMALIZED_PROFILE>`. A scope can take its runtime value from `valueEnvironment`; `dbtest --scope Parameter=value` overrides it.
+
+An integrated target needs no profile:
+
+```yaml
+sqlServer:
+  integratedConnection:
+    server: sqlhost\\instance
+    database: Warehouse
+    trustServerCertificate: true
+  schema: dbo
+  table: Employees
+```
 
 `columnMap` is specific to a target and maps canonical contract column names to physical SQL Server column names. Exact mappings can be omitted. The Workbench suggests case-insensitive and standardized matches, such as `EmployeeId` to `employee_id`, but leaves ambiguous or unmatched names unmapped for review. Contract rules, CSV headers, and report labels continue to use the canonical names.
 
@@ -209,3 +221,7 @@ This keeps a badly malformed multi-million-row file from exhausting memory just 
 ## Deliberately deferred
 
 Version 1 deliberately uses finite predicates instead of arbitrary expressions. It does not include foreign keys across files, general arithmetic expressions, typed date comparison, JUnit, or SARIF. These can be added later without weakening the exact-string core.
+
+## Compound suites
+
+Use an ordered `*.csvsuite.yaml` master to reference contracts with different schemas and tables, or combine them into a portable inline bundle. Both forms run through Workspace Tests and the CLI. See [Compound suites](COMPOUND-SUITES.md) for formats, connection precedence, combine/split commands, round-trip guarantees and execution reporting.

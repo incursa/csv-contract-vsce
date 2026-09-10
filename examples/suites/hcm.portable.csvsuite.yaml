@@ -1,0 +1,37 @@
+suiteVersion: 1
+id: example-hcm
+name: Heterogeneous HCM database checks
+defaults:
+  connection: staging-readonly
+members:
+  - id: employees
+    contract:
+      version: 1
+      schema:
+        allowAdditionalColumns: false
+        rowCount: { min: 1 }
+        columns:
+          EmployeeId:
+            presence: required
+            constraints: { notNull: true, unique: true }
+          DepartmentCode:
+            presence: required
+            constraints: { notNull: true }
+      sqlServer:
+        schema: staging
+        table: Employees
+  - id: departments
+    contract:
+      version: 1
+      schema:
+        allowAdditionalColumns: false
+        columns:
+          Code:
+            presence: required
+            constraints: { notNull: true, unique: true }
+          Name:
+            presence: required
+            constraints: { notNull: true, maxLength: 100 }
+      sqlServer:
+        schema: reference
+        table: Departments

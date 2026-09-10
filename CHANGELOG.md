@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.13.0
+
+- Added referenced and portable inline compound suites with independent member schemas, rules and SQL targets.
+- Added lossless-semantic combine/split tooling, dependency reporting, safe output handling and explicit connection precedence.
+- Added suite execution reports, collect-all/fail-fast behavior and complete isolated SQL batch generation.
+- Integrated suites into YAML validation, Workspace Tests, Run Contract and existing reports.
+- Treat missing SQL rule summaries as execution errors. Verified 23 local McKee contracts offline (1,303 equivalent generated checks); no database connection.
+
+## 0.12.0
+
+- Added self-contained Windows integrated authentication through the native `msnodesqlv8` driver.
+- Added non-secret `integratedConnection` contract targets containing only the server, database, and ODBC connection options, so users can run database contracts without configuring a named profile.
+- Preserved secret-backed connection profiles for SQL Server logins and custom connection strings.
+
 ## 0.11.0
 
 - Added a Workbench **Add table or view** flow that browses objects from secret-backed SQL Server connection profiles and saves the selected target in contract YAML.

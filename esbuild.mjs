@@ -1,5 +1,5 @@
 import * as esbuild from "esbuild";
-import { mkdir } from "node:fs/promises";
+import { copyFile, cp, mkdir } from "node:fs/promises";
 
 const production = process.argv.includes("--production");
 const watch = process.argv.includes("--watch");
@@ -22,7 +22,7 @@ const builds = [
     outfile: "dist/node/extension.cjs",
     format: "cjs",
     platform: "node",
-    external: ["vscode"]
+    external: ["vscode", "msnodesqlv8"]
   },
   {
     ...shared,
@@ -54,12 +54,15 @@ const builds = [
     outfile: "dist/cli/csv-contract.cjs",
     format: "cjs",
     platform: "node",
-    banner: { js: "#!/usr/bin/env node" }
+    banner: { js: "#!/usr/bin/env node" },
+    external: ["msnodesqlv8"]
   },
   {
     ...shared,
     entryPoints: [
       "test/core.test.ts",
+      "test/suite.test.ts",
+      "test/suite-acceptance.test.ts",
       "test/generator.test.ts",
       "test/streaming.test.ts",
       "test/outline-generator.test.ts",
@@ -75,7 +78,8 @@ const builds = [
     entryNames: "[name]",
     outExtension: { ".js": ".cjs" },
     format: "cjs",
-    platform: "node"
+    platform: "node",
+    external: ["msnodesqlv8"]
   }
 ];
 
@@ -86,3 +90,12 @@ if (watch) {
 } else {
   await Promise.all(builds.map((options) => esbuild.build(options)));
 }
+
+// msnodesqlv8 is a native N-API module and cannot be embedded in the JavaScript
+// bundle. Copy only its runtime files into dist so the packaged VSIX is
+// self-contained while the rest of mssql remains bundled by esbuild.
+await cp("node_modules/msnodesqlv8/lib", "dist/node_modules/msnodesqlv8/lib", { recursive: true });
+await mkdir("dist/node_modules/msnodesqlv8/build/Release", { recursive: true });
+await copyFile("node_modules/msnodesqlv8/build/Release/sqlserver.node", "dist/node_modules/msnodesqlv8/build/Release/sqlserver.node");
+await copyFile("node_modules/msnodesqlv8/package.json", "dist/node_modules/msnodesqlv8/package.json");
+await copyFile("node_modules/msnodesqlv8/LICENSE", "dist/node_modules/msnodesqlv8/LICENSE");

@@ -2,9 +2,26 @@
 
 CSV Contract Workbench can apply the same reviewed contract to CSV files and SQL Server tables or views. Direct database runs are read-only and prefer server-side validation: aggregate rule queries execute in SQL Server and return the standard workbench report. Rules containing JavaScript regular expressions use an exact read-only client fallback because SQL Server does not provide identical JavaScript regex semantics. The report includes an `SQL_CLIENT_FALLBACK` warning when this happens; the fallback projects only declared columns, but it must hold the scoped result in extension memory, so avoid regex rules on unscoped very large objects.
 
-## Configure a connection without storing credentials in YAML
+## Use Windows integrated authentication without a profile
 
-In the Workbench, select **Add table or view**. Choose an existing profile or configure a new one, then select a live database object. The extension previews column matches and updates the contract only after confirmation. Connection strings are stored in VS Code Secret Storage. Use a SQL login with `SELECT` access only; the validator issues metadata queries and `SELECT` statements and never generates data-changing SQL.
+Windows integrated targets contain no credentials, so server and database names can safely live in the contract. The desktop extension and CLI authenticate as the current Windows user through `msnodesqlv8`:
+
+```yaml
+sqlServer:
+  integratedConnection:
+    server: sqlhost\\instance
+    database: Warehouse
+    trustServerCertificate: true
+  schema: staging
+  table: PayrollImport
+  objectType: table
+```
+
+ODBC Driver 18 for SQL Server is used by default. Set `odbcDriver` to another installed driver name when necessary. `encrypt` defaults to `true`, and `trustServerCertificate` defaults to `false`.
+
+## Configure a secret-backed profile
+
+Use a named profile for a SQL login or custom connection string. Run **CSV Contract: Configure SQL Server Connection**, enter the profile name used by `connection`, and store the connection string in VS Code Secret Storage. In the Workbench, **Add table or view** can use that profile to browse objects. Use a login with `SELECT` access only; the validator issues metadata queries and `SELECT` statements and never generates data-changing SQL.
 
 ```yaml
 sqlServer:
@@ -29,7 +46,7 @@ The `dbtest` command supports repeated `--spec` arguments and emits text or JSON
 
 ## Test multiple tables, views, and connections
 
-Use `sqlServer.targets` when the same contract applies to several tables or views. Every target can use a different secret-backed connection profile, column map, and optional display name.
+Use `sqlServer.targets` when the same contract applies to several tables or views. Every target can use either `connection` or `integratedConnection`, plus its own column map and optional display name.
 
 ```yaml
 sqlServer:
@@ -99,3 +116,7 @@ String comparisons honor `csv.caseSensitive` and `csv.trimValues`. The generator
 The first result set contains one row per rule with `RuleId`, `RuleName`, `Severity`, and `FailureCount`. A zero count passes. The remaining result sets return at most `detailLimit` failing rows per rule for diagnosis.
 
 Translated rules include row counts, configured null markers, minimum and maximum lengths, allowed values, per-column and composite uniqueness, shared conditional rules, row-test counts and cell expectations, SQL-specific conditional rules, and grouped completeness rules. Generated scripts explicitly warn about JavaScript regular expressions; direct execution preserves their semantics with client fallback.
+
+## Compound suites
+
+Use an ordered `*.csvsuite.yaml` master to reference contracts with different schemas and tables, or combine them into a portable inline bundle. Both forms run through Workspace Tests and the CLI. See [Compound suites](COMPOUND-SUITES.md) for formats, connection precedence, combine/split commands, round-trip guarantees and execution reporting.
