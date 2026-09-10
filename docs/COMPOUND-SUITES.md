@@ -186,6 +186,24 @@ and rules. **Run suite** displays member results and failure details in the edit
 contract** opens the embedded mapping in YAML beside the suite. **Edit suite YAML**
 provides schema validation and completion. Opening a suite does not execute tests.
 
+Starting with 0.13.2, **Edit default connection** changes suite defaults, and each
+member's **Edit connection** changes its contract connection or a selected table
+override. Explicit table settings override contract settings, which override suite
+defaults. Choose **Inherit / remove override** to use the next level. Referenced
+contracts are edited at their source; inline contracts are edited inside the suite.
+These are undoable document edits; save the changed documents to persist them.
+Windows integrated settings include server, database, encryption, certificate trust
+and optional ODBC driver. **Configure profile credentials** creates or replaces a
+named profile in VS Code Secret Storage; credentials are never written into YAML.
+
+Execution errors retain SQL/ODBC diagnostic fields and nested messages. Assertion
+details are expanded by default. **Export errors / results** opens a Save dialog:
+CSV contains retained issues, execution errors and skipped reasons with suite,
+member, table and rule identity; JSON contains the complete in-memory suite report.
+Truncated validation details remain marked as truncated. Export saves existing
+results without querying the database again. Previous runs must be repeated after
+updating from a version that reduced driver errors to `[object Object]`.
+
 If VS Code kept an existing text-editor association, use **Reopen Editor With →
 CSV Contract Workbench**, or **CSV Contract: Open Workbench**, after updating to
 0.13.1 or later.

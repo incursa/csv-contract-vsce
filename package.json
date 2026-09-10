@@ -2,7 +2,7 @@
   "name": "csv-contract-vsce",
   "displayName": "CSV Contract Workbench",
   "description": "Design and run reusable YAML contracts for CSV files and SQL Server tables.",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "publisher": "incursa",
   "license": "Apache-2.0",
   "engines": {

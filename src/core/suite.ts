@@ -1,3 +1,4 @@
+import { errorDetails } from "./error-details";
 import { isScalar, parseDocument, stringify, visit } from "yaml";
 import { parseContract } from "./contract";
 import type { CsvContract, CsvTarget, SqlServerIntegratedConnection, ValidationResult } from "./model";
@@ -122,7 +123,7 @@ export async function loadSuite(source: string, io: SuiteIO, ancestors: string[]
       if (!validateContractShape(contract)) throw new Error(`Invalid contract: ${JSON.stringify(validateContractShape.errors)}`);
       members.push({ id: member.id, source: location, contract: effectiveContract(contract, suite.defaults) });
     } catch (error) {
-      members.push({ id: member.id, source: location, error: error instanceof Error ? error.message : String(error) });
+      members.push({ id: member.id, source: location, error: errorDetails(error) });
     }
   }
   return { id: suite.id, source, isSuite: true, members };
@@ -158,7 +159,7 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
           runs.push({ ...identity, status: result.valid ? "PASS" : "FAIL", result });
           if (failFast && !result.valid) stopped = true;
         } catch (error) {
-          runs.push({ ...identity, status: "ERROR", error: error instanceof Error ? error.message : String(error) });
+          runs.push({ ...identity, status: "ERROR", error: errorDetails(error) });
           if (failFast) stopped = true;
         }
       }
@@ -170,12 +171,12 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
           runs.push({ ...identity, status: result.valid ? "PASS" : "FAIL", result });
           if (failFast && !result.valid) stopped = true;
         } catch (error) {
-          runs.push({ ...identity, status: "ERROR", error: error instanceof Error ? error.message : String(error) });
+          runs.push({ ...identity, status: "ERROR", error: errorDetails(error) });
           if (failFast) stopped = true;
         }
       }
     } catch (error) {
-      runs.push({ ...base, status: "ERROR", error: error instanceof Error ? error.message : String(error) });
+      runs.push({ ...base, status: "ERROR", error: errorDetails(error) });
       if (failFast) stopped = true;
     }
   }

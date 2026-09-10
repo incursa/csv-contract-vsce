@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.2
+
+- Preserve structured SQL/ODBC execution error messages and diagnostic fields instead of displaying `[object Object]`.
+- Add suite default and per-member/table connection editing, plus access to secret-backed profile configuration.
+- Add CSV error export and JSON suite result export, including execution errors, member/table/rule identity and truncation indicators. Expand assertion details by default.
+- Cover structured errors, connection scope preservation and the new Workbench actions with regression tests.
+
 ## 0.13.1
 
 - Fixed suite files opening as plain YAML: registered both suite suffixes with the default Workbench editor and removed the text-editor redirect.

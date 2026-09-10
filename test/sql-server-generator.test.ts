@@ -6,7 +6,22 @@ import { parseContract } from "../src/core/contract";
 import { generateSqlServerValidation } from "../src/core/sql-server-generator";
 import { resolveSqlServerTargets } from "../src/core/sql-server-targets";
 import { suggestSqlColumnMappings } from "../src/core/sql-server-column-mapping";
-import { integratedConnectionString } from "../src/node/sql-server-validator";
+import { integratedConnectionString, SqlServerValidationSession } from "../src/node/sql-server-validator";
+
+test("native ODBC connection failures retain diagnostics before mssql wraps them", { skip: process.platform !== "win32" || process.arch !== "x64" }, async () => {
+  // A nonexistent local driver fails in Driver Manager, without contacting a server.
+  const session = new SqlServerValidationSession(() => { throw new Error("No profiles expected"); });
+  const spec: CsvContract = { version: 1, schema: { columns: { Id: { presence: "required" } } }, sqlServer: {
+    schema: "dbo", table: "Synthetic", integratedConnection: { server: "127.0.0.1", database: "synthetic", odbcDriver: "__csv_contract_missing_driver_873e93" }
+  } };
+  try {
+    await assert.rejects(session.validate(spec, resolveSqlServerTargets(spec)[0]), (error: Error) => {
+      assert.doesNotMatch(error.message, /\[object Object\]/);
+      assert.match(error.message, /IM002|driver|data source/i);
+      return true;
+    });
+  } finally { await session.dispose(); }
+});
 
 function contract(): CsvContract {
   return {

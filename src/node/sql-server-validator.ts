@@ -1,3 +1,4 @@
+import { errorDetails } from "../core/error-details";
 import sql from "mssql";
 import { assertCompleteSqlSummaries } from "../core/sql-server-results";
 import Papa from "papaparse";
@@ -165,19 +166,34 @@ ORDER BY s.name, o.name, c.column_id;`);
     if (integrated) {
       if (process.platform !== "win32" || process.arch !== "x64") throw new Error("Bundled Windows integrated authentication requires Windows x64. Use a connection profile on other platforms.");
       const nativeSql = (await import("mssql/msnodesqlv8")).default;
+      const nativeDriver = (await import("msnodesqlv8")).default;
       const connectionString = integratedConnectionString(integrated);
       const nativeConfig = {
         server: integrated.server,
         database: integrated.database,
         driver: "msnodesqlv8",
         connectionString,
+        requestTimeout: 15000,
         options: {
           trustedConnection: true,
           encrypt: integrated.encrypt ?? true,
           trustServerCertificate: integrated.trustServerCertificate ?? false
         }
       } as sql.config & { connectionString: string };
-      const pool = await new nativeSql.ConnectionPool(nativeConfig).connect();
+      // mssql wraps non-Error ODBC objects with Error(object), losing diagnostics.
+      // Keep the normal pool/request lifecycle, but normalize at the open boundary.
+      class DiagnosticPool extends nativeSql.ConnectionPool {
+        _poolCreate() {
+          return new Promise<import("msnodesqlv8/types").Connection>((resolve, reject) => {
+            nativeDriver.open({ conn_str: connectionString, conn_timeout: 15 }, (error, connection) => {
+              if (error) { reject(new Error(errorDetails(error))); return; }
+              connection.setUseUTC(true);
+              resolve(connection);
+            });
+          });
+        }
+      }
+      const pool = await new DiagnosticPool(nativeConfig).connect();
       handle = { api: nativeSql as SqlApi, pool: pool as sql.ConnectionPool };
     } else {
       const connectionString = await this.resolveConnectionString(profile);
