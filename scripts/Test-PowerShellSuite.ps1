@@ -35,13 +35,16 @@ function Invoke-ChildPowerShell {
     $processArguments = @($Arguments | ForEach-Object {
         if ($_ -match '[\s"]') { '"' + $_.Replace('"', '\"') + '"' } else { $_ }
     })
+    $processOptions = @{}
+    if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+        $processOptions.WindowStyle = 'Hidden'
+    }
     try {
-        $process = Start-Process `
+        $process = Start-Process @processOptions `
             -FilePath $hostExecutable `
             -ArgumentList $processArguments `
             -RedirectStandardOutput $outputFile `
             -RedirectStandardError $ErrorFile `
-            -WindowStyle Hidden `
             -Wait `
             -PassThru
         return [pscustomobject]@{
