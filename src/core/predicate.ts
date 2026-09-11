@@ -3,6 +3,7 @@ import type { CsvOptions, Predicate, PredicateLeaf } from "./model";
 const expressionCache = new Map<string, RegExp | null>();
 
 export interface PredicateRuntime {
+  dateValue?(column: string): string | undefined;
   value(column: string): string;
   normalize(value: string): string;
   isNull(value: string): boolean;
@@ -51,7 +52,7 @@ export function createPredicateRuntime(
 function evaluateLeaf(leaf: PredicateLeaf, runtime: PredicateRuntime): boolean {
   const actual = runtime.value(leaf.column);
   const normalized = runtime.normalize(actual);
-  const expected = leaf.value === undefined ? "" : String(leaf.value);
+  const expected = leaf.value !== undefined ? String(leaf.value) : leaf.otherColumn !== undefined && /^(?:greater|less|date)/.test(leaf.operator) ? runtime.value(leaf.otherColumn) : "";
   const normalizedExpected = runtime.normalize(expected);
   const other = leaf.otherColumn === undefined ? "" : runtime.value(leaf.otherColumn);
   switch (leaf.operator) {
@@ -84,7 +85,24 @@ function evaluateLeaf(leaf: PredicateLeaf, runtime: PredicateRuntime): boolean {
     case "greaterThanOrEqual": return numeric(actual, expected, (left, right) => left >= right);
     case "lessThan": return numeric(actual, expected, (left, right) => left < right);
     case "lessThanOrEqual": return numeric(actual, expected, (left, right) => left <= right);
+    case "dateOnOrAfter": return dateCompare(runtime.dateValue?.(leaf.column) ?? actual, leaf.value === undefined && leaf.otherColumn ? runtime.dateValue?.(leaf.otherColumn) ?? expected : expected, (a, b) => a >= b);
+    case "dateOnOrBefore": return dateCompare(runtime.dateValue?.(leaf.column) ?? actual, leaf.value === undefined && leaf.otherColumn ? runtime.dateValue?.(leaf.otherColumn) ?? expected : expected, (a, b) => a <= b);
+    case "dateAfter": return dateCompare(runtime.dateValue?.(leaf.column) ?? actual, leaf.value === undefined && leaf.otherColumn ? runtime.dateValue?.(leaf.otherColumn) ?? expected : expected, (a, b) => a > b);
+    case "dateBefore": return dateCompare(runtime.dateValue?.(leaf.column) ?? actual, leaf.value === undefined && leaf.otherColumn ? runtime.dateValue?.(leaf.otherColumn) ?? expected : expected, (a, b) => a < b);
   }
+}
+
+/** ISO date-only (UTC midnight) or ISO instant with explicit Z/offset; no local-time guessing. */
+export function isoDate(value: string): number {
+  if (!/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?(?:Z|[+-]\d{2}:\d{2}))?$/.test(value)) return NaN;
+  const day = value.slice(0, 10);
+  const midnight = Date.parse(day);
+  if (!Number.isFinite(midnight) || new Date(midnight).toISOString().slice(0, 10) !== day) return NaN;
+  return Date.parse(value);
+}
+function dateCompare(actual: string, expected: string, compare: (a: number, b: number) => boolean): boolean {
+  const a = isoDate(actual), b = isoDate(expected);
+  return Number.isFinite(a) && Number.isFinite(b) && compare(a, b);
 }
 
 function numeric(actual: string, expected: string, compare: (left: number, right: number) => boolean): boolean {

@@ -1,3 +1,5 @@
+import { baselineIssues, CsvSchemaObservation, resolveBaseline } from "../core/baseline";
+import { fileSuiteIO } from "./suite-files";
 import { stat } from "node:fs/promises";
 import type {
   ColumnConstraints,
@@ -92,6 +94,7 @@ interface PreparedRowTest {
 interface PreparedRule {
   rule: ConditionalRule;
   valid: boolean;
+  outcome?: { id: string; selected: number; passed: number; failed: number };
 }
 
 interface PreparedGroupRule {
@@ -118,6 +121,7 @@ interface ContractState {
   input: ContractRunInput;
   options: Required<CsvOptions>;
   collector: IssueCollector;
+  observation?: CsvSchemaObservation;
   headers: string[];
   headerIndex: Map<string, number>;
   declared: Set<string>;
@@ -210,6 +214,7 @@ function initializeState(
 ): void {
   const { contract } = state.input;
   state.headers = rawHeaders.map((header) => state.options.trimValues ? header.trim() : header);
+  if (contract.baseline) state.observation = new CsvSchemaObservation(state.headers, contract.csv);
   state.headers.forEach((header, index) => {
     if (!state.headerIndex.has(header)) state.headerIndex.set(header, index);
   });
@@ -371,6 +376,7 @@ function initializeState(
 function processRow(state: ContractState, fields: string[], recordNumber: number,
   uniqueness?: PartitionedUniquenessStore, groups?: PartitionedGroupStore): void {
   state.rowCount += 1;
+  state.observation?.add(fields);
   if (!state.options.allowRaggedRows && fields.length !== state.headers.length) {
     state.collector.add({
       level: "file",
@@ -443,7 +449,10 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
   for (const prepared of state.rules) {
     if (!prepared.valid) continue;
     if (prepared.rule.when && !evaluatePredicate(prepared.rule.when, runtime)) continue;
-    if (evaluatePredicate(prepared.rule.expect, runtime)) continue;
+    const outcome = prepared.outcome ??= { id: prepared.rule.id, selected: 0, passed: 0, failed: 0 };
+    outcome.selected++;
+    if (evaluatePredicate(prepared.rule.expect, runtime)) { outcome.passed++; continue; }
+    outcome.failed++;
     state.collector.add({
       level: "row",
       code: "RULE_FAILED",
@@ -513,6 +522,7 @@ function addGroupIssues(group: GroupValues, checks: Map<number, GroupCheck>): vo
 }
 
 function finalizeState(state: ContractState): ContractRunOutput {
+  if (state.observation) state.collector.addAll(baselineIssues(state.input.contract, state.observation.snapshot()));
   state.collector.addAll(countIssues("row_count", state.rowCount, state.input.contract.schema.rowCount, "file"));
   for (const prepared of state.rowTests) {
     if (prepared.valid) {
@@ -523,6 +533,7 @@ function finalizeState(state: ContractState): ContractRunOutput {
     spec: state.input.spec,
     result: {
       valid: state.collector.errors === 0,
+      ruleOutcomes: state.rules.filter(r => r.valid).map(r => r.outcome ?? { id: r.rule.id, selected: 0, passed: 0, failed: 0 }),
       rowCount: state.rowCount,
       columnCount: state.headers.length,
       testCount: Object.keys(state.input.contract.schema.columns).length + (state.input.contract.rowTests?.length ?? 0) +
@@ -605,6 +616,7 @@ export async function validateCsvFile(
   options: StreamingValidationOptions = {}
 ): Promise<StreamingValidationOutput> {
   if (inputs.length === 0) throw new Error("At least one contract is required.");
+  inputs = await Promise.all(inputs.map(async input => ({ ...input, contract: await resolveBaseline(input.contract, input.spec, fileSuiteIO) })));
   const resolved = {
     ...options,
     maxIssues: options.maxIssues ?? 1000,

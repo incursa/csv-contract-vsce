@@ -1,5 +1,11 @@
 # SQL Server staging validation
 
+For explicit metadata baselines/preflight, full-scope executable previews, opt-in
+live tests, timeouts/retries and cross-table aggregates, see
+[Validator workflows](VALIDATOR-WORKFLOWS.md). Opening an editor never runs a query;
+SQL schema capture and test execution require an explicit action. Date predicates
+also use the exact client fallback described below.
+
 CSV Contract Workbench can apply the same reviewed contract to CSV files and SQL Server tables or views. Direct database runs are read-only and prefer server-side validation: aggregate rule queries execute in SQL Server and return the standard workbench report. Rules containing JavaScript regular expressions use an exact read-only client fallback because SQL Server does not provide identical JavaScript regex semantics. The report includes an `SQL_CLIENT_FALLBACK` warning when this happens; the fallback projects only declared columns, but it must hold the scoped result in extension memory, so avoid regex rules on unscoped very large objects.
 
 ## Use Windows integrated authentication without a profile

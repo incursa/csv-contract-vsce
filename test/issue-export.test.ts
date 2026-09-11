@@ -68,5 +68,5 @@ test("JSON export discloses when validation retained fewer issue details than it
   assert.equal(output.totals.issues, 12);
   assert.equal(output.totals.retainedIssueDetails, 2);
   assert.equal(output.totals.issueDetailsComplete, false);
-  assert.equal(output.runs[0].result.truncated, true);
+  assert.equal(output.runs[0].result!.truncated, true);
 });

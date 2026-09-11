@@ -1,5 +1,18 @@
+import { LiveTests } from "./core/live-tests";
+import { DependencyWatchers } from "./vscode-dependencies";
+import type { CrossExecutor } from "./core/cross-checks";
+import { insertTemplate, parseTemplate } from "./core/authoring";
+import { manageHistory } from "./vscode-history";
+import { filterResultRuns } from "./results-view";
+import { errorDetails } from "./core/error-details";
+import { effectiveContract, parseSuite, runSuite, type SuiteRun } from "./core/suite";
+import { editBaseline, type SqlSchemaReader } from "./vscode-baselines";
+import { preflight } from "./core/preflight";
+import { previewContract } from "./core/preview";
+import { resolveBaseline } from "./core/baseline";
+import { readEditorContract, ruleOffset, updateEditorContract } from "./core/editor-document";
 import { isSuiteText } from "./core/suite";
-import { registerSuiteDiagnostics, resolveSuiteEditor, showSuiteRun, showSuiteSql } from "./vscode-suites";
+import { editSuiteConnection, vscodeSuiteIO, registerSuiteDiagnostics, resolveSuiteEditor, showSuiteRun, showSuiteSql } from "./vscode-suites";
 import * as vscode from "vscode";
 import { createContractFromCsv, parseContract, serializeContract, validateCsv } from "./core/contract";
 import type { CsvContract, SqlServerObjectInfo, SqlServerTableTarget, ValidationResult } from "./core/model";
@@ -25,10 +38,12 @@ const viewType = "csv-contract-vsce.contractEditor";
 
 interface TargetRun {
   target: string;
-  result: ValidationResult;
+  result?: ValidationResult;
+  status?: string;
+  error?: string;
 }
 
-export type DesktopSqlServerRunner = (contract: CsvContract, target: ResolvedSqlServerTarget) => Promise<ValidationResult>;
+export type DesktopSqlServerRunner = (contract: CsvContract, target: ResolvedSqlServerTarget, signal?: AbortSignal) => Promise<ValidationResult>;
 export type DesktopSqlServerBrowser = (profile: string) => Promise<SqlServerObjectInfo[]>;
 
 const sqlConnectionProfilesKey = "csvContract.sqlServer.connectionProfiles";
@@ -39,10 +54,12 @@ export function activate(
   context: vscode.ExtensionContext,
   desktopComparisonRunner?: DesktopComparisonRunner,
   sqlServerRunner?: DesktopSqlServerRunner,
-  sqlServerBrowser?: DesktopSqlServerBrowser
-): void {
+  sqlServerBrowser?: DesktopSqlServerBrowser,
+  sqlSchemaReader?: SqlSchemaReader,
+  crossExecutor?: CrossExecutor
+): { testHooks?: ContractEditorProvider } {
   const output = vscode.window.createOutputChannel("CSV Contract");
-  const provider = new ContractEditorProvider(context, sqlServerRunner, sqlServerBrowser);
+  const provider = new ContractEditorProvider(context, sqlServerRunner, sqlServerBrowser, sqlSchemaReader, crossExecutor);
   registerTargetContentProvider(context);
   registerSuiteDiagnostics(context);
   context.subscriptions.push(
@@ -52,7 +69,7 @@ export function activate(
       supportsMultipleEditorsPerDocument: false
     }),
     vscode.commands.registerCommand("csv-contract-vsce.createFromCsv", () => createFromCsv()),
-    vscode.commands.registerCommand("csv-contract-vsce.runContract", () => runContract(output, sqlServerRunner, context)),
+    vscode.commands.registerCommand("csv-contract-vsce.runContract", () => runContract(output, sqlServerRunner, context, crossExecutor)),
     vscode.commands.registerCommand("csv-contract-vsce.openWorkbench", (uri?: vscode.Uri) => openWorkbench(uri)),
     vscode.commands.registerCommand("csv-contract-vsce.generateSqlServerValidation", (uri?: vscode.Uri) => generateSqlServerScript(uri)),
     vscode.commands.registerCommand("csv-contract-vsce.importSqlServerSchema", (uri?: vscode.Uri) => importSqlServerSchema(uri)),
@@ -60,8 +77,9 @@ export function activate(
     vscode.commands.registerCommand("csv-contract-vsce.forgetSqlServerConnection", () => forgetSqlServerConnection(context)),
     vscode.commands.registerCommand("csv-contract-vsce.addSqlServerTarget", (uri?: vscode.Uri) => addSqlServerTarget(context, uri, sqlServerBrowser))
   );
-  registerWorkspaceExplorer(context, output, sqlServerRunner);
+  registerWorkspaceExplorer(context, output, sqlServerRunner, crossExecutor);
   registerSemanticComparison(context, desktopComparisonRunner);
+  return context.extensionMode === vscode.ExtensionMode.Test ? { testHooks: provider } : {};
 }
 
 async function chooseImportedTable(tables: ImportedSqlTable[]): Promise<ImportedSqlTable | undefined> {
@@ -87,7 +105,8 @@ async function replaceTextDocument(document: vscode.TextDocument, text: string):
   if (!await vscode.workspace.applyEdit(edit)) throw new Error("VS Code could not apply the schema import to the contract.");
 }
 
-async function importSqlServerSchema(requestedUri?: vscode.Uri): Promise<void> {
+interface EditorBinding { read(): CsvContract; write(c: CsvContract): Promise<void> }
+async function importSqlServerSchema(requestedUri?: vscode.Uri, binding?: EditorBinding): Promise<void> {
   const sourceUri = await pickFile({
     "SQL Server table schema": ["sql", "json"],
     "All files": ["*"]
@@ -98,6 +117,16 @@ async function importSqlServerSchema(requestedUri?: vscode.Uri): Promise<void> {
     const extension = /\.[^./]+$/.exec(sourceUri.path)?.[0] ?? "";
     const table = await chooseImportedTable(parseSqlSchemaSource(sourceText, extension));
     if (!table) return;
+    if (binding) {
+      const original = binding.read();
+      const merged = mergeImportedSchema(original, table);
+      const preview = await vscode.workspace.openTextDocument({ language: "yaml", content: serializeContract(merged.contract) });
+      await vscode.window.showTextDocument(preview, { viewColumn: vscode.ViewColumn.Beside });
+      if (await vscode.window.showInformationMessage("Apply reviewed schema import?", { modal: true, detail: JSON.stringify(merged.preview) }, "Apply") !== "Apply") return;
+      if (JSON.stringify(binding.read()) !== JSON.stringify(original)) throw new Error("Contract changed while reviewing import.");
+      await binding.write(merged.contract);
+      return;
+    }
 
     const active = vscode.window.activeTextEditor?.document.uri;
     let contractUri = requestedUri?.path.match(/\.csvtest\.ya?ml$/i) ? requestedUri
@@ -223,12 +252,12 @@ async function createFromCsv(): Promise<void> {
   await vscode.commands.executeCommand("vscode.openWith", outputUri, viewType);
 }
 
-async function runContract(output: vscode.OutputChannel, sqlServerRunner?: DesktopSqlServerRunner, context?: vscode.ExtensionContext): Promise<void> {
+async function runContract(output: vscode.OutputChannel, sqlServerRunner?: DesktopSqlServerRunner, context?: vscode.ExtensionContext, crossExecutor?: CrossExecutor): Promise<void> {
   const specUri = await pickFile({ "CSV contracts": ["csvtest.yaml", "csvtest.yml", "yaml", "yml"] });
   if (!specUri) return;
   const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(specUri));
-  if (isSuiteText(text) && context) { await showSuiteRun(context, specUri, sqlServerRunner); return; }
-  const contract = parseContract(text);
+  if (isSuiteText(text) && context) { await showSuiteRun(context, specUri, sqlServerRunner, crossExecutor); return; }
+  const contract = await resolveBaseline(parseContract(text), specUri.toString(), vscodeSuiteIO);
   let targets = configuredTargets(specUri, contract);
   const sqlTargets = resolveSqlServerTargets(contract, false).filter(hasSqlServerConnection);
   if (targets.length === 0 && sqlTargets.length === 0) {
@@ -346,20 +375,22 @@ function addConfiguredSqlTarget(contract: CsvContract, target: SqlServerTableTar
 async function addSqlServerTarget(
   context: vscode.ExtensionContext,
   requestedUri: vscode.Uri | undefined,
-  sqlServerBrowser: DesktopSqlServerBrowser | undefined
+  sqlServerBrowser: DesktopSqlServerBrowser | undefined,
+  binding?: EditorBinding
 ): Promise<void> {
   if (!sqlServerBrowser) {
     void vscode.window.showErrorMessage("Browsing SQL Server tables and views requires the desktop extension host.");
     return;
   }
   const active = vscode.window.activeTextEditor?.document.uri;
-  const specUri = requestedUri?.path.match(/\.csvtest\.ya?ml$/i) ? requestedUri
+  const specUri = binding ? requestedUri : requestedUri?.path.match(/\.csvtest\.ya?ml$/i) ? requestedUri
     : active?.path.match(/\.csvtest\.ya?ml$/i) ? active
       : await pickFile({ "CSV contracts": ["csvtest.yaml", "csvtest.yml", "yaml", "yml"] });
   if (!specUri) return;
   try {
     const document = await vscode.workspace.openTextDocument(specUri);
-    const contract = parseContract(document.getText());
+    const contract = binding?.read() ?? parseContract(document.getText());
+    const original = JSON.stringify(contract);
     const profile = await chooseSqlConnectionProfile(context);
     if (!profile) return;
     const objects = await vscode.window.withProgress({
@@ -401,7 +432,10 @@ async function addSqlServerTarget(
       objectType: selected.objectType,
       columnMap: Object.keys(suggestion.columnMap).length ? suggestion.columnMap : undefined
     });
-    await replaceTextDocument(document, serializeContract(contract));
+    if (binding) {
+      if (JSON.stringify(binding.read()) !== original) throw new Error("Contract changed while browsing SQL targets.");
+      await binding.write(contract);
+    } else await replaceTextDocument(document, updateEditorContract(document.getText(), contract));
     void vscode.window.showInformationMessage(`Added ${selected.objectType} ${selected.schema}.${selected.name} using '${profile}'.`);
   } catch (error) {
     void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
@@ -425,17 +459,33 @@ async function openWorkbench(requestedUri?: vscode.Uri): Promise<void> {
 }
 
 class ContractEditorProvider implements vscode.CustomTextEditorProvider {
+  public readonly testActions = new Map<string, (message: any) => Promise<void>>();
+  public readonly testStates = new Map<string, { runs: TargetRun[]; stale: boolean; live: boolean; completedRuns: number }>();
   public constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly sqlServerRunner?: DesktopSqlServerRunner,
-    private readonly sqlServerBrowser?: DesktopSqlServerBrowser
+    private readonly sqlServerBrowser?: DesktopSqlServerBrowser,
+    private readonly sqlSchemaReader?: SqlSchemaReader,
+    private readonly crossExecutor?: CrossExecutor
   ) {}
 
   public async resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
     if (/\.csvsuite\.ya?ml$/i.test(document.uri.path) || isSuiteText(document.getText())) {
-      await resolveSuiteEditor(document, panel, this.sqlServerRunner);
+      await resolveSuiteEditor(document, panel, this.sqlServerRunner, async (memberId) => {
+        const child = vscode.window.createWebviewPanel(viewType, memberId, vscode.ViewColumn.Beside, {});
+        const member = parseSuite(document.getText()).members.find(m => m.id === memberId)!;
+        if (member.ref) await this.resolveContractEditor(await vscode.workspace.openTextDocument(vscode.Uri.parse(vscodeSuiteIO.resolve(document.uri.toString(), member.ref))), child, undefined, document);
+        else await this.resolveContractEditor(document, child, memberId);
+      }, this.context, this.crossExecutor, this.sqlSchemaReader);
       return;
     }
+    await this.resolveContractEditor(document, panel);
+  }
+
+  public async resolveContractEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel, memberId?: string, suiteContext?: vscode.TextDocument): Promise<void> {
+    const read = () => readEditorContract(document.getText(), memberId);
+    const effective = (contract: CsvContract) => effectiveContract(contract, suiteContext ? parseSuite(suiteContext.getText()).defaults : memberId ? parseSuite(document.getText()).defaults : undefined);
+    const write = (contract: CsvContract) => this.replaceDocument(document, updateEditorContract(document.getText(), contract, memberId));
     panel.webview.options = {
       enableScripts: true,
       localResourceRoots: [this.context.extensionUri]
@@ -443,19 +493,79 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
     panel.webview.html = this.html(panel.webview);
     let manualTargets: ResolvedTarget[] | undefined;
     let latestRuns: TargetRun[] = [];
+    let stale = false;
+    let runNotice = "";
+    let previewRule: string | undefined;
+    let completedRuns = 0;
+    let watchInputs = false;
+    let consecutiveErrors = 0;
+    const scheduler = new LiveTests<{ contract: CsvContract; preview?: string; targets?: ResolvedTarget[] }, SuiteRun[]>(async (draft, signal) => {
+      let contract = await resolveBaseline(draft.contract, document.uri.toString(), vscodeSuiteIO);
+      let files = draft.targets ?? configuredTargets(document.uri, contract);
+      let sqlTargets = resolveSqlServerTargets(contract, false);
+      if (draft.preview) {
+        contract = previewContract(contract, draft.preview);
+        const target = await vscode.window.showQuickPick([
+          ...files.map((t, index) => ({ label: t.label, sourceKind: "csv", index })),
+          ...sqlTargets.map((t, index) => ({ label: sqlServerTargetLabel(t), sourceKind: "sql", index }))
+        ], { title: `Run full-scope preview: ${draft.preview}`, placeHolder: "Executes the current draft against one selected source. Regex/date SQL predicates may read the full scope into the client." });
+        if (!target) {
+          runNotice = "Preview canceled before execution.";
+          return [{ suite: document.uri.toString(), spec: document.uri.toString(), member: memberId ?? "contract", status: "CANCELED", error: runNotice }];
+        }
+        files = target.sourceKind === "csv" ? [files[target.index]] : [];
+        sqlTargets = target.sourceKind === "sql" ? [sqlTargets[target.index]] : [];
+      }
+      if (!files.length && !sqlTargets.length) throw new Error("No targets configured. Choose a CSV or configure a SQL target.");
+      contract = { ...contract, targets: files.map((_, index) => ({ path: String(index) })),
+        sqlServer: sqlTargets.length ? { ...contract.sqlServer, table: undefined, targets: sqlTargets } : undefined };
+      let completed = 0;
+      runNotice = `${draft.preview ? `Full-scope preview: ${draft.preview}` : "Full validation"} · ${new Date().toISOString()}`;
+      await panel.webview.postMessage({ type: "runState", running: true, total: files.length + sqlTargets.length });
+      try {
+        const report = await runSuite({ id: document.uri.toString(), source: document.uri.toString(), isSuite: false,
+          members: [{ id: memberId ?? "contract", source: document.uri.toString(), contract }] }, async (c, target) => {
+          if (!this.sqlServerRunner) throw new Error("SQL execution requires the desktop extension host.");
+          return this.sqlServerRunner(c, target, signal);
+        }, false, async (c, _source, target) => validateCsv(c, await readTargetText(files[Number(target.path)])), {
+          signal, onProgress: run => { completed++; void panel.webview.postMessage({ type: "runState", running: true, target: run.table ?? files[Number(run.target)]?.label, index: completed, total: files.length + sqlTargets.length }); }
+        });
+        return report.runs.map(run => ({ ...run, target: run.table ?? files[Number(run.target)]?.label ?? run.target }));
+      } finally { await panel.webview.postMessage({ type: "runState", running: false }); }
+    }, (runs) => { completedRuns++; stale = false; latestRuns = runs.map(r => ({ ...r, target: r.target ?? r.member }));
+      consecutiveErrors = runs.some(r => r.status === "ERROR") ? consecutiveErrors + 1 : 0;
+      if (consecutiveErrors >= 3) { scheduler.pause(); runNotice += " · Live tests paused after three consecutive execution errors."; }
+      void postState(); },
+    error => { runNotice = `Execution error: ${errorDetails(error)}`; stale = true; void postState(); });
+    const refreshRevision = (): void => {
+      stale = latestRuns.length > 0;
+      try { const contract = effective(read()); scheduler.change({ key: JSON.stringify([contract, manualTargets?.map(t => t.label), previewRule]), value: { contract, preview: previewRule, targets: manualTargets } }); }
+      catch { scheduler.change(); }
+    };
 
     const postState = async (runs?: TargetRun[]): Promise<void> => {
       if (runs) latestRuns = runs;
+      if (this.context.extensionMode === vscode.ExtensionMode.Test) this.testStates.set(`${document.uri.toString()}#${memberId ?? ""}`, { runs: latestRuns, stale, live: scheduler.enabled, completedRuns });
       try {
-        const contract = parseContract(document.getText());
+        const contract = read();
         const savedTargets = configuredTargets(document.uri, contract);
         const activeTargets = manualTargets ?? savedTargets;
-        const sqlTargets = resolveSqlServerTargets(contract, false).filter(hasSqlServerConnection);
+        const dependencies = [document.uri.toString(), ...(suiteContext ? [suiteContext.uri.toString()] : [])];
+        if (contract.baseline && "ref" in contract.baseline) dependencies.push(vscodeSuiteIO.resolve(document.uri.toString(), contract.baseline.ref));
+        if (watchInputs) dependencies.push(...activeTargets.filter(t => typeof t.source !== "string").map(t => t.source.toString()));
+        dependencyWatchers.set(dependencies);
+        const sqlTargets = resolveSqlServerTargets(effective(contract), false);
         await panel.webview.postMessage({
           type: "state",
+          stale, live: scheduler.enabled, watchInputs, runNotice, documentVersion: document.version, dirty: document.isDirty,
           contract,
-          contractName: vscode.workspace.asRelativePath(document.uri, false),
+          contractName: vscode.workspace.asRelativePath(document.uri, false) + (memberId ? ` / ${memberId} (inline; saved in suite)` : ""),
           targetNames: [...activeTargets.map((target) => target.label), ...sqlTargets.map(sqlServerTargetLabel)],
+          connectionOverview: sqlTargets.map((target, index) => {
+            const own = (value: { connection?: string; integratedConnection?: unknown } | undefined) => value?.connection !== undefined || value?.integratedConnection !== undefined;
+            const origin = own(contract.sqlServer?.targets?.[index]) ? "table override" : own(contract.sqlServer) ? "contract" : memberId || suiteContext ? "suite default" : "unconfigured";
+            return `${sqlServerTargetLabel(target)} · ${origin}`;
+          }),
           fileTargetCount: activeTargets.length,
           configuredTargetCount: savedTargets.length + sqlTargets.length,
           usingConfiguredTargets: manualTargets === undefined && (savedTargets.length > 0 || sqlTargets.length > 0),
@@ -467,31 +577,46 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
     };
 
     const documentSubscription = vscode.workspace.onDidChangeTextDocument((event) => {
-      if (event.document.uri.toString() === document.uri.toString()) void postState();
+      if (event.document.uri.toString() === document.uri.toString() || event.document.uri.toString() === suiteContext?.uri.toString()) { refreshRevision(); void postState(); }
     });
-    panel.onDidDispose(() => documentSubscription.dispose());
-    panel.webview.onDidReceiveMessage(async (message: any) => {
+    const watcher = vscode.workspace.createFileSystemWatcher("**/*");
+    const dependencyChange = (uri: vscode.Uri): void => {
+      try {
+        const contract = read(), baseline = contract.baseline;
+        const inputChanged = watchInputs && (manualTargets ?? configuredTargets(document.uri, contract)).some(t => typeof t.source !== "string" && t.source.toString() === uri.toString());
+        if (inputChanged || baseline && "ref" in baseline && vscodeSuiteIO.resolve(document.uri.toString(), baseline.ref) === uri.toString()) { scheduler.change(); refreshRevision(); void postState(); }
+      } catch { scheduler.change(); }
+    };
+    const dependencyWatchers = new DependencyWatchers(dependencyChange);
+    const baselineEdit = vscode.workspace.onDidChangeTextDocument(e => dependencyChange(e.document.uri));
+    const changed = watcher.onDidChange(dependencyChange), deleted = watcher.onDidDelete(dependencyChange), created = watcher.onDidCreate(dependencyChange);
+    panel.onDidDispose(() => { documentSubscription.dispose(); baselineEdit.dispose(); changed.dispose(); deleted.dispose(); created.dispose(); watcher.dispose(); dependencyWatchers.dispose(); scheduler.dispose(); });
+    const receive = async (message: any): Promise<void> => {
+      try {
       if (message.type === "ready") {
+        refreshRevision();
         await postState();
       } else if (message.type === "chooseCsv") {
         const uris = await pickFiles({ "CSV files": ["csv"] });
         if (!uris?.length) return;
         manualTargets = uris.map((uri) => ({ label: vscode.workspace.asRelativePath(uri, false), source: uri }));
+        refreshRevision();
         await postState();
       } else if (message.type === "useConfiguredTargets") {
         manualTargets = undefined;
+        refreshRevision();
         await postState();
       } else if (message.type === "addTargetFiles") {
         const uris = await pickFiles({ "CSV files": ["csv"] });
         if (!uris?.length) return;
-        const contract = parseContract(document.getText());
+        const contract = read();
         contract.targets ??= [];
         const existing = new Set(contract.targets.map((target) => target.path ?? target.url));
         for (const uri of uris) {
           const path = relativeTargetPath(document.uri, uri);
           if (!existing.has(path)) contract.targets.push({ path });
         }
-        await this.replaceDocument(document, serializeContract(contract));
+        await write(contract);
       } else if (message.type === "addTargetUrl") {
         const url = await vscode.window.showInputBox({
           title: "Add CSV URL",
@@ -500,12 +625,12 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
           validateInput: (value) => /^https?:\/\/\S+$/i.test(value) ? undefined : "Enter a valid HTTP or HTTPS URL."
         });
         if (!url) return;
-        const contract = parseContract(document.getText());
+        const contract = read();
         contract.targets ??= [];
         if (!contract.targets.some((target) => target.url === url)) contract.targets.push({ url });
-        await this.replaceDocument(document, serializeContract(contract));
+        await write(contract);
       } else if (message.type === "openTargetInVsCode" || message.type === "openTargetExternally") {
-        const contract = parseContract(document.getText());
+        const contract = read();
         const target = configuredTargets(document.uri, contract)[Number(message.index)];
         if (!target) {
           void vscode.window.showWarningMessage("That configured CSV target is no longer available.");
@@ -518,7 +643,7 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
           void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
         }
       } else if (message.type === "openActiveTargetInVsCode" || message.type === "openActiveTargetExternally") {
-        const contract = parseContract(document.getText());
+        const contract = read();
         const targets = manualTargets ?? configuredTargets(document.uri, contract);
         const target = await selectTargetToOpen(targets);
         if (!target) return;
@@ -529,7 +654,7 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
           void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
         }
       } else if (message.type === "exportIssues") {
-        const retainedIssueCount = latestRuns.reduce((total, run) => total + run.result.issues.length, 0);
+        const retainedIssueCount = latestRuns.reduce((total, run) => total + (run.result?.issues.length ?? 0), 0);
         if (latestRuns.length === 0) {
           void vscode.window.showWarningMessage("Run the contract before exporting results.");
           return;
@@ -547,11 +672,12 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
           filters: format.label === "JSON" ? { "JSON files": ["json"] } : { "CSV files": ["csv"] }
         });
         if (!outputUri) return;
+        const exportRuns = filterResultRuns(latestRuns, String(message.filter ?? ""));
         const content = format.label === "JSON"
-          ? validationRunExportJson(vscode.workspace.asRelativePath(document.uri, false), latestRuns)
-          : issueRunsToCsv(latestRuns);
+          ? JSON.stringify({ ...JSON.parse(validationRunExportJson(vscode.workspace.asRelativePath(document.uri, false), exportRuns)), exportScope: { filter: message.filter ?? "", stale, runNotice, totals: "original scope; details filtered over retained issues" } }, null, 2)
+          : issueRunsToCsv(exportRuns);
         await vscode.workspace.fs.writeFile(outputUri, new TextEncoder().encode(content));
-        const totalIssueCount = latestRuns.reduce((total, run) => total + run.result.issueCount, 0);
+        const totalIssueCount = latestRuns.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
         if (totalIssueCount > retainedIssueCount) {
           void vscode.window.showWarningMessage(
             `Exported the run results with ${retainedIssueCount.toLocaleString()} of ${totalIssueCount.toLocaleString()} issue details because the validation issue limit was reached.`
@@ -559,61 +685,80 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         } else {
           void vscode.window.showInformationMessage(`Exported results for ${latestRuns.length.toLocaleString()} validation target${latestRuns.length === 1 ? "" : "s"}.`);
         }
-      } else if (message.type === "run") {
-        const runs: TargetRun[] = [];
-        try {
-          latestRuns = [];
-          await postState(runs);
-          const contract = parseContract(document.getText());
-          const targets = manualTargets ?? configuredTargets(document.uri, contract);
-          const sqlTargets = resolveSqlServerTargets(contract, false).filter(hasSqlServerConnection);
-          if (targets.length === 0 && sqlTargets.length === 0) {
-            void vscode.window.showWarningMessage("Select a CSV or add a configured CSV or SQL Server target before running the contract.");
-            return;
-          }
-          const total = targets.length + sqlTargets.length;
-          let index = 0;
-          for (const target of targets) {
-            index += 1;
-            await panel.webview.postMessage({
-              type: "runState",
-              running: true,
-              target: target.label,
-              index,
-              total
-            });
-            runs.push({ target: target.label, result: validateCsv(contract, await readTargetText(target)) });
-            await postState(runs);
-          }
-          for (const target of sqlTargets) {
-            index += 1;
-            if (!this.sqlServerRunner) throw new Error("Direct SQL Server validation requires the desktop extension host.");
-            const label = sqlServerTargetLabel(target);
-            await panel.webview.postMessage({ type: "runState", running: true, target: label, index, total });
-            runs.push({ target: label, result: await this.sqlServerRunner(contract, target) });
-            await postState(runs);
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          await postState(runs);
-          void vscode.window.showErrorMessage(message);
-        } finally {
-          await panel.webview.postMessage({ type: "runState", running: false });
-        }
+      } else if (message.type === "run" || message.type === "preview") {
+        previewRule = message.type === "preview" ? String(message.ruleId) : undefined;
+        refreshRevision();
+        scheduler.request();
+      } else if (message.type === "live") {
+        if (scheduler.enabled) scheduler.pause();
+        else { previewRule = undefined; refreshRevision(); scheduler.enable(); }
+        await postState();
+      } else if (message.type === "cancel") {
+        scheduler.cancel(); stale = true; await postState();
+      } else if (message.type === "watchInputs") {
+        watchInputs = !watchInputs; await postState();
+      } else if (message.type === "createBaseline" || message.type === "reviewBaseline") {
+        try { await editBaseline(document.uri, read, write, this.sqlSchemaReader, message.type === "reviewBaseline", effective); }
+        catch (error) { void vscode.window.showErrorMessage(String(error)); }
       } else if (message.type === "updateContract") {
-        await this.replaceDocument(document, serializeContract(message.contract as CsvContract));
+        if (message.documentVersion !== undefined && message.documentVersion !== document.version) { runNotice = "The document changed before this edit arrived. Review the current values and retry."; await postState(); return; }
+        await write(message.contract as CsvContract);
+      } else if (message.type === "jumpRule") {
+        const offset = ruleOffset(document.getText(), String(message.ruleId), memberId);
+        const position = offset === undefined ? undefined : document.positionAt(offset);
+        await vscode.window.showTextDocument(document, { viewColumn: vscode.ViewColumn.Beside, selection: position ? new vscode.Range(position, position) : undefined });
       } else if (message.type === "openYaml") {
         await vscode.commands.executeCommand("vscode.openWith", document.uri, "default");
       } else if (message.type === "generateSqlServerValidation") {
-        await generateSqlServerScript(document.uri);
+        const contract = effective(read());
+        const targets = resolveSqlServerTargets(contract, false);
+        const chosen = await vscode.window.showQuickPick(targets.map(target => ({ label: sqlServerTargetLabel(target), target })), { title: "Generate SQL from current draft" });
+        if (chosen) {
+          const generated = generateSqlServerValidation(contract, { target: chosen.target });
+          await vscode.window.showTextDocument(await vscode.workspace.openTextDocument({ language: "sql", content: generated.sql }), { viewColumn: vscode.ViewColumn.Beside });
+        }
+      } else if (message.type === "editConnection") {
+        await editSuiteConnection(document, undefined, true, memberId);
+      } else if (message.type === "history") {
+        if (stale) throw new Error("Run current definitions before saving or comparing history.");
+        await manageHistory(this.context, `${document.uri.toString()}#${memberId ?? ""}`, latestRuns, JSON.stringify(read()));
+      } else if (message.type === "insertTemplate") {
+        const source = await pickFile({ "Rule template": ["yaml", "yml", "json"] });
+        if (!source) return;
+        const template = parseTemplate(new TextDecoder().decode(await vscode.workspace.fs.readFile(source)));
+        const parameters: Record<string, string> = {};
+        for (const key of template.parameters ?? []) {
+          const value = await vscode.window.showInputBox({ title: `${template.name}: ${key}`, prompt: "Literal substitution; leading zeros are preserved." });
+          if (value === undefined) return;
+          parameters[key] = value;
+        }
+        const original = read();
+        const next = insertTemplate(original, template, parameters);
+        const preview = await vscode.workspace.openTextDocument({ language: "yaml", content: serializeContract(next) });
+        await vscode.window.showTextDocument(preview, { viewColumn: vscode.ViewColumn.Beside });
+        if (await vscode.window.showInformationMessage("Insert these reviewed template rules?", { modal: true }, "Insert") !== "Insert") return;
+        if (JSON.stringify(read()) !== JSON.stringify(original)) throw new Error("Contract changed while reviewing template.");
+        await write(next);
+      } else if (message.type === "preflight") {
+        if (!this.sqlSchemaReader) throw new Error("SQL preflight requires the desktop extension host.");
+        const contract = effective(read());
+        const checks = await preflight(contract, this.sqlSchemaReader);
+        runNotice = checks.map(c => `${c.status} · ${c.target}: ${c.message}`).join("\n") || "No SQL targets configured."; await postState();
       } else if (message.type === "configureSqlServerConnection") {
         await configureSqlServerConnection(this.context);
       } else if (message.type === "addSqlServerTarget") {
-        await addSqlServerTarget(this.context, document.uri, this.sqlServerBrowser);
+        await addSqlServerTarget(this.context, document.uri, this.sqlServerBrowser, { read, write });
       } else if (message.type === "importSqlServerSchema") {
-        await importSqlServerSchema(document.uri);
+        await importSqlServerSchema(document.uri, { read, write });
       }
-    });
+      } catch (error) { runNotice = errorDetails(error); await postState(); void vscode.window.showErrorMessage(runNotice); }
+    };
+    panel.webview.onDidReceiveMessage(receive);
+    if (this.context.extensionMode === vscode.ExtensionMode.Test) {
+      const key = `${document.uri.toString()}#${memberId ?? ""}`;
+      this.testActions.set(key, receive);
+      panel.onDidDispose(() => { this.testActions.delete(key); this.testStates.delete(key); });
+    }
   }
 
   private async replaceDocument(document: vscode.TextDocument, text: string): Promise<void> {

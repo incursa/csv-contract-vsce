@@ -35,6 +35,7 @@ export interface SqlGenerationResult {
 }
 
 interface GeneratedRule extends SqlGeneratedRule {
+  selected?: string;
   violation?: string;
   failureCountSql?: string;
 }
@@ -68,7 +69,7 @@ function requireLeafShape(predicate: PredicateLeaf): void {
     "equals", "notEquals", "contains", "notContains", "startsWith", "endsWith", "matches",
     "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual"
   ]);
-  if (valueOperators.has(predicate.operator) && predicate.value === undefined) throw new Error(`${predicate.operator} on ${predicate.column} requires value.`);
+  if (valueOperators.has(predicate.operator) && predicate.value === undefined && !predicate.otherColumn) throw new Error(`${predicate.operator} on ${predicate.column} requires value or otherColumn.`);
   if ((predicate.operator === "in" || predicate.operator === "notIn") && (!predicate.values || predicate.values.length === 0)) {
     throw new Error(`${predicate.operator} on ${predicate.column} requires at least one value.`);
   }
@@ -95,7 +96,7 @@ function predicateSql(predicate: Predicate, caseSensitive: boolean, trimValues: 
     return parts.some((part) => part === undefined) ? undefined : `(${parts.join(" OR ")})`;
   }
   requireLeafShape(predicate);
-  if (predicate.operator === "matches") return undefined;
+  if (predicate.operator === "matches" || predicate.operator.startsWith("date")) return undefined;
   const column = `t.${sqlIdentifier(predicate.column)}`;
   const columnText = normalizedText(predicate.column, caseSensitive, trimValues);
   const comparable = `COALESCE(${columnText}, ${normalizedLiteral("", caseSensitive, trimValues)})`;
@@ -126,7 +127,8 @@ function predicateSql(predicate: Predicate, caseSensitive: boolean, trimValues: 
     case "lessThan":
     case "lessThanOrEqual": {
       const operator = { greaterThan: ">", greaterThanOrEqual: ">=", lessThan: "<", lessThanOrEqual: "<=" }[predicate.operator];
-      return `(TRY_CONVERT(float, ${text(predicate.column)}) ${operator} TRY_CONVERT(float, ${sqlString(value)}))`;
+      const right = predicate.value !== undefined ? sqlString(value) : text(predicate.otherColumn!);
+      return `(CASE WHEN LEN(LTRIM(RTRIM(${text(predicate.column)}))) > 0 AND LEN(LTRIM(RTRIM(${right}))) > 0 AND TRY_CONVERT(float, ${text(predicate.column)}) ${operator} TRY_CONVERT(float, ${right}) THEN 1 ELSE 0 END = 1)`;
     }
   }
 }
@@ -146,12 +148,12 @@ function addConditionalRule(
   const expected = predicateSql(rule.expect as Predicate, caseSensitive, trimValues, nullValues);
   const when = rule.when ? predicateSql(rule.when as Predicate, caseSensitive, trimValues, nullValues) : "(1 = 1)";
   if (!expected || !when) {
-    warnings.push(`${rule.id} uses a JavaScript regular expression and requires exact client-side fallback when executed.`);
+    warnings.push(`${rule.id} uses a JavaScript regex or ISO date predicate and requires exact client-side fallback when executed.`);
     return;
   }
   output.push({
     id: rule.id, name: rule.name ?? rule.id, severity: rule.severity ?? "error",
-    code: "RULE_EXPECTATION_FAILED", violation: `(${when} AND NOT ${expected})`
+    code: "RULE_EXPECTATION_FAILED", violation: `(${when} AND NOT ${expected})`, selected: when
   });
 }
 
@@ -179,6 +181,7 @@ export function generateSqlServerValidation(contract: CsvContract, options: SqlG
   const mapped = createPhysicalSqlContract(contract, logicalTarget);
   const generated = generatePhysicalSqlServerValidation(mapped.contract, { ...options, target: mapped.target });
   let sql = generated.sql;
+  if (contract.baseline) sql = "-- Schema baseline validation requires the Workbench/CLI runtime metadata comparison; this script alone is incomplete.\n" + sql;
   const rules = generated.rules.map((rule) => {
     if (!rule.column) return rule;
     const canonical = mapped.physicalToCanonical[rule.column] ?? rule.column;
@@ -292,7 +295,7 @@ function generatePhysicalSqlServerValidation(contract: CsvContract, options: Sql
       ...rules.flatMap((rule, index) => [
         index === 0 ? "SELECT" : "UNION ALL SELECT",
         `  ${options.suite ? `${sqlString(options.suite.id)} AS SuiteId, ${sqlString(options.suite.member)} AS MemberId, ${sqlString(`${target.schema}.${target.table}`)} AS TableName, ` : ""}${sqlString(rule.id)} AS RuleId, ${sqlString(rule.name)} AS RuleName, ${sqlString(rule.severity)} AS Severity, ${sqlString(rule.code)} AS Code,`,
-        `  ${sqlString(rule.column ?? "")} AS ColumnName, ${rule.failureCountSql ?? `(SELECT COUNT_BIG(*) FROM ${table} AS t WHERE (${scopeSql}) AND (${rule.violation}))`} AS FailureCount`
+        `  ${sqlString(rule.column ?? "")} AS ColumnName, ${rule.failureCountSql ?? `(SELECT COUNT_BIG(*) FROM ${table} AS t WHERE (${scopeSql}) AND (${rule.violation}))`} AS FailureCount, ${rule.selected ? `(SELECT COUNT_BIG(*) FROM ${table} AS t WHERE (${scopeSql}) AND (${rule.selected}))` : "CAST(NULL AS bigint)"} AS SelectedCount`
       ]),
       "ORDER BY Severity, RuleId;"
     );

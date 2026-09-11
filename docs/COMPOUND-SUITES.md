@@ -183,7 +183,7 @@ overview lists every member and target; expand members to inspect their schemas
 and rules. **Run suite** displays member results and failure details in the editor.
 **Generate SQL** opens the generated script or connection-specific batch manifest.
 **Open contract** opens referenced members in their existing Workbench; **Edit inline
-contract** opens the embedded mapping in YAML beside the suite. **Edit suite YAML**
+contract** opens the embedded mapping in the shared visual editor beside the suite. **Edit suite YAML**
 provides schema validation and completion. Opening a suite does not execute tests.
 
 Starting with 0.13.2, **Edit default connection** changes suite defaults, and each
@@ -214,7 +214,7 @@ Workspace Tests shows all suite tables and reports member/table results using th
 existing report UI, distinguishing execution errors from assertion failures.
 Desktop suite runs execute configured SQL and CSV targets; web runs report an
 explicit error for database members. The single-contract visual form remains
-unchanged; suite composition and inline contract edits use the YAML editor.
+unchanged. Inline contracts use the shared visual editor; suite composition remains editable in YAML. See [Validator workflows](VALIDATOR-WORKFLOWS.md) for baselines, previews and live tests.
 
 ## Offline McKee acceptance
 

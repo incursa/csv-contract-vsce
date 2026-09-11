@@ -10,6 +10,13 @@
     "members"
   ],
   "properties": {
+    "crossChecks": {"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","kind","from","to"],"properties":{
+      "id":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]*$"},"kind":{"enum":["foreignKey","equalPopulation","equalTotal"]},
+      "tolerance":{"type":"string","pattern":"^(?:0|[1-9]\\d{0,17})(?:\\.\\d{1,10})?$"},
+      "valueColumns":{"type":"object","additionalProperties":false,"required":["from","to"],"properties":{"from":{"type":"string"},"to":{"type":"string"}}},
+      "from":{"type":"string"},"to":{"type":"string"},"nulls":{"enum":["ignore","fail"]},"severity":{"enum":["error","warning"]},
+      "keys":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["from","to"],"properties":{"from":{"type":"string"},"to":{"type":"string"}}}}
+    }}},
     "suiteVersion": {
       "const": 1
     },

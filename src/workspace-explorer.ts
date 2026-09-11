@@ -1,4 +1,6 @@
 import { isSuiteText, loadSuite } from "./core/suite";
+import type { CrossExecutor } from "./core/cross-checks";
+import { resolveBaseline } from "./core/baseline";
 import { executeVscodeSuite, vscodeSuiteIO } from "./vscode-suites";
 import * as vscode from "vscode";
 import { parseContract, validateCsv } from "./core/contract";
@@ -54,6 +56,7 @@ interface SqlTargetGroup {
 }
 
 interface WorkspaceReportEntry {
+  status?: string;
   contractUri: vscode.Uri;
   contractLabel: string;
   target: string;
@@ -93,9 +96,10 @@ class CsvContractTreeItem extends vscode.TreeItem {
 export function registerWorkspaceExplorer(
   context: vscode.ExtensionContext,
   output: vscode.OutputChannel,
-  sqlServerRunner?: DesktopSqlServerRunner
+  sqlServerRunner?: DesktopSqlServerRunner,
+  crossExecutor?: CrossExecutor
 ): WorkspaceExplorerProvider {
-  const provider = new WorkspaceExplorerProvider(context, output, sqlServerRunner);
+  const provider = new WorkspaceExplorerProvider(context, output, sqlServerRunner, crossExecutor);
   const treeView = vscode.window.createTreeView<CsvContractTreeItem>(explorerViewId, {
     treeDataProvider: provider,
     showCollapseAll: true
@@ -136,7 +140,8 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
   public constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly output: vscode.OutputChannel,
-    private readonly sqlServerRunner?: DesktopSqlServerRunner
+    private readonly sqlServerRunner?: DesktopSqlServerRunner,
+    private readonly crossExecutor?: CrossExecutor
   ) {
     this.checked = new Set(context.workspaceState.get<string[]>(checkedContractsKey, []));
     const watcher = vscode.workspace.createFileSystemWatcher(contractPattern);
@@ -289,12 +294,12 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
       try {
         const text = await vscodeSuiteIO.read(snapshot.uri.toString());
         if (isSuiteText(text)) {
-          const report = await executeVscodeSuite(snapshot.uri, this.sqlServerRunner);
-          entries.push(...report.runs.map((run) => ({ contractUri: snapshot.uri, contractLabel: run.suite + "/" + run.member,
+          const report = await executeVscodeSuite(snapshot.uri, this.sqlServerRunner, this.crossExecutor);
+          entries.push(...report.runs.map((run) => ({ status: run.status, contractUri: snapshot.uri, contractLabel: run.suite + "/" + run.member,
             target: run.table ?? run.target ?? "Unresolved member", result: run.result, error: run.error })));
           continue;
         }
-        const contract = parseContract(text);
+        const contract = await resolveBaseline(parseContract(text), snapshot.uri.toString(), vscodeSuiteIO);
         const targets = configuredTargets(snapshot.uri, contract);
         const sqlTargets = resolveSqlServerTargets(contract, false).filter(hasSqlServerConnection);
         if (targets.length === 0 && sqlTargets.length === 0) {

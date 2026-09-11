@@ -1,4 +1,6 @@
 import { errorDetails } from "../core/error-details";
+import { crossResult, type CrossPlan } from "../core/cross-checks";
+import { baselineIssues, type BaselineColumn, type SchemaBaseline } from "../core/baseline";
 import sql from "mssql";
 import { assertCompleteSqlSummaries } from "../core/sql-server-results";
 import Papa from "papaparse";
@@ -8,6 +10,7 @@ import { generateSqlServerValidation, sqlIdentifier } from "../core/sql-server-g
 import { canonicalSqlServerColumn, physicalSqlServerColumn, type ResolvedSqlServerTarget } from "../core/sql-server-targets";
 
 export interface SqlServerValidationOptions {
+  signal?: AbortSignal;
   maxIssues?: number;
   scopeValue?: string;
 }
@@ -28,6 +31,7 @@ interface ObjectMetadataRow {
 }
 
 interface SummaryRow {
+  SelectedCount?: number | string | null;
   RuleId: string;
   RuleName: string;
   Severity: "error" | "warning";
@@ -36,12 +40,41 @@ interface SummaryRow {
   FailureCount: number | string;
 }
 
-interface MetadataRow {
-  name: string;
-  ordinal: number;
+type MetadataRow = BaselineColumn;
+
+export async function queryWithCancellation<T>(request: Pick<sql.Request, "query" | "cancel">, query: string, signal?: AbortSignal): Promise<sql.IResult<T>> {
+  signal?.throwIfAborted();
+  const cancel = () => { request.cancel(); };
+  signal?.addEventListener("abort", cancel, { once: true });
+  try {
+    const retries = runtimeInteger("CSV_CONTRACT_SQL_RETRIES", 0, 2);
+    for (let attempt = 0; ; attempt++) {
+      signal?.throwIfAborted();
+      try { return await request.query<T>(query); }
+      catch (error) {
+        const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+        if (signal?.aborted || attempt >= retries || !["ETIMEOUT", "ESOCKET", "ECONNRESET"].includes(code)) throw error;
+        await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+      }
+    }
+  }
+  finally { signal?.removeEventListener("abort", cancel); }
+}
+
+function runtimeInteger(name: string, fallback: number, maximum: number): number {
+  const value = process.env[name];
+  if (value === undefined) return fallback;
+  if (!/^\d+$/.test(value) || Number(value) > maximum) throw new Error(`${name} must be an integer from 0 to ${maximum}.`);
+  return Number(value);
 }
 
 export class SqlServerValidationSession {
+  public async validateCross(plan: CrossPlan, signal?: AbortSignal): Promise<ValidationResult> {
+    const handle = await this.getPool(plan.from.connection, plan.from.integratedConnection);
+    const result = await queryWithCancellation<{ FailureCount: number | string }>(handle.pool.request(), plan.sql, signal);
+    if (result.recordset.length !== 1) throw new Error("Cross-check did not return one aggregate summary.");
+    return crossResult(plan.check, result.recordset[0].FailureCount);
+  }
   private readonly pools = new Map<string, SqlPoolHandle>();
 
   public constructor(private readonly resolveConnectionString: (profile: string) => Promise<string> | string) {}
@@ -57,9 +90,10 @@ export class SqlServerValidationSession {
     options: SqlServerValidationOptions = {}
   ): Promise<ValidationResult> {
     const handle = await this.getPool(target.connection, target.integratedConnection);
-    const metadata = await readMetadata(handle, target);
+    const metadata = await readMetadata(handle, target, options.signal);
     if (metadata.length === 0) throw new Error(`SQL Server object ${target.schema}.${target.table} does not exist or is not visible to this connection.`);
     const metadataIssues = validateMetadata(contract, target, metadata);
+    if (contract.baseline) metadataIssues.push(...baselineIssues(contract, sqlSchemaSnapshot(target, metadata), target.columnMap));
     const generated = generateSqlServerValidation(contract, {
       target,
       declareScopeParameter: false,
@@ -70,7 +104,7 @@ export class SqlServerValidationSession {
     const mustFallback = generated.warnings.length > 0 || declared.some((column) => !present.has(physicalSqlServerColumn(target, column)));
     const scopeValue = resolveScopeValue(target, options.scopeValue);
     if (mustFallback) {
-      const fallback = await validateClientSide(handle, contract, target, metadata, scopeValue);
+      const fallback = await validateClientSide(handle, { ...contract, baseline: undefined }, target, metadata, scopeValue, options.signal);
       const reason = generated.warnings.length
         ? generated.warnings.join(" ")
         : "One or more declared columns are absent, so rules that reference optional columns must preserve CSV-compatible behavior.";
@@ -91,7 +125,7 @@ export class SqlServerValidationSession {
 
     const request = handle.pool.request();
     bindScope(request, handle.api, target, scopeValue);
-    const executed = await request.query(generated.sql);
+    const executed = await queryWithCancellation(request, generated.sql, options.signal);
     const summaries = (((executed.recordsets as sql.IRecordSet<unknown>[])[0]) ?? []) as unknown as SummaryRow[];
     assertCompleteSqlSummaries(generated.rules.map((rule) => rule.id), summaries);
     const issues = [...metadataIssues];
@@ -114,10 +148,15 @@ export class SqlServerValidationSession {
       if (summary.Severity === "warning") warningCount += failures;
       else errorCount += failures;
     }
-    const rowCount = await readRowCount(handle, target, scopeValue);
+    const rowCount = await readRowCount(handle, target, scopeValue, options.signal);
     const issueCount = errorCount + warningCount;
     return {
       valid: errorCount === 0,
+      ruleOutcomes: summaries.filter(s => s.SelectedCount != null).map(s => {
+        const selected = Number(s.SelectedCount), failed = Number(s.FailureCount);
+        if (!Number.isSafeInteger(selected) || selected < failed) throw new Error(`Invalid selected-row count for ${s.RuleId}.`);
+        return { id: s.RuleId, selected, failed, passed: selected - failed };
+      }),
       rowCount,
       columnCount: metadata.length,
       testCount: contractTestCount(contract),
@@ -158,7 +197,15 @@ ORDER BY s.name, o.name, c.column_id;`);
     return [...objects.values()];
   }
 
+  public async captureSchema(target: ResolvedSqlServerTarget): Promise<SchemaBaseline> {
+    const columns = await readMetadata(await this.getPool(target.connection, target.integratedConnection), target);
+    if (!columns.length) throw new Error("Object metadata is empty: object missing or not visible to this connection.");
+    return sqlSchemaSnapshot(target, columns);
+  }
+
   private async getPool(profile: string, integrated?: SqlServerIntegratedConnection): Promise<SqlPoolHandle> {
+    const requestTimeout = runtimeInteger("CSV_CONTRACT_SQL_TIMEOUT_MS", 15000, 600000);
+    if (requestTimeout < 1) throw new Error("CSV_CONTRACT_SQL_TIMEOUT_MS must be at least 1; unbounded queries are not supported.");
     const key = integrated ? `integrated:${JSON.stringify(integrated)}` : `profile:${profile}`;
     const existing = this.pools.get(key);
     if (existing) return existing;
@@ -173,7 +220,7 @@ ORDER BY s.name, o.name, c.column_id;`);
         database: integrated.database,
         driver: "msnodesqlv8",
         connectionString,
-        requestTimeout: 15000,
+        requestTimeout,
         options: {
           trustedConnection: true,
           encrypt: integrated.encrypt ?? true,
@@ -198,7 +245,8 @@ ORDER BY s.name, o.name, c.column_id;`);
     } else {
       const connectionString = await this.resolveConnectionString(profile);
       if (!connectionString.trim()) throw new Error(`SQL Server connection profile '${profile}' is empty.`);
-      handle = { api: sql, pool: await new sql.ConnectionPool(connectionString).connect() };
+      const pool = new sql.ConnectionPool({ ...sql.ConnectionPool.parseConnectionString(connectionString), requestTimeout });
+      handle = { api: sql, pool: await pool.connect() };
     }
     this.pools.set(key, handle);
     return handle;
@@ -245,28 +293,41 @@ function bindScope(request: sql.Request, api: SqlApi, target: ResolvedSqlServerT
   if (target.scope) request.input(target.scope.parameter, api.NVarChar(api.MAX), value);
 }
 
-async function readMetadata(handle: SqlPoolHandle, target: ResolvedSqlServerTarget): Promise<MetadataRow[]> {
-  const result = await handle.pool.request()
+async function readMetadata(handle: SqlPoolHandle, target: ResolvedSqlServerTarget, signal?: AbortSignal): Promise<MetadataRow[]> {
+  const request = handle.pool.request()
     .input("schema", handle.api.NVarChar(128), target.schema)
-    .input("table", handle.api.NVarChar(128), target.table)
-    .query<MetadataRow>(`
-SELECT c.name, c.column_id AS ordinal
+    .input("table", handle.api.NVarChar(128), target.table);
+  const result = await queryWithCancellation<MetadataRow>(request, `
+SELECT c.name, c.column_id AS ordinal, TYPE_NAME(c.user_type_id) AS sqlType,
+  CONVERT(int, c.max_length) AS maxLength, CONVERT(int, c.precision) AS precision,
+  CONVERT(int, c.scale) AS scale, c.is_nullable AS nullable,
+  c.is_identity AS [identity], c.is_computed AS computed,
+  COALESCE((SELECT ic.key_ordinal FROM sys.index_columns ic
+    JOIN sys.indexes i ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+    WHERE ic.object_id = c.object_id AND ic.column_id = c.column_id AND i.is_primary_key = 1), 0) AS primaryKeyOrdinal
 FROM sys.columns AS c
 JOIN sys.objects AS o ON o.object_id = c.object_id AND o.type IN (N'U', N'V')
 JOIN sys.schemas AS s ON s.schema_id = o.schema_id
 WHERE s.name = @schema AND o.name = @table
-ORDER BY c.column_id;`);
+ORDER BY c.column_id;`, signal);
   return result.recordset;
 }
 
-async function readRowCount(handle: SqlPoolHandle, target: ResolvedSqlServerTarget, scopeValue: string | undefined): Promise<number> {
+export function sqlSchemaSnapshot(target: { schema: string; table: string }, columns: BaselineColumn[]): SchemaBaseline {
+  return { baselineVersion: 1, revision: 1, capturedAt: new Date().toISOString(), sourceKind: "sql", captureMethod: "sql-metadata",
+    object: { schema: target.schema, name: target.table }, columns: structuredClone(columns) };
+}
+
+async function readRowCount(handle: SqlPoolHandle, target: ResolvedSqlServerTarget, scopeValue: string | undefined, signal?: AbortSignal): Promise<number> {
   const request = handle.pool.request();
   bindScope(request, handle.api, target, scopeValue);
   const scope = target.scope
     ? `WHERE CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, target.scope.column))}) = CONVERT(nvarchar(max), @${target.scope.parameter})`
     : "";
-  const result = await request.query<{ count: number | string }>(`SELECT COUNT_BIG(*) AS count FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope};`);
-  return Number(result.recordset[0]?.count ?? 0);
+  const result = await queryWithCancellation<{ count: number | string }>(request, `SELECT COUNT_BIG(*) AS count FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope};`, signal);
+  const count = result.recordset[0]?.count;
+  if (count === undefined || count === null || !Number.isSafeInteger(Number(count)) || Number(count) < 0) throw new Error("SQL row-count query did not return a valid count.");
+  return Number(count);
 }
 
 function countIssues(name: string, actual: number, expectation: CountExpectation | undefined): ValidationIssue[] {
@@ -308,27 +369,42 @@ async function validateClientSide(
   contract: CsvContract,
   target: ResolvedSqlServerTarget,
   metadata: MetadataRow[],
-  scopeValue: string | undefined
+  scopeValue: string | undefined,
+  signal?: AbortSignal
 ): Promise<ValidationResult> {
   const present = new Set(metadata.map((column) => column.name));
   const columns = Object.keys(contract.schema.columns).filter((column) => present.has(physicalSqlServerColumn(target, column)));
   if (columns.length === 0) {
-    return { valid: false, rowCount: await readRowCount(handle, target, scopeValue), columnCount: metadata.length, testCount: contractTestCount(contract), issueCount: 0, errorCount: 0, warningCount: 0, truncated: false, issues: [] };
+    return { valid: false, rowCount: await readRowCount(handle, target, scopeValue, signal), columnCount: metadata.length, testCount: contractTestCount(contract), issueCount: 0, errorCount: 0, warningCount: 0, truncated: false, issues: [] };
   }
-  const projection = columns.map((column) => `CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, column))}) AS ${sqlIdentifier(column)}`).join(", ");
+  const projections = columns.map((column) => `CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, column))}) AS ${sqlIdentifier(column)}`);
+  const dateAliases = new Map<string, string>();
+  for (const column of columns) {
+    const physical = physicalSqlServerColumn(target, column);
+    const type = metadata.find(m => m.name === physical)?.sqlType?.toLowerCase();
+    if (!type || !["date", "datetime", "datetime2", "smalldatetime", "datetimeoffset"].includes(type)) continue;
+    let alias = `__csv_contract_date_${dateAliases.size}`;
+    while (columns.includes(alias) || [...dateAliases.values()].includes(alias)) alias += "_";
+    dateAliases.set(column, alias);
+    // Date predicates receive ISO values; ordinary string rules retain the legacy representation.
+    const iso = `CONVERT(nvarchar(40), t.${sqlIdentifier(physical)}, 127)`;
+    projections.push(`${type === "date" || type === "datetimeoffset" ? iso : `${iso} + N'Z'`} AS ${sqlIdentifier(alias)}`);
+  }
+  const projection = projections.join(", ");
   const scope = target.scope
     ? `WHERE CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, target.scope.column))}) = CONVERT(nvarchar(max), @${target.scope.parameter})`
     : "";
   const request = handle.pool.request();
   bindScope(request, handle.api, target, scopeValue);
-  const result = await request.query<Record<string, string | null>>(`SELECT ${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope};`);
+  const result = await queryWithCancellation<Record<string, string | null>>(request, `SELECT ${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope};`, signal);
   const rows = result.recordset.map((row) => columns.map((column) => row[column] ?? ""));
   const fallbackContract: CsvContract = {
     ...contract,
     schema: { ...contract.schema, allowAdditionalColumns: true, columnCount: undefined, columnOrder: undefined },
     rules: [...(contract.rules ?? []), ...((contract.sqlServer?.conditionalRules ?? []) as NonNullable<CsvContract["rules"]>)]
   };
-  return validateCsv(fallbackContract, Papa.unparse({ fields: columns, data: rows }));
+  const nativeDates = Object.fromEntries([...dateAliases].map(([column, alias]) => [column, result.recordset.map(row => row[alias] ?? undefined)]));
+  return validateCsv(fallbackContract, Papa.unparse({ fields: columns, data: rows }), nativeDates);
 }
 
 function mergeMetadataIssues(result: ValidationResult, metadataIssues: ValidationIssue[], actualColumnCount: number, maxIssues: number): ValidationResult {

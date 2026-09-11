@@ -1,4 +1,7 @@
 import Papa from "papaparse";
+import Ajv from "ajv/dist/2020";
+import schema from "../../schemas/csvtest.schema.json";
+import { baselineIssues, CsvSchemaObservation } from "./baseline";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type {
   CountExpectation,
@@ -21,12 +24,14 @@ const defaults: Required<CsvOptions> = {
   allowBlankRows: false,
   allowRaggedRows: false
 };
+const validateShape = new Ajv({ strict: false, allErrors: true, validateFormats: false }).compile(schema);
 
 export function parseContract(text: string): CsvContract {
   const value = parseYaml(text) as CsvContract;
   if (!value || value.version !== 1 || !value.schema?.columns) {
     throw new Error("The contract must declare version: 1 and schema.columns.");
   }
+  if (!validateShape(value)) throw new Error(`Invalid contract: ${JSON.stringify(validateShape.errors)}`);
   return value;
 }
 
@@ -94,10 +99,16 @@ function isNull(value: string, options: Required<CsvOptions>): boolean {
   return options.nullValues.some((item) => normalized(item, options) === candidate);
 }
 
-export function validateCsv(contract: CsvContract, csvText: string): ValidationResult {
+export function validateCsv(contract: CsvContract, csvText: string, nativeDates?: Record<string, (string | undefined)[]>): ValidationResult {
+  const ruleOutcomes: NonNullable<ValidationResult["ruleOutcomes"]> = [];
   const options = { ...defaults, ...(contract.csv ?? {}) };
   const parsed = parseCsv(csvText, options);
   const issues: ValidationIssue[] = parsed.parseErrors.map((message) => ({ level: "file", code: "CSV_PARSE", message }));
+  if (contract.baseline) {
+    const observation = new CsvSchemaObservation(parsed.headers, contract.csv);
+    parsed.rows.forEach(row => observation.add(row));
+    issues.push(...baselineIssues(contract, observation.snapshot()));
+  }
   const duplicateHeaders = parsed.headers.filter((header, index) => parsed.headers.indexOf(header) !== index);
   for (const header of [...new Set(duplicateHeaders)]) {
     issues.push({ level: "file", code: "DUPLICATE_HEADER", message: `Header "${header}" appears more than once.`, column: header });
@@ -185,7 +196,7 @@ export function validateCsv(contract: CsvContract, csvText: string): ValidationR
     if (contract.identity.unique !== false && missing.length === 0) {
       const seen = new Map<string, number>();
       parsed.rows.forEach((row, rowIndex) => {
-        const key = contract.identity!.columns.map((column) => normalized(row[headerIndex.get(column)!] ?? "", options)).join("\u001f");
+        const key = contract.identity!.columns.map((column) => normalized(row[headerIndex.get(column)!] ?? "", options)).map(value => `${value.length}:${value}`).join("");
         const first = seen.get(key);
         if (first !== undefined) {
           issues.push({ level: "row", code: "IDENTITY_NOT_UNIQUE", message: `Composite identity duplicates CSV row ${first}.`, row: parsed.sourceRowNumbers[rowIndex] });
@@ -243,10 +254,15 @@ export function validateCsv(contract: CsvContract, csvText: string): ValidationR
       }
     }
     if (!validRule) continue;
+    const outcome = { id: rule.id, selected: 0, passed: 0, failed: 0 };
+    ruleOutcomes.push(outcome);
     parsed.rows.forEach((row, rowIndex) => {
       const runtime = createPredicateRuntime((column) => row[headerIndex.get(column)!] ?? "", options, nullValues);
+      if (nativeDates) runtime.dateValue = column => nativeDates[column]?.[rowIndex];
       if (rule.when && !evaluatePredicate(rule.when, runtime)) return;
-      if (evaluatePredicate(rule.expect, runtime)) return;
+      outcome.selected++;
+      if (evaluatePredicate(rule.expect, runtime)) { outcome.passed++; return; }
+      outcome.failed++;
       issues.push({
         level: "row",
         code: "RULE_FAILED",
@@ -279,6 +295,7 @@ export function validateCsv(contract: CsvContract, csvText: string): ValidationR
     const groups = new Map<string, { row: number; labels: string[]; observed: Set<string> }>();
     parsed.rows.forEach((row, rowIndex) => {
       const runtime = createPredicateRuntime((column) => row[headerIndex.get(column)!] ?? "", options, nullValues);
+      if (nativeDates) runtime.dateValue = column => nativeDates[column]?.[rowIndex];
       if (rule.when && !evaluatePredicate(rule.when, runtime)) return;
       const labels = rule.groupBy.map((column) => row[headerIndex.get(column)!] ?? "");
       const key = labels.map((value) => `${normalized(value, options).length}:${normalized(value, options)}`).join("");
@@ -313,6 +330,7 @@ export function validateCsv(contract: CsvContract, csvText: string): ValidationR
 
   return {
     valid: errorCount === 0,
+    ruleOutcomes,
     rowCount: parsed.rows.length,
     columnCount: parsed.headers.length,
     testCount: Object.keys(contract.schema.columns).length + (contract.rowTests?.length ?? 0) +

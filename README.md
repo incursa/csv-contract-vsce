@@ -4,6 +4,18 @@
 
 Define reusable YAML contracts for CSV files, edit them visually in VS Code, and run the same validations interactively or in unattended workflows.
 
+## Validator workflows in 0.14
+
+Standalone, referenced and inline suite members share the visual contract editor.
+Add validation presets, edit nested predicates, capture and review versioned schema
+baselines, and execute full-scope rule previews. Explicitly enable **Live tests**
+to rerun valid draft changes; opening a contract never starts database queries.
+Suite controls include connection provenance and bulk editing, metadata preflight,
+selective reruns, searchable results, local history and same-connection cross-table
+checks. See [Validator workflows](docs/VALIDATOR-WORKFLOWS.md) for formats, defaults,
+examples and current limits; [roadmap status](docs/VALIDATOR-ROADMAP.md) identifies
+the remaining work. Baselines change only through explicit reviewed acceptance.
+
 ## Build contracts visually
 
 Create a contract from a CSV to start with its real column names, then set presence and data-quality rules from the workbench. Save one or more local paths or HTTP/HTTPS URLs as test targets when the same contract should run without prompting. Each configured target can be opened in VS Code or with its registered external application; URL targets open in a read-only VS Code document or in the browser. The YAML file remains the source of truth and can always be edited directly with schema-aware IntelliSense.

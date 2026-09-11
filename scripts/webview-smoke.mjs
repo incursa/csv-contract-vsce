@@ -1,6 +1,17 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+const qaScreenshotDir = process.env.CSV_CONTRACT_QA_SCREENSHOT_DIR ?? join(tmpdir(), "csv-contract-webview-qa");
 import { createServer } from "node:http";
 import { readFile, mkdir } from "node:fs/promises";
 import { chromium } from "playwright";
+import { build } from "esbuild";
+
+const suiteBundle = await build({ entryPoints: ["src/suite-workbench.ts"], bundle: true, write: false, format: "esm", platform: "node" });
+const { renderSuiteWorkbench } = await import(`data:text/javascript;base64,${Buffer.from(suiteBundle.outputFiles[0].contents).toString("base64")}`);
+const suiteState = { suite: { id: "synthetic-suite", source: "suite.yaml", isSuite: true, members: [
+  { id: "employees", source: "employees.yaml", contract: { version: 1, schema: { columns: { EmployeeId: { presence: "required" } } }, sqlServer: { connection: "local", schema: "dbo", table: "Employees" } } },
+  { id: "departments", source: "suite.yaml", contract: { version: 1, schema: { columns: { DepartmentId: { presence: "required" } } }, sqlServer: { connection: "local", schema: "dbo", table: "Departments" } } }
+] }, references: ["./employees.yaml", undefined] };
 
 const state = {
   type: "state",
@@ -74,6 +85,11 @@ const failedState = {
 };
 
 const server = createServer(async (request, response) => {
+  if (request.url === "/suite") {
+    response.setHeader("content-type", "text/html");
+    response.end(renderSuiteWorkbench(suiteState, "smoke").replace('<script nonce="smoke">', '<script nonce="smoke">window.__messages=[];window.acquireVsCodeApi=()=>({postMessage:m=>window.__messages.push(m),getState:()=>({}),setState:()=>{}});'));
+    return;
+  }
   if (request.url === "/webview.js") {
     response.setHeader("content-type", "application/javascript");
     response.end(await readFile("dist/web/webview.js"));
@@ -82,7 +98,7 @@ const server = createServer(async (request, response) => {
     response.end(await readFile("dist/web/webview.css"));
   } else {
     response.setHeader("content-type", "text/html");
-    response.end(`<!doctype html><html><head><meta charset="utf-8"><title>CSV Contract Workbench</title><link rel="stylesheet" href="/webview.css"><script>window.__messages=[];window.acquireVsCodeApi=()=>({postMessage:m=>window.__messages.push(m)});</script></head><body><main id="app"></main><script src="/webview.js"></script></body></html>`);
+    response.end(`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'nonce-smoke';"><title>CSV Contract Workbench</title><link rel="stylesheet" href="/webview.css"><script nonce="smoke">window.__messages=[];window.acquireVsCodeApi=()=>({postMessage:m=>window.__messages.push(m)});</script></head><body><main id="app"></main><script nonce="smoke" src="/webview.js"></script></body></html>`);
   }
 });
 
@@ -99,7 +115,7 @@ await page.goto(`http://127.0.0.1:${address.port}`);
 if ((await page.title()) !== "CSV Contract Workbench") throw new Error("Unexpected webview page title.");
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), state);
 await page.locator("text=CSV Contract Workbench").waitFor();
-await page.locator("text=CustomerId").first().click();
+await page.locator('[data-column="CustomerId"]').click();
 if (await page.locator(".metrics").count() !== 1) throw new Error("Metric layout did not render.");
 if ((await page.locator(".workbench-target .configured-target-row").count()) !== 4) throw new Error("Configured CSV and SQL targets did not render.");
 if ((await page.locator(".workbench-target .target-type").allTextContents()).join(",") !== "PATH,PATH,URL,VIEW") {
@@ -148,9 +164,9 @@ openMessage = await page.evaluate(() => window.__messages.at(-1));
 if (openMessage?.type !== "addSqlServerTarget") {
   throw new Error("Adding a SQL Server table or view did not send the expected host message.");
 }
-await mkdir("artifacts/runtime", { recursive: true });
-await mkdir("images", { recursive: true });
-await page.screenshot({ path: "images/workbench-column-rules.png", fullPage: true });
+await mkdir(qaScreenshotDir, { recursive: true });
+
+await page.screenshot({ path: join(qaScreenshotDir, "workbench-column-rules.png"), fullPage: true });
 await page.locator('[data-action="remove-sql-target"]').click();
 const removeSqlMessage = await page.evaluate(() => window.__messages.at(-1));
 if (removeSqlMessage?.type !== "updateContract" || removeSqlMessage.contract.sqlServer !== undefined) {
@@ -158,7 +174,7 @@ if (removeSqlMessage?.type !== "updateContract" || removeSqlMessage.contract.sql
 }
 
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), failedState);
-if ((await page.locator(".results .result").count()) !== 10) throw new Error("Issue preview must remain limited to 10 items.");
+if ((await page.locator(".results tbody tr").count()) !== 12) throw new Error("Failure grid must include all retained issues.");
 const exportIssuesButton = page.locator('[data-action="export-issues"]');
 if (!await exportIssuesButton.isVisible() || (await exportIssuesButton.textContent())?.trim() !== "Export results (12 issues)") {
   throw new Error("Failed results did not expose the complete issue export action.");
@@ -245,8 +261,8 @@ if (await page.locator(".workbench-run-status").count() !== 0 || await page.loca
 await page.locator('[data-action="add-target-url"]').click();
 const addUrlMessage = await page.evaluate(() => window.__messages.at(-1));
 if (addUrlMessage?.type !== "addTargetUrl") throw new Error("Add URL did not send the expected host message.");
-await page.screenshot({ path: "images/workbench-results.png", fullPage: true });
-await page.screenshot({ path: "artifacts/runtime/webview-workbench.png", fullPage: true });
+await page.screenshot({ path: join(qaScreenshotDir, "workbench-results.png"), fullPage: true });
+await page.screenshot({ path: join(qaScreenshotDir, "webview-workbench.png"), fullPage: true });
 
 const largeColumns = Object.fromEntries(Array.from({ length: 202 }, (_, index) => {
   const name = index === 0 ? "CustomerId" : `Column_${String(index + 1).padStart(3, "0")}`;
@@ -301,7 +317,7 @@ const presenceStyle = await page.locator(".presence-label").first().evaluate((el
 if (presenceStyle.color === presenceStyle.background || presenceStyle.text !== "required") {
   throw new Error("Presence status does not render as a readable label.");
 }
-const qaScreenshotDir = process.env.CSV_CONTRACT_QA_SCREENSHOT_DIR;
+
 if (qaScreenshotDir) {
   await mkdir(qaScreenshotDir, { recursive: true });
   await page.locator(".split").first().screenshot({ path: `${qaScreenshotDir}/large-column-workbench.png` });
@@ -323,7 +339,46 @@ if (compactLayout.targetColumns.split(" ").length !== 1 || compactLayout.rowTest
   throw new Error(`Workbench did not stack crowded controls at 1170px: ${JSON.stringify(compactLayout)}`);
 }
 if (qaScreenshotDir) await page.screenshot({ path: `${qaScreenshotDir}/mobile-row-test-editor.png`, fullPage: false });
+await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), state);
+await page.locator("details > summary").filter({ hasText: /^Add validation$/ }).click();
+await page.locator("#preset-kind").selectOption("constant");
+await page.locator("#preset-id").fill("literal-preview");
+await page.locator("#preset-column").selectOption("CustomerId");
+await page.locator("#preset-value").fill("0001");
+await page.locator('#preset-form button[type="submit"]').click();
+const presetMessage = await page.evaluate(() => window.__messages.at(-1));
+if (presetMessage?.type !== "updateContract" || presetMessage.contract.rules[0].expect.all[1].value !== "0001") throw new Error("Preset form did not preserve the literal identifier.");
+await page.locator('[data-action="preview-rule"][data-rule="literal-preview"]').click();
+if ((await page.evaluate(() => window.__messages.at(-1))).type !== "preview") throw new Error("Rule preview did not dispatch explicitly.");
+await page.locator(".visual-rule > summary").filter({ hasText: "Edit literal-preview" }).click();
+const visualRule = page.locator('[data-rule-editor="literal-preview"]');
+await visualRule.locator('[data-field="value"]').last().fill("0002");
+await visualRule.locator('button[type="submit"]').click();
+const editedRule = await page.evaluate(() => window.__messages.at(-1));
+if (editedRule.contract.rules[0].expect.all[1].value !== "0002" || editedRule.contract.rules[0].id !== "literal-preview") throw new Error("Nested visual editing lost the rule ID or literal value.");
+await page.locator(".visual-rule").first().screenshot({ path: join(qaScreenshotDir, "nested-rule-editor.png") });
+await page.locator('[data-action="live"]').click();
+if ((await page.evaluate(() => window.__messages.at(-1))).type !== "live") throw new Error("Live toggle did not dispatch explicitly.");
+await page.locator('[data-action="create-baseline"]').click();
+if ((await page.evaluate(() => window.__messages.at(-1))).type !== "createBaseline") throw new Error("Baseline capture control did not dispatch explicitly.");
+await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), { ...failedState, stale: true, runNotice: "Full-scope preview · synthetic data" });
+await page.locator("#result-filter").fill("row 2.");
+if (await page.locator(".results tbody tr").count() !== 1) throw new Error("Failure search did not select the expected row.");
+await page.locator('.results tbody [data-action="jump-rule"]').first().click();
+if ((await page.evaluate(() => window.__messages.at(-1))).type !== "jumpRule") throw new Error("Filtered results lost jump-to-rule navigation.");
+await page.locator(".results-pane").screenshot({ path: join(qaScreenshotDir, "filtered-stale-results.png") });
+await page.goto(`http://127.0.0.1:${address.port}/suite`);
+if (await page.title() !== "CSV Contract Suite Workbench") throw new Error("Suite page identity failed.");
+if ((await page.evaluate(() => window.__messages)).length !== 0) throw new Error("Opening the suite initiated an action.");
+await page.locator('[data-member="departments"] > details > summary').click();
+await page.locator('[data-action="member"][data-index="1"]').click();
+if ((await page.evaluate(() => window.__messages.at(-1))).type !== "member") throw new Error("Inline member visual-edit action failed.");
+await page.locator("#filter").fill("departments");
+if (await page.locator('[data-member="employees"]').isVisible()) throw new Error("Suite filtering failed.");
+await page.screenshot({ path: join(qaScreenshotDir, "suite-workbench.png"), fullPage: true });
+await page.setViewportSize({ width: 600, height: 900 });
+if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)) throw new Error("Suite has mobile page overflow.");
 if (consoleProblems.length > 0) throw new Error(`Webview console problems:\n${consoleProblems.join("\n")}`);
 await browser.close();
 server.close();
-console.log("Webview smoke passed: images/workbench-column-rules.png and images/workbench-results.png");
+console.log(`Webview smoke passed. Screenshots: ${qaScreenshotDir}`);

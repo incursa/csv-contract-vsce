@@ -66,7 +66,11 @@ export type PredicateOperator =
   | "greaterThan"
   | "greaterThanOrEqual"
   | "lessThan"
-  | "lessThanOrEqual";
+  | "lessThanOrEqual"
+  | "dateOnOrAfter"
+  | "dateOnOrBefore"
+  | "dateAfter"
+  | "dateBefore";
 
 export interface PredicateLeaf {
   column: string;
@@ -212,6 +216,7 @@ export type CsvTarget =
 
 export interface CsvContract {
   version: 1;
+  baseline?: import("./baseline").BaselineBinding;
   /** Opaque annotations, preserved without execution behavior. */
   metadata?: Record<string, unknown>;
   targets?: CsvTarget[];
@@ -255,6 +260,7 @@ export interface ValidationIssue {
 }
 
 export interface ValidationResult {
+  ruleOutcomes?: { id: string; selected: number; passed: number; failed: number }[];
   valid: boolean;
   rowCount: number;
   columnCount: number;

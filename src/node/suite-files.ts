@@ -44,11 +44,17 @@ function rebaseTargets(doc: Document, from: string, to: string): string[] {
       dependencies.push(`external URL: ${target.url}`);
     }
   }
+  if (value.baseline?.ref) {
+    const absolute = resolve(dirname(from), value.baseline.ref);
+    doc.setIn(["baseline", "ref"], relative(dirname(to), absolute).split(sep).join("/") || absolute);
+    dependencies.push(`schema baseline: ${absolute}`);
+  }
   return dependencies;
 }
 function comparable(contract: CsvContract, source: string, defaults?: SuiteConnection): string {
   const copy = effectiveContract(contract, defaults);
   for (const target of copy.targets ?? []) if (target.path !== undefined) target.path = resolve(dirname(source), target.path);
+  if (copy.baseline && "ref" in copy.baseline) copy.baseline.ref = resolve(dirname(source), copy.baseline.ref);
   return JSON.stringify(copy);
 }
 async function ensureWritable(paths: string[], force: boolean): Promise<void> {

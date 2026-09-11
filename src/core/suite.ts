@@ -1,4 +1,5 @@
 import { errorDetails } from "./error-details";
+import { planCrossCheck, type CrossCheck, type CrossExecutor } from "./cross-checks";
 import { isScalar, parseDocument, stringify, visit } from "yaml";
 import { parseContract } from "./contract";
 import type { CsvContract, CsvTarget, SqlServerIntegratedConnection, ValidationResult } from "./model";
@@ -14,6 +15,7 @@ export interface SuiteConnection {
   integratedConnection?: SqlServerIntegratedConnection;
 }
 export interface ContractSuite {
+  crossChecks?: CrossCheck[];
   suiteVersion: 1;
   id: string;
   name?: string;
@@ -28,12 +30,14 @@ export interface SuiteIO {
   canonical?(location: string): Promise<string>;
 }
 export interface LoadedMember {
+  connectionOrigins?: string[];
   id: string;
   source: string;
   contract?: CsvContract;
   error?: string;
 }
 export interface LoadedSuite {
+  crossChecks?: CrossCheck[];
   id: string;
   source: string;
   isSuite: boolean;
@@ -71,7 +75,7 @@ function connectionSettings(value: SuiteConnection, context: string): void {
 export function parseSuite(text: string): ContractSuite {
   const suite = yamlDocument(text).toJS({ maxAliasCount: 100 }) as ContractSuite;
   if (!suite || suite.suiteVersion !== 1 || typeof suite.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(suite.id)) throw new Error("Suite requires suiteVersion: 1 and a non-empty id using letters, numbers, dots, underscores or hyphens.");
-  keys(suite, ["suiteVersion", "id", "name", "description", "metadata", "defaults", "members"], `Suite ${suite.id}`);
+  keys(suite, ["suiteVersion", "id", "name", "description", "metadata", "defaults", "members", "crossChecks"], `Suite ${suite.id}`);
   if (suite.defaults) connectionSettings(suite.defaults, `Suite ${suite.id} defaults`);
   if (!Array.isArray(suite.members) || !suite.members.length) throw new Error(`Suite ${suite.id} requires at least one member.`);
   const ids = new Set<string>();
@@ -82,6 +86,19 @@ export function parseSuite(text: string): ContractSuite {
     keys(member, ["id", "ref", "contract", "name", "description", "metadata"], `Member ${member.id}`);
     if ((member.ref !== undefined) === (member.contract !== undefined)) throw new Error(`Member ${member.id}: declare exactly one of ref or contract.`);
     if (member.ref !== undefined && (typeof member.ref !== "string" || !member.ref.trim())) throw new Error(`Member ${member.id}: ref must be a non-empty file path.`);
+  }
+  const checks = new Set<string>();
+  if (suite.crossChecks !== undefined && !Array.isArray(suite.crossChecks)) throw new Error("crossChecks must be an array.");
+  for (const check of suite.crossChecks ?? []) {
+    if (!check || !/^[a-z0-9][a-z0-9._-]*$/.test(check.id) || checks.has(check.id) || !ids.has(check.from) || !ids.has(check.to) || !["foreignKey", "equalPopulation", "equalTotal"].includes(check.kind)) throw new Error("Invalid cross-check identity, kind or member dependency.");
+    keys(check, ["id", "kind", "from", "to", "keys", "valueColumns", "tolerance", "nulls", "severity"], `Cross-check ${check.id}`);
+    if (check.keys !== undefined && (!Array.isArray(check.keys) || !check.keys.length || check.keys.some(k => !k || typeof k.from !== "string" || typeof k.to !== "string" || Object.keys(k).some(p => !["from", "to"].includes(p))))) throw new Error("Invalid cross-check key mappings.");
+    if (check.valueColumns !== undefined && (!check.valueColumns || typeof check.valueColumns.from !== "string" || typeof check.valueColumns.to !== "string" || Object.keys(check.valueColumns).some(p => !["from", "to"].includes(p)))) throw new Error("Invalid total value columns.");
+    if (check.tolerance !== undefined && (typeof check.tolerance !== "string" || !/^(?:0|[1-9]\d{0,17})(?:\.\d{1,10})?$/.test(check.tolerance))) throw new Error("Invalid total tolerance.");
+    if (check.kind === "foreignKey" && !check.keys?.length || check.kind === "equalTotal" && !check.valueColumns) throw new Error("Cross-check requires keys or total value columns.");
+    if (check.nulls !== undefined && !["ignore", "fail"].includes(check.nulls)) throw new Error("Invalid cross-check null policy.");
+    if (check.severity !== undefined && !["warning", "error"].includes(check.severity)) throw new Error("Invalid cross-check severity.");
+    checks.add(check.id);
   }
   return suite;
 }
@@ -121,16 +138,20 @@ export async function loadSuite(source: string, io: SuiteIO, ancestors: string[]
       }
       contract = parseContract(stringify(contract));
       if (!validateContractShape(contract)) throw new Error(`Invalid contract: ${JSON.stringify(validateContractShape.errors)}`);
-      members.push({ id: member.id, source: location, contract: effectiveContract(contract, suite.defaults) });
+      const own = (value: SuiteConnection | undefined) => value?.connection !== undefined || value?.integratedConnection !== undefined;
+      const connectionOrigins = contract.sqlServer?.targets?.map(target => own(target) ? "table override" : own(contract.sqlServer) ? "contract" : own(suite.defaults) ? "suite default" : "unconfigured")
+        ?? (contract.sqlServer ? [own(contract.sqlServer) ? "contract" : own(suite.defaults) ? "suite default" : "unconfigured"] : []);
+      members.push({ id: member.id, source: location, contract: effectiveContract(contract, suite.defaults), connectionOrigins });
     } catch (error) {
       members.push({ id: member.id, source: location, error: errorDetails(error) });
     }
   }
-  return { id: suite.id, source, isSuite: true, members };
+  return { id: suite.id, source, isSuite: true, members, ...(suite.crossChecks ? { crossChecks: suite.crossChecks } : {}) };
 }
 
-export type SuiteStatus = "PASS" | "FAIL" | "ERROR" | "SKIPPED";
+export type SuiteStatus = "PASS" | "FAIL" | "ERROR" | "SKIPPED" | "CANCELED";
 export interface SuiteRun {
+  durationMs?: number;
   suite: string;
   member: string;
   spec: string;
@@ -140,12 +161,17 @@ export interface SuiteRun {
   result?: ValidationResult;
   error?: string;
 }
-export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContract, target: ResolvedSqlServerTarget) => Promise<ValidationResult>, failFast = false,
-  validateFile?: (contract: CsvContract, source: string, target: CsvTarget) => Promise<ValidationResult>) {
+export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContract, target: ResolvedSqlServerTarget, source: string) => Promise<ValidationResult>, failFast = false,
+  validateFile?: (contract: CsvContract, source: string, target: CsvTarget) => Promise<ValidationResult>,
+  controls: { signal?: AbortSignal; members?: string[]; onProgress?: (run: SuiteRun) => void; crossExecutor?: CrossExecutor } = {}) {
   const runs: SuiteRun[] = [];
+  const runId = globalThis.crypto.randomUUID();
+  const startedAt = new Date().toISOString();
   let stopped = false;
   for (const member of suite.members) {
     const base = { suite: suite.id, member: member.id, spec: member.source };
+    if (controls.signal?.aborted) { runs.push({ ...base, status: "CANCELED", error: "Canceled before member execution." }); continue; }
+    if (controls.members && !controls.members.includes(member.id)) { runs.push({ ...base, status: "SKIPPED", error: "Outside selected member scope." }); continue; }
     if (stopped) { runs.push({ ...base, status: "SKIPPED", error: "Not executed after fail-fast." }); continue; }
     try {
       if (member.error || !member.contract) throw new Error(member.error ?? "Contract was not loaded.");
@@ -153,37 +179,58 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
       if (!targets.length && !(validateFile && member.contract.targets?.length)) throw new Error("No SQL Server targets configured; dbtest requires a database target for every member.");
       for (const target of targets) {
         const identity = { ...base, table: `${target.schema}.${target.table}`, target: target.name ?? `${target.schema}.${target.table}` };
+        if (controls.signal?.aborted) { runs.push({ ...identity, status: "CANCELED", error: "Canceled before target execution." }); continue; }
         if (stopped) { runs.push({ ...identity, status: "SKIPPED", error: "Not executed after fail-fast." }); continue; }
         try {
-          const result = await validate(member.contract, target);
-          runs.push({ ...identity, status: result.valid ? "PASS" : "FAIL", result });
+          const started = Date.now();
+          const result = await validate(member.contract, target, member.source);
+          runs.push(controls.signal?.aborted ? { ...identity, status: "CANCELED", error: "Canceled during execution; result discarded." }
+            : { ...identity, status: result.valid ? "PASS" : "FAIL", result, durationMs: Date.now() - started });
+          controls.onProgress?.(runs[runs.length - 1]);
           if (failFast && !result.valid) stopped = true;
         } catch (error) {
-          runs.push({ ...identity, status: "ERROR", error: errorDetails(error) });
+          runs.push({ ...identity, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) });
+          controls.onProgress?.(runs[runs.length - 1]);
           if (failFast) stopped = true;
         }
       }
       for (const target of validateFile ? member.contract.targets ?? [] : []) {
         const identity = { ...base, target: target.path ?? target.url };
+        if (controls.signal?.aborted) { runs.push({ ...identity, status: "CANCELED", error: "Canceled before target execution." }); continue; }
         if (stopped) { runs.push({ ...identity, status: "SKIPPED", error: "Not executed after fail-fast." }); continue; }
         try {
+          const started = Date.now();
           const result = await validateFile!(member.contract, member.source, target);
-          runs.push({ ...identity, status: result.valid ? "PASS" : "FAIL", result });
+          runs.push(controls.signal?.aborted ? { ...identity, status: "CANCELED", error: "Canceled during execution; result discarded." } : { ...identity, status: result.valid ? "PASS" : "FAIL", result, durationMs: Date.now() - started });
+          controls.onProgress?.(runs[runs.length - 1]);
           if (failFast && !result.valid) stopped = true;
         } catch (error) {
-          runs.push({ ...identity, status: "ERROR", error: errorDetails(error) });
+          runs.push({ ...identity, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) });
+          controls.onProgress?.(runs[runs.length - 1]);
           if (failFast) stopped = true;
         }
       }
     } catch (error) {
-      runs.push({ ...base, status: "ERROR", error: errorDetails(error) });
+      runs.push({ ...base, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) });
       if (failFast) stopped = true;
     }
   }
+  for (const check of suite.crossChecks ?? []) {
+    const base = { suite: suite.id, member: `cross:${check.id}`, spec: suite.source, target: `${check.from} → ${check.to}` };
+    if (controls.signal?.aborted) { runs.push({ ...base, status: "CANCELED", error: "Canceled before cross-check execution." }); continue; }
+    if (stopped || (controls.members && !controls.members.some(id => id === check.from || id === check.to))) { runs.push({ ...base, status: "SKIPPED", error: "Cross-check outside selected scope or stopped by fail-fast." }); continue; }
+    try {
+      const plan = planCrossCheck(check, suite.members);
+      if (!controls.crossExecutor) throw new Error("Cross-table execution is unavailable in this host.");
+      const result = await controls.crossExecutor(plan, controls.signal);
+      runs.push(controls.signal?.aborted ? { ...base, status: "CANCELED", error: "Cross-check canceled; result discarded." } : { ...base, status: result.valid ? "PASS" : "FAIL", result });
+      if (failFast && !result.valid) stopped = true;
+    } catch (error) { runs.push({ ...base, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) }); if (failFast) stopped = true; }
+  }
   const status: SuiteStatus = runs.some((r) => r.status === "ERROR") || !runs.length ? "ERROR"
-    : runs.some((r) => r.status === "FAIL") ? "FAIL" : runs.some((r) => r.status === "SKIPPED") ? "SKIPPED" : "PASS";
-  return { suite: suite.id, valid: status === "PASS", status, exitCode: status === "PASS" ? 0 : status === "FAIL" ? 1 : 2,
-    summary: Object.fromEntries((["PASS", "FAIL", "ERROR", "SKIPPED"] as const).map((s) => [s, runs.filter((r) => r.status === s).length])),
+    : runs.some((r) => r.status === "CANCELED") ? "CANCELED" : runs.some((r) => r.status === "FAIL") ? "FAIL" : runs.some((r) => r.status === "SKIPPED") ? "SKIPPED" : "PASS";
+  return { suite: suite.id, runId, startedAt, completedAt: new Date().toISOString(), scope: controls.members ?? "all", valid: status === "PASS", status, exitCode: status === "PASS" ? 0 : status === "FAIL" ? 1 : 2,
+    summary: Object.fromEntries((["PASS", "FAIL", "ERROR", "SKIPPED", "CANCELED"] as const).map((s) => [s, runs.filter((r) => r.status === s).length])),
     members: suite.members.map((m) => ({ id: m.id, runs: runs.filter((r) => r.member === m.id) })), runs };
 }
 
@@ -195,6 +242,11 @@ export function generateSuiteSql(suite: LoadedSuite) {
     return targets.map((target) => ({ member: member.id, table: `${target.schema}.${target.table}`, connection: target.connection, integratedConnection: target.integratedConnection,
       ...generateSqlServerValidation(member.contract!, { target, includeDetailQueries: false, suite: { id: suite.id, member: member.id } }) }));
   });
+  for (const check of suite.crossChecks ?? []) {
+    const plan = planCrossCheck(check, suite.members);
+    batches.push({ member: `cross:${check.id}`, table: `${check.from} → ${check.to}`, connection: plan.from.connection, integratedConnection: plan.from.integratedConnection,
+      sql: plan.sql, ruleCount: 1, warnings: [], rules: [{ id: check.id, name: check.id, severity: check.severity ?? "error", code: "CROSS_CHECK_FAILED" }] });
+  }
   const literal = (s: string): string => `N'${s.replaceAll("'", "''")}'`;
   return { batches, ruleCount: batches.reduce((sum, b) => sum + b.ruleCount, 0), warnings: batches.flatMap((b) => b.warnings.map((w) => `${suite.id}/${b.member}/${b.table}: ${w}`)),
     sql: batches.map((b) => {

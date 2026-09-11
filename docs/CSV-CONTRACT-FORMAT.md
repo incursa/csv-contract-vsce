@@ -1,5 +1,9 @@
 # CSV contract format
 
+Version 0.14 adds optional versioned `baseline` definitions/references and ISO date
+predicates. See [Validator workflows](VALIDATOR-WORKFLOWS.md) for their complete
+format, interpretation policies, presets, live execution and migration notes.
+
 Contracts use YAML and normally end in `.csvtest.yaml`. The bundled JSON Schema provides completion, hover help, enum suggestions, and structural validation in VS Code. Keep this modeline on the first line when contracts may be edited outside the extension:
 
 ```yaml

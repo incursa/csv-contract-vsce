@@ -1,6 +1,7 @@
 import type { ValidationIssue, ValidationResult } from "./core/model";
 
 export interface WorkspaceReportEntryView {
+  status?: string;
   contractLabel: string;
   target: string;
   result?: ValidationResult;
@@ -32,7 +33,8 @@ export function renderWorkspaceReportHtml(
   const selected = options.selectedEntryIndex === undefined
     ? undefined
     : report.entries[options.selectedEntryIndex];
-  const status = report.entries.some((entry) => entry.error) ? "ERROR" : report.valid ? "PASS" : "FAIL";
+  const status = report.entries.some((entry) => entry.status === "ERROR" || (entry.error && !entry.status)) ? "ERROR"
+    : report.entries.some(e => e.status === "CANCELED") ? "CANCELED" : report.entries.some(e => e.status === "SKIPPED") ? "SKIPPED" : report.valid && report.entries.length > 0 ? "PASS" : "FAIL";
 
   return `<!doctype html>
 <html lang="en">
@@ -89,7 +91,7 @@ function renderSelectedEntry(entry: WorkspaceReportEntryView, index: number): st
         <span class="report-eyebrow">Selected run</span>
         <h2 id="selected-run-title">${escapeHtml(fileName(entry.contractLabel))}</h2>
       </div>
-      <span class="report-status report-status--${valid ? "pass" : "fail"}">${entry.error ? "ERROR" : valid ? "PASS" : "FAIL"}</span>
+      <span class="report-status report-status--${valid ? "pass" : "fail"}">${entry.status ?? (entry.error ? "ERROR" : valid ? "PASS" : "FAIL")}</span>
     </div>
     <dl class="report-run-metrics">
       ${runMetric("Contract", entry.contractLabel)}
@@ -109,7 +111,7 @@ function renderEntry(entry: WorkspaceReportEntryView, index: number, open: boole
   const result = entry.result;
   return `<details id="run-${index + 1}" class="report-run report-run--${valid ? "pass" : "fail"}"${open ? " open" : ""}>
     <summary>
-      <span class="report-run-status">${entry.error ? "ERROR" : valid ? "PASS" : "FAIL"}</span>
+      <span class="report-run-status">${entry.status ?? (entry.error ? "ERROR" : valid ? "PASS" : "FAIL")}</span>
       <span class="report-run-name">
         <strong>${escapeHtml(fileName(entry.contractLabel))}</strong>
         <small>${escapeHtml(entry.target)}</small>

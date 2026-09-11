@@ -10,6 +10,27 @@
     "schema"
   ],
   "properties": {
+    "baseline": {
+      "description": "Versioned schema expectation or a sidecar path relative to the containing contract/suite. Never updated by validation.",
+      "oneOf": [
+        {"type":"object","additionalProperties":false,"required":["ref"],"properties":{"ref":{"type":"string","minLength":1}}},
+        {"type":"object","required":["baselineVersion","revision","capturedAt","sourceKind","captureMethod","columns"],"additionalProperties":false,
+         "properties":{
+           "baselineVersion":{"const":1},"revision":{"type":"integer","minimum":1},"capturedAt":{"type":"string"},
+           "sourceKind":{"enum":["csv","sql","manual"]},"captureMethod":{"enum":["csv-header","sql-metadata","manual"]},
+           "object":{"type":"object","additionalProperties":false,"required":["schema","name"],"properties":{"schema":{"type":"string"},"name":{"type":"string"}}},
+           "interpretation":{"$ref":"#/$defs/csvOptions"},
+           "inference":{"type":"object","additionalProperties":false,"required":["scope","rows"],"properties":{"scope":{"enum":["complete","sample"]},"rows":{"type":"integer","minimum":0}}},
+           "policy":{"type":"object","additionalProperties":false,"properties":{"default":{"enum":["allowed","warning","error"]},"order":{"enum":["exact","ignore"]},"changes":{"type":"object","additionalProperties":{"enum":["allowed","warning","error"]}},"columns":{"type":"object","additionalProperties":{"enum":["allowed","warning","error"]}}}},
+           "columns":{"type":"array","items":{"type":"object","required":["name","ordinal"],"additionalProperties":false,"properties":{
+             "name":{"type":"string"},"ordinal":{"type":"integer","minimum":1},"required":{"type":"boolean"},"sqlType":{"type":["string","null"]},
+             "maxLength":{"type":["integer","null"]},"precision":{"type":["integer","null"]},"scale":{"type":["integer","null"]},
+             "nullable":{"type":["boolean","null"]},"identity":{"type":["boolean","null"]},"computed":{"type":["boolean","null"]},"primaryKeyOrdinal":{"type":["integer","null"]},
+             "observedType":{"enum":["unknown","string","number"]},"observedNullable":{"type":"boolean"}
+           }}}
+         }}
+      ]
+    },
     "metadata": {"type":"object","description":"Opaque annotations preserved by combine/split; no execution behavior. Do not store secrets."},
     "version": {
       "const": 1,
@@ -457,7 +478,7 @@
               "enum": [
                 "equals", "notEquals", "in", "notIn", "isNull", "notNull", "isBlank", "notBlank",
                 "equalsColumn", "notEqualsColumn", "contains", "notContains", "startsWith", "endsWith",
-                "matches", "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual"
+                "matches", "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual", "dateOnOrAfter", "dateOnOrBefore", "dateAfter", "dateBefore"
               ]
             },
             "value": { "type": ["string", "number"] },
@@ -471,7 +492,11 @@
           },
           "allOf": [
             {
-              "if": { "properties": { "operator": { "enum": ["equals", "notEquals", "contains", "notContains", "startsWith", "endsWith", "matches", "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual"] } } },
+              "if": { "properties": { "operator": { "enum": ["equals", "notEquals", "contains", "notContains", "startsWith", "endsWith", "matches", "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual", "dateOnOrAfter", "dateOnOrBefore", "dateAfter", "dateBefore"] } } },
+              "then": { "anyOf": [{ "required": ["value"] }, { "required": ["otherColumn"] }] }
+            },
+            {
+              "if": { "properties": { "operator": { "enum": ["equals", "notEquals", "contains", "notContains", "startsWith", "endsWith", "matches"] } } },
               "then": { "required": ["value"] }
             },
             {

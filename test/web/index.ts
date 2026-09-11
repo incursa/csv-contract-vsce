@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { executeVscodeSuite } from "../../src/vscode-suites";
 import type { ComparisonResult } from "../../src/comparison/model";
+import { readEditorContract } from "../../src/core/editor-document";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -12,8 +13,60 @@ export async function run(): Promise<void> {
   assert(folder, "The web-host fixture workspace was not opened.");
   const extension = vscode.extensions.getExtension("incursa.csv-contract-vsce");
   assert(extension, "The CSV Contract Workbench extension was not installed in the web host.");
-  await extension.activate();
+  const exports = await extension.activate() as { testHooks?: {
+    resolveContractEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel, memberId?: string): Promise<void>;
+    testActions: Map<string, (message: unknown) => Promise<void>>;
+    testStates: Map<string, { completedRuns: number; stale: boolean; live: boolean; runs: { result?: { valid: boolean } }[] }>;
+  } };
   assert(extension.isActive, "The browser extension entry point did not activate.");
+  const hooks = exports.testHooks;
+  assert(hooks, "Real host test hooks must only be available in ExtensionMode.Test.");
+  const liveCsv = vscode.Uri.joinPath(folder, "live-synthetic.csv");
+  const liveSuite = vscode.Uri.joinPath(folder, "live-synthetic.csvsuite.yaml");
+  await vscode.workspace.fs.writeFile(liveCsv, new TextEncoder().encode("Id\n0001\n0002\n"));
+  await vscode.workspace.fs.writeFile(liveSuite, new TextEncoder().encode('suiteVersion: 1\nid: live\nmembers:\n  - id: inline\n    contract:\n      version: 1\n      targets: [{path: ./live-synthetic.csv}]\n      schema: {columns: {Id: {presence: required}}}\n      rules: [{id: constant, expect: {column: Id, operator: equals, value: "0001"}}]\n'));
+  const liveDoc = await vscode.workspace.openTextDocument(liveSuite);
+  const livePanel = vscode.window.createWebviewPanel("validatorHostTest", "Synthetic inline live test", vscode.ViewColumn.Active, {});
+  await hooks.resolveContractEditor(liveDoc, livePanel, "inline");
+  const key = `${liveSuite.toString()}#inline`;
+  const send = hooks.testActions.get(key)!;
+  await send({ type: "ready" });
+  assert(hooks.testStates.get(key)?.completedRuns === 0, "Opening an inline editor must not execute.");
+  const until = async (predicate: () => boolean, message: string) => {
+    for (let i = 0; i < 100 && !predicate(); i++) await new Promise(resolve => setTimeout(resolve, 50));
+    assert(predicate(), message);
+  };
+  await send({ type: "live" });
+  await until(() => hooks.testStates.get(key)?.completedRuns === 1, "Explicit live enable must run initial CSV validation.");
+  assert(hooks.testStates.get(key)?.runs[0].result?.valid === false, "Synthetic initial assertion must fail.");
+  const edited = readEditorContract(liveDoc.getText(), "inline");
+  edited.rules![0].expect = { column: "Id", operator: "notNull" };
+  await send({ type: "updateContract", contract: edited, documentVersion: liveDoc.version });
+  await until(() => hooks.testStates.get(key)?.completedRuns === 2, "Undoable inline document edits must trigger live reruns.");
+  assert(hooks.testStates.get(key)?.runs[0].result?.valid === true, "Edited rule must pass through the actual host execution pipeline.");
+  await liveDoc.save();
+  await new Promise(resolve => setTimeout(resolve, 650));
+  assert(hooks.testStates.get(key)?.completedRuns === 2, "Save must coalesce with the semantic edit.");
+  const validText = liveDoc.getText();
+  const replace = async (text: string) => {
+    const edit = new vscode.WorkspaceEdit();
+    edit.replace(liveDoc.uri, new vscode.Range(liveDoc.positionAt(0), liveDoc.positionAt(liveDoc.getText().length)), text);
+    assert(await vscode.workspace.applyEdit(edit), "Host must apply the draft edit.");
+  };
+  await replace("suiteVersion: [invalid");
+  await new Promise(resolve => setTimeout(resolve, 700));
+  assert(hooks.testStates.get(key)?.completedRuns === 2, "Invalid intermediate YAML must never execute.");
+  await replace(validText);
+  await until(() => hooks.testStates.get(key)?.completedRuns === 3, "Repairing invalid YAML must resume live validation.");
+  await liveDoc.save();
+  await vscode.workspace.fs.writeFile(liveSuite, new TextEncoder().encode(validText.replace("notNull", "isNull")));
+  await until(() => hooks.testStates.get(key)?.completedRuns === 4, "An external saved-file reload must invalidate the inline member.");
+  assert(hooks.testStates.get(key)?.runs[0].result?.valid === false, "External reload must execute the new rule definition.");
+  await send({ type: "live" });
+  assert(hooks.testStates.get(key)?.live === false, "Pause control must stop live mode.");
+  livePanel.dispose();
+  await vscode.workspace.fs.delete(liveSuite);
+  await vscode.workspace.fs.delete(liveCsv);
   const suiteUri = vscode.Uri.joinPath(folder, "offline.csvsuite.yaml");
   await vscode.workspace.fs.writeFile(suiteUri, new TextEncoder().encode("suiteVersion: 1\nid: web-check\nmembers:\n  - id: missing\n    ref: ./does-not-exist.csvtest.yaml\n  - id: database\n    contract:\n      version: 1\n      schema: {columns: {Id: {presence: required}}}\n      sqlServer: {connection: offline, schema: dbo, table: Synthetic}\n"));
   const suiteReport = await executeVscodeSuite(suiteUri);

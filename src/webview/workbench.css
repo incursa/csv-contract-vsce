@@ -225,3 +225,16 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 @media (prefers-reduced-motion: reduce) {
   .run-spinner { animation-duration: 1.5s; }
 }
+#preset-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; padding-block: 20px; }
+#preset-form label { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+#preset-form p { grid-column: 1 / -1; }
+.results .table-scroll { overflow: auto; max-height: 420px; }
+.results table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.results th, .results td { padding: 8px; border-bottom: 1px solid var(--vscode-panel-border, #ddd); text-align: left; overflow-wrap: anywhere; }
+.results button { font: inherit; color: inherit; border: 0; background: transparent; text-decoration: underline; cursor: pointer; }
+.results .error { color: var(--vscode-errorForeground, #bb3030); white-space: pre-wrap; }
+/* Nested rule forms remain usable without widening the document. */
+.visual-rule fieldset { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; min-width: 0; border: 1px solid var(--vscode-panel-border, #ddd); }
+.visual-rule fieldset > fieldset { width: 100%; }
+.visual-rule label { display: grid; gap: 4px; max-width: 100%; }
+.visual-rule input, .visual-rule select, .visual-rule textarea { max-width: 100%; }

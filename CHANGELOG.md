@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.14.0
+
+- Share the visual contract editor across standalone, referenced and inline suite members, preserving YAML nodes and supporting nested predicate edits.
+- Add versioned CSV, SQL and manual schema baselines, sidecar dependencies, severity policies, drift review and explicit selective acceptance.
+- Add validation presets, ISO date comparisons and executable full-scope conditional, row and group previews with real rule outcomes.
+- Add opt-in debounced live tests, dependency watching, cancellation, stale-result protection, selected reruns and incomplete-work statuses.
+- Add connection provenance, reviewed bulk editing, shared metadata preflight, searchable result grids, rule navigation, local history retention, parameterized templates and coverage diagnostics.
+- Add same-connection foreign-key, population and decimal-total cross-table checks, plus bounded SQL timeouts and opt-in transient retries.
+- Preserve SQL-only McKee combine/split semantics through offline acceptance; add mocked SQL, scheduler, rendered CSP and actual VS Code host regression tests. No remote database verification was performed.
+- Document the remaining roadmap work explicitly, including relative/typed preset semantics, preview examples/sampling, per-issue export selection and scoped cross-table checks.
+
 ## 0.13.2
 
 - Preserve structured SQL/ODBC execution error messages and diagnostic fields instead of displaying `[object Object]`.

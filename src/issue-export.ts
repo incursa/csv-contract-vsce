@@ -3,7 +3,9 @@ import { rowsToCsv } from "./comparison/evidence";
 
 export interface IssueExportRun {
   target: string;
-  result: ValidationResult;
+  result?: ValidationResult;
+  status?: string;
+  error?: string;
 }
 
 export interface ValidationRunExport {
@@ -23,17 +25,17 @@ export interface ValidationRunExport {
 }
 
 export function createValidationRunExport(contract: string, runs: IssueExportRun[]): ValidationRunExport {
-  const issues = runs.reduce((total, run) => total + run.result.issueCount, 0);
-  const retainedIssueDetails = runs.reduce((total, run) => total + run.result.issues.length, 0);
+  const issues = runs.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
+  const retainedIssueDetails = runs.reduce((total, run) => total + (run.result?.issues.length ?? 0), 0);
   return {
     schema: "incursa.csv-contract-results/v1",
     contract,
     totals: {
       targets: runs.length,
-      passed: runs.filter((run) => run.result.valid).length,
-      rowsScanned: runs.reduce((total, run) => total + run.result.rowCount, 0),
-      errors: runs.reduce((total, run) => total + run.result.errorCount, 0),
-      warnings: runs.reduce((total, run) => total + run.result.warningCount, 0),
+      passed: runs.filter((run) => (run.result?.valid && (!run.status || run.status === "PASS"))).length,
+      rowsScanned: runs.reduce((total, run) => total + (run.result?.rowCount ?? 0), 0),
+      errors: runs.reduce((total, run) => total + (run.result?.errorCount ?? 0), 0),
+      warnings: runs.reduce((total, run) => total + (run.result?.warningCount ?? 0), 0),
       issues,
       retainedIssueDetails,
       issueDetailsComplete: issues === retainedIssueDetails
@@ -59,7 +61,7 @@ export function issueRunsToCsv(runs: IssueExportRun[]): string {
     "Actual",
     "Expected"
   ];
-  const rows = runs.flatMap((run) => run.result.issues.map((issue) => [
+  const rows = runs.flatMap((run) => (run.result?.issues ?? []).map((issue) => [
     run.target,
     issue.severity ?? "error",
     issue.level,
@@ -71,5 +73,6 @@ export function issueRunsToCsv(runs: IssueExportRun[]): string {
     issue.actual === undefined ? "" : String(issue.actual),
     issue.expected === undefined ? "" : String(issue.expected)
   ]));
+  for (const run of runs) if (run.error) rows.push([run.target, run.status ?? "ERROR", "execution", "", "", "", "", run.error, "", ""]);
   return rowsToCsv(columns, rows);
 }
