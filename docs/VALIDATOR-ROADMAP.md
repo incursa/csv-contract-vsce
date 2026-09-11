@@ -21,8 +21,10 @@ Verified: 99 passing regression tests (one opt-in test skipped in the normal
 run), a separately passing 23-contract McKee offline acceptance (1,303 SQL rules,
 no translation warnings), rendered desktop/narrow Workbench smoke, and a real
 VS Code web-host run. `npm run release:check` passed, including 25 PowerShell
-checks, branding and production VSIX packaging. Version 0.14.0 publication is
-pending. [Verification details](VALIDATOR-VERIFICATION.md) describe the evidence.
+checks, branding and production VSIX packaging. Version 0.14.0 was published
+successfully by [release run 34638794918](https://github.com/incursa/csv-contract-vsce/actions/runs/34638794918)
+from commit `238ad5750f020b6e6a550984d2ebbb4583df81b3` on September 11, 2026.
+[Verification details](VALIDATOR-VERIFICATION.md) describe the evidence.
 
 No remote database was contacted. McKee acceptance used a temporary copy of the
 23 contract definitions and synthetic blank records; it did not read employee data

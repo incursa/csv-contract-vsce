@@ -5,6 +5,13 @@ Chromium and the actual stable VS Code web extension host. The release workflow
 separately uses Node 22 on Windows and repeats `npm run release:check` before
 Marketplace publication.
 
+Release [v0.14.0](https://github.com/incursa/csv-contract-vsce/releases/tag/v0.14.0)
+completed successfully in [workflow run 34638794918](https://github.com/incursa/csv-contract-vsce/actions/runs/34638794918)
+from commit `238ad5750f020b6e6a550984d2ebbb4583df81b3`. The hosted release gate and
+Marketplace publish step both passed; the publish log records version 0.14.0.
+An independent `vsce show incursa.csv-contract-vsce --json` query also returned
+0.14.0 as the newest public Marketplace version.
+
 ## Local checks
 
 - 99 regression tests passed; the normal run skips the opt-in client acceptance test.
