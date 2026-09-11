@@ -71,3 +71,10 @@ lifecycle tests also passed under the installed VS Code Electron executable in
 Node mode, verifying the actual runtime's fork and termination behavior without
 opening a window or contacting SQL Server. The 0.15.1 workflow was canceled before
 publication after native ODBC pooling was discovered; 0.15.2 includes process isolation.
+
+Release source: `bdabef1a383114668e1afedeaf4c72faefd8be42`.
+[Release run 34653803212](https://github.com/incursa/csv-contract-vsce/actions/runs/34653803212)
+passed the same required checks on Windows and published version **0.15.2**
+successfully at `2026-09-11T22:30:39Z` (job `103441708997`).
+An independent public Marketplace query confirmed **0.15.2** as the newest
+version, with `lastUpdated` of `2026-09-11T22:38:31.717Z`.

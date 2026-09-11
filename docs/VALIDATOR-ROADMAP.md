@@ -6,6 +6,11 @@ Discussion draft · September 10, 2026
 
 SQL lifecycle follow-up (0.15.2): desktop operations await owned connection closure before completion, including failed/canceled work. Windows integrated operations additionally await isolated worker exit to release native ODBC pools. Driver cleanup errors remain errors. No explicit transactions are opened; implicit transactions are disabled. See the verification and workflow documents for tests and limitations.
 
+Version 0.15.2 passed 117 regression tests and all required release checks, including
+rendered UI and actual VS Code host integration. Nine lifecycle tests also passed
+under the installed VS Code Electron runtime. [Release run 34653803212](https://github.com/incursa/csv-contract-vsce/actions/runs/34653803212)
+published successfully; the public Marketplace independently confirmed 0.15.2.
+
 The roadmap remains the specification. Work is being delivered in tested increments;
 this table distinguishes implemented code from outstanding acceptance work.
 
