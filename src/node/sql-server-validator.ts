@@ -24,6 +24,12 @@ type SqlApi = typeof sql;
 interface SqlPoolHandle {
   api: SqlApi;
   pool: sql.ConnectionPool;
+  closeFailures?: unknown[];
+}
+
+async function closePool(handle: SqlPoolHandle): Promise<void> {
+  await handle.pool.close();
+  if (handle.closeFailures?.length) throw new AggregateError(handle.closeFailures, "SQL driver could not confirm connection closure.");
 }
 
 interface ObjectMetadataRow {
@@ -54,7 +60,7 @@ export async function queryWithCancellation<T>(request: Pick<sql.Request, "query
     const retries = runtimeInteger("CSV_CONTRACT_SQL_RETRIES", 0, 2);
     for (let attempt = 0; ; attempt++) {
       signal?.throwIfAborted();
-      try { return await request.query<T>(query); }
+      try { return await request.query<T>(`SET IMPLICIT_TRANSACTIONS OFF;\n${query}`); }
       catch (error) {
         const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
         if (signal?.aborted || attempt >= retries || !["ETIMEOUT", "ESOCKET", "ECONNRESET"].includes(code)) throw error;
@@ -84,12 +90,16 @@ export class SqlServerValidationSession {
     return crossResult(plan.check, result.recordset[0].FailureCount);
   }
   private readonly pools = new Map<string, SqlPoolHandle>();
+  private closed = false;
 
   public constructor(private readonly resolveConnectionString: (profile: string) => Promise<string> | string) {}
 
   public async dispose(): Promise<void> {
-    await Promise.all([...this.pools.values()].map(({ pool }) => pool.close()));
+    this.closed = true;
+    const outcomes = await Promise.allSettled([...this.pools.values()].map(closePool));
     this.pools.clear();
+    const failures = outcomes.flatMap(outcome => outcome.status === "rejected" ? [outcome.reason] : []);
+    if (failures.length) throw new AggregateError(failures, "One or more SQL connection pools failed to close.");
   }
 
   public async validate(
@@ -185,7 +195,7 @@ export class SqlServerValidationSession {
 
   public async listObjects(profile: string): Promise<SqlServerObjectInfo[]> {
     const handle = await this.getPool(profile);
-    const result = await handle.pool.request().query<ObjectMetadataRow>(`
+    const result = await queryWithCancellation<ObjectMetadataRow>(handle.pool.request(), `
 SELECT
   s.name AS schemaName,
   o.name AS objectName,
@@ -219,11 +229,13 @@ ORDER BY s.name, o.name, c.column_id;`);
   }
 
   private async getPool(profile: string, integrated?: SqlServerIntegratedConnection): Promise<SqlPoolHandle> {
+    if (this.closed) throw new Error("SQL session is closed.");
     const requestTimeout = runtimeInteger("CSV_CONTRACT_SQL_TIMEOUT_MS", 15000, 600000);
     if (requestTimeout < 1) throw new Error("CSV_CONTRACT_SQL_TIMEOUT_MS must be at least 1; unbounded queries are not supported.");
     const key = integrated ? `integrated:${JSON.stringify(integrated)}` : `profile:${profile}`;
     const existing = this.pools.get(key);
     if (existing) return existing;
+    const closeFailures: unknown[] = [];
     let handle: SqlPoolHandle;
     if (integrated) {
       if (process.platform !== "win32" || process.arch !== "x64") throw new Error("Bundled Windows integrated authentication requires Windows x64. Use a connection profile on other platforms.");
@@ -245,6 +257,14 @@ ORDER BY s.name, o.name, c.column_id;`);
       // mssql wraps non-Error ODBC objects with Error(object), losing diagnostics.
       // Keep the normal pool/request lifecycle, but normalize at the open boundary.
       class DiagnosticPool extends nativeSql.ConnectionPool {
+        _poolDestroy(connection: { close(callback: (error?: unknown) => void): void }) {
+          return new Promise<void>((resolve, reject) => {
+            connection.close(error => {
+              if (error) { const diagnostic = new Error(errorDetails(error)); closeFailures.push(diagnostic); reject(diagnostic); }
+              else resolve();
+            });
+          });
+        }
         _poolCreate() {
           return new Promise<import("msnodesqlv8/types").Connection>((resolve, reject) => {
             nativeDriver.open({ conn_str: connectionString, conn_timeout: 15 }, (error, connection) => {
@@ -255,15 +275,27 @@ ORDER BY s.name, o.name, c.column_id;`);
           });
         }
       }
-      const pool = await new DiagnosticPool(nativeConfig).connect();
+      const pool = new DiagnosticPool(nativeConfig);
       handle = { api: nativeSql as SqlApi, pool: pool as sql.ConnectionPool };
     } else {
       const connectionString = await this.resolveConnectionString(profile);
       if (!connectionString.trim()) throw new Error(`SQL Server connection profile '${profile}' is empty.`);
       const pool = new sql.ConnectionPool({ ...sql.ConnectionPool.parseConnectionString(connectionString), requestTimeout });
-      handle = { api: sql, pool: await pool.connect() };
+      handle = { api: sql, pool };
     }
+    handle.closeFailures = closeFailures;
     this.pools.set(key, handle);
+    try {
+      await handle.pool.connect();
+      // Tarn logs destroy errors/timeouts instead of rejecting pool.destroy(). Retain them.
+      const resources = (handle.pool as unknown as { pool?: { on(event: string, listener: (id: number, resource: unknown, error: unknown) => void): void } }).pool;
+      resources?.on("destroyFail", (_id, _resource, error) => { closeFailures.push(error); });
+    }
+    catch (error) {
+      try { await closePool(handle); this.pools.delete(key); }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], "SQL connection failed and cleanup also failed."); }
+      throw error;
+    }
     return handle;
   }
 }

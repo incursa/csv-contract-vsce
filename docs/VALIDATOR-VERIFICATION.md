@@ -54,3 +54,13 @@ Actual SQL Server execution of the new queries remains unverified without approv
 [Roadmap status](VALIDATOR-ROADMAP.md) and [workflow documentation](VALIDATOR-WORKFLOWS.md)
 record the remaining boundaries. Linked templates remain optional future work;
 CSV targets share a contract baseline and cross-connection checks are unsupported.
+## SQL lifecycle follow-up — 0.15.1
+
+The SQL lifetime fix removes desktop extension-wide pools. Each operation awaits
+its own cleanup, and suite targets advance only after closure. Seven additional
+mocked lifecycle tests cover suite ordering, assertion failures, exceptions,
+cancellation, failed connection setup, delayed/all-pool cleanup, implicit
+transaction settings and driver destroy failures that the pool library can hide.
+The final production test run passed 115 tests (one offline acceptance opt-in skipped).
+`npm run release:check` passed, including PowerShell, rendered Workbench, actual
+VS Code host and production packaging. Remote database inspection was not performed.

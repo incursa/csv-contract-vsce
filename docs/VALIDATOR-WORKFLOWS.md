@@ -319,3 +319,23 @@ Exports retain original aggregate counts, mark limited details and record select
 scope. CSV includes run/work IDs, evaluation time, execution scope, status, export
 context and retained/total issue counts. Selection keys are bound to the current
 run; stale selections are rejected. Filtered exports omit preview example records.
+### SQL connection lifetime (0.15.1)
+
+Every desktop SQL operation owns its session: one target validation (including its
+preview and metadata reads), cross-table check, object browser request or schema
+capture. The operation awaits pool closure before returning, including assertion
+failures, execution errors and cancellation. A suite therefore closes each target's
+connections before advancing; live reruns create fresh sessions. This deliberately
+trades cross-target pool reuse for deterministic cleanup and isolates concurrent editors.
+The CLI closes all owned pools in its existing final cleanup before process completion.
+
+Connection attempts that fail also trigger cleanup. All pool close attempts settle
+before cleanup returns; cleanup failures are execution errors, not PASS. Validation
+and metadata batches explicitly disable implicit transactions, and the extension
+never starts an explicit transaction. No database objects or data are modified.
+If cancellation occurs while connecting, completion waits for the driver to settle
+and then closes its resources. Driver close errors mean closure cannot be confirmed
+and are reported as such. No claim is made about unrelated applications' sessions.
+
+Lifecycle regression tests use mocked pools and requests. Actual remote SQL Server
+session/transaction inspection has not been performed because it requires approval.

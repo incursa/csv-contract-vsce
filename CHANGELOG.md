@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.1
+
+- Close and await desktop SQL connections after every target, preview, cross-table check, schema capture and object browser operation instead of retaining extension-wide pools.
+- Clean up failed connection attempts, await every pool close, and surface cleanup errors instead of reporting successful completion.
+- Explicitly disable implicit transactions in SQL validation and metadata batches. Add mocked lifecycle regressions for success, assertion failure, errors, cancellation and failed connection setup.
+
 ## 0.15.0
 
 - Add visual nested branch creation, removal, grouping and reordering, plus condition selector controls in the shared contract editor.
