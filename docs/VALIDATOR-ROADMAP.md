@@ -9,23 +9,21 @@ this table distinguishes implemented code from outstanding acceptance work.
 
 | Area | Current increment | Still outstanding |
 | --- | --- | --- |
-| Shared editors | Standalone, referenced and inline members use the same contract editor; node-preserving YAML edits; nested predicate forms; shared results and preflight; suite-context connection inheritance | Adding/removing nested predicate branches remains a YAML operation |
-| Baselines | Versioned embedded/sidecar format; CSV/SQL/manual capture; structural, inferred and declared metadata drift; policy severities; selected acceptance; dependency rebasing | Broader metadata/key kinds, richer impact classification and per-target baseline bindings |
-| Presets | Null, literal, allow/prohibit list, fixed ISO date/number range, pattern, required-when, comparisons, unique column, population | Relative dates, additional typed literal policies, precision controls and configurable composite null/duplicate policies |
-| Previews | Explicit full-scope draft conditional, row and group-rule execution on one selected CSV/SQL target; actual conditional selected/pass/fail counts; aggregate results, errors and staleness | Bounded passing/failing row retrieval and sampling controls |
-| Live execution | Explicit enable/pause/cancel; initial run; valid draft edits/reloads; serial debouncing; exact dependency watchers including outside workspace; separate CSV-input toggle; driver cancellation; stale suppression; affected suite reruns; bounded SQL timeouts and opt-in transient retries | In-flight pool acquisition and synchronous CSV work cannot be interrupted; completion is discarded and subsequent runs wait |
-| Connections/results | Shared connection editing, suite bulk review, connection provenance, shared metadata preflight, searchable failure grid, rule navigation, filtered single-contract export and member-scoped suite export | Per-issue selection/export parity and complete CSV export run metadata |
-| History/templates/cross-table | Opt-in aggregate history with configurable retention/deletion, reviewed parameterized rule insertion, same-connection foreign keys/population/decimal totals, coverage diagnostics | Linked templates (future), scoped cross-table comparisons and richer stable-rule history diffs |
+| Shared editors | Shared standalone/referenced/inline editor; lossless YAML edits; nested branch add/remove/wrap/reorder; selector editing; shared results, connection and preflight controls | None for current editor scope |
+| Baselines | Versioned CSV/SQL/manual baselines; severity policies; before/after selective acceptance; SQL-target overrides; dependency rebasing; collation/unique-key membership and conservative impact labels | CSV targets share a contract baseline; foreign-key and filtered-index definitions are not captured |
+| Presets | Null, typed constant/list, relative/fixed ISO dates, numeric precision/ranges, patterns, conditional requirements, comparisons, composite uniqueness/null policies, population | SQL typed/date/precision policies use disclosed exact fallback |
+| Previews | Explicit selected CSV/SQL source; sample or complete scope; real selected/pass/fail counts; bounded passing/failing conditional examples; aggregate row/group results; distinct SAMPLED status | Samples are first/unordered rows, not statistical; complete SQL previews may read the scope into memory |
+| Live execution | Explicit enable/pause/cancel; initial execution; valid edits/reloads; serial debounce; dependency watchers; stale suppression; affected reruns; bounded SQL timeout/retry | In-flight pool acquisition and synchronous CSV work cannot be interrupted; later runs wait |
+| Connections/results | Shared/bulk connection editing; provenance; preflight; searchable failures; rule navigation; selected issue exports with run metadata; progress and selected reruns | Search covers retained details only |
+| History/templates/cross-table | Stable-rule aggregate history comparisons; configurable retention; parameterized ordinary-rule templates; independently scoped same-connection relational checks; coverage diagnostics | Linked templates remain optional future work; cross-connection checks are unsupported |
 
-Verified: 99 passing regression tests (one opt-in test skipped in the normal
-run), a separately passing 23-contract McKee offline acceptance (1,303 SQL rules,
-no translation warnings), rendered desktop/narrow Workbench smoke, and a real
-VS Code web-host run. `npm run release:check` passed, including 25 PowerShell
-checks, branding and production VSIX packaging. Version 0.14.0 was published
-successfully by [release run 34638794918](https://github.com/incursa/csv-contract-vsce/actions/runs/34638794918)
-from commit `238ad5750f020b6e6a550984d2ebbb4583df81b3` on September 11, 2026.
+Verified locally for 0.15.0: 108 passing regression tests (one opt-in acceptance test
+skipped by default), separately passing 23-contract McKee offline acceptance
+(1,303 SQL rules, no translation warnings), rendered desktop/narrow Workbench
+interactions and an actual VS Code host run. `npm run release:check` passed,
+including 25 PowerShell checks, branding and production VSIX packaging.
+Marketplace publication confirmation is pending the established tag workflow.
 [Verification details](VALIDATOR-VERIFICATION.md) describe the evidence.
-
 No remote database was contacted. McKee acceptance used a temporary copy of the
 23 contract definitions and synthetic blank records; it did not read employee data
 or add CSV targets. The original fixture was not modified.

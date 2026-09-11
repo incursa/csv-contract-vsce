@@ -8,6 +8,7 @@ import type {
 } from "./model";
 import { resolveSqlServerTargets, type ResolvedSqlServerTarget } from "./sql-server-targets";
 import { createPhysicalSqlContract } from "./sql-server-column-mapping";
+import { resolveEvaluation } from "./evaluation";
 
 export interface SqlGeneratedRule {
   id: string;
@@ -18,6 +19,7 @@ export interface SqlGeneratedRule {
 }
 
 export interface SqlGenerationOptions {
+  evaluatedAt?: string;
   target?: ResolvedSqlServerTarget;
   /** Adds provenance columns without changing any check predicate. */
   suite?: { id: string; member: string };
@@ -96,7 +98,7 @@ function predicateSql(predicate: Predicate, caseSensitive: boolean, trimValues: 
     return parts.some((part) => part === undefined) ? undefined : `(${parts.join(" OR ")})`;
   }
   requireLeafShape(predicate);
-  if (predicate.operator === "matches" || predicate.operator.startsWith("date")) return undefined;
+  if (predicate.operator === "matches" || predicate.operator.startsWith("date") || (predicate.valueType && predicate.valueType !== "string") || predicate.caseSensitive !== undefined || predicate.decimalPlaces !== undefined) return undefined;
   const column = `t.${sqlIdentifier(predicate.column)}`;
   const columnText = normalizedText(predicate.column, caseSensitive, trimValues);
   const comparable = `COALESCE(${columnText}, ${normalizedLiteral("", caseSensitive, trimValues)})`;
@@ -148,7 +150,7 @@ function addConditionalRule(
   const expected = predicateSql(rule.expect as Predicate, caseSensitive, trimValues, nullValues);
   const when = rule.when ? predicateSql(rule.when as Predicate, caseSensitive, trimValues, nullValues) : "(1 = 1)";
   if (!expected || !when) {
-    warnings.push(`${rule.id} uses a JavaScript regex or ISO date predicate and requires exact client-side fallback when executed.`);
+    warnings.push(`${rule.id} uses a regex, date, typed, case or precision policy that requires exact client-side fallback when executed.`);
     return;
   }
   output.push({
@@ -176,12 +178,13 @@ function addCountExpectations(rules: GeneratedRule[], prefix: string, name: stri
 }
 
 export function generateSqlServerValidation(contract: CsvContract, options: SqlGenerationOptions = {}): SqlGenerationResult {
+  contract = resolveEvaluation(contract, options.evaluatedAt ?? new Date().toISOString());
   if (!contract.sqlServer) throw new Error("The contract must declare sqlServer before SQL can be generated.");
   const logicalTarget = options.target ?? resolveSqlServerTargets(contract, false)[0];
   const mapped = createPhysicalSqlContract(contract, logicalTarget);
   const generated = generatePhysicalSqlServerValidation(mapped.contract, { ...options, target: mapped.target });
   let sql = generated.sql;
-  if (contract.baseline) sql = "-- Schema baseline validation requires the Workbench/CLI runtime metadata comparison; this script alone is incomplete.\n" + sql;
+  if (contract.baseline || logicalTarget.baseline) sql = "-- Schema baseline validation requires the Workbench/CLI runtime metadata comparison; this script alone is incomplete.\n" + sql;
   const rules = generated.rules.map((rule) => {
     if (!rule.column) return rule;
     const canonical = mapped.physicalToCanonical[rule.column] ?? rule.column;
@@ -247,10 +250,11 @@ function generatePhysicalSqlServerValidation(contract: CsvContract, options: Sql
     if (constraints.matches) warnings.push(`${column}.matches uses a JavaScript regular expression and requires exact client-side fallback when executed.`);
   }
 
+  if (contract.identity?.nulls) warnings.push("Explicit identity null policies require exact client-side fallback.");
   if (contract.identity?.unique !== false && contract.identity?.columns.length) {
     const groups = contract.identity.columns.map((column) => `COALESCE(${normalizedText(column, caseSensitive, trimValues)}, ${normalizedLiteral("", caseSensitive, trimValues)})`).join(", ");
     const duplicateCounts = `SELECT COUNT_BIG(*) AS duplicate_count FROM ${table} AS t WHERE (${scopeSql}) GROUP BY ${groups} HAVING COUNT_BIG(*) > 1`;
-    rules.push({ id: "identity.unique", name: "Composite identity is unique", severity: "error", code: "IDENTITY_NOT_UNIQUE", failureCountSql: `(SELECT COALESCE(SUM(duplicate_count - 1), 0) FROM (${duplicateCounts}) AS duplicates)` });
+    rules.push({ id: contract.identity.id ?? "identity.unique", name: "Composite identity is unique", severity: "error", code: "IDENTITY_NOT_UNIQUE", failureCountSql: `(SELECT COALESCE(SUM(duplicate_count - 1), 0) FROM (${duplicateCounts}) AS duplicates)` });
   }
   for (const rule of contract.rules ?? []) addConditionalRule(rules, warnings, rule, caseSensitive, trimValues, nullValues);
   for (const rule of config.conditionalRules ?? []) addConditionalRule(rules, warnings, rule, caseSensitive, trimValues, nullValues);

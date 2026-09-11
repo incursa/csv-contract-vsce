@@ -4,7 +4,7 @@ import "@incursa/ui-kit/dist/inc-design-language.css";
 import "./workbench.css";
 import type { CsvContract, SqlServerIntegratedConnection } from "../core/model";
 import { predicateDescription } from "../core/predicate";
-import { renderPredicate, readPredicate } from "./rule-editor";
+import { renderPredicate, readPredicate, editPredicateTree } from "./rule-editor";
 import { insertPreset, presetCatalog, type PresetInput } from "../core/presets";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
@@ -14,6 +14,12 @@ let documentVersion: number | undefined;
 const vscode = { postMessage: (message: { type: string; [key: string]: unknown }) => api.postMessage({ ...message, documentVersion }) };
 const app = document.querySelector<HTMLElement>("#app")!;
 app.addEventListener("click", event => {
+  const treeButton = (event.target as HTMLElement).closest<HTMLElement>("[data-predicate-action]");
+  if (treeButton && contract) {
+    try { editPredicateTree(treeButton, Object.keys(contract.schema.columns)); }
+    catch (error) { treeButton.closest("form")!.querySelector('[data-rule-error]')!.textContent = String(error); }
+    return;
+  }
   const button = (event.target as HTMLElement).closest<HTMLElement>('[data-action="jump-rule"]');
   if (button) vscode.postMessage({ type: "jumpRule", ruleId: button.dataset.rule });
 });
@@ -295,7 +301,7 @@ function render(): void {
       <p role="status">${stale ? "STALE — definitions or sources changed. " : ""}${live ? "Live tests active. " : ""}${escape(runNotice)}</p>
       <label>Search failures<input id="result-filter" type="search" class="form-control" value="${escape(resultFilter)}"></label>
       <div class="pane-heading">
-        <div><h2>Latest results</h2><p>${runs.length > 0 ? `${runs.filter((run) => run.result?.valid).length} of ${runs.length} targets passed` : "Run the contract to see results."}</p></div>
+        <div><h2>Latest results</h2><p>${runs.length > 0 ? `${runs.filter((run) => run.result?.valid && run.result.preview?.scope !== "sample").length} of ${runs.length} targets passed` : "Run the contract to see results."}</p></div>
         ${runs.length > 0 ? `<button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="export-issues">Export results${issueCount > 0 ? ` (${issueCount.toLocaleString()} issues)` : ""}</button>` : ""}
       </div>
       <div class="results">
@@ -314,11 +320,17 @@ function render(): void {
           <label>Allowed/prohibited values (one literal per line)<textarea id="preset-values" class="form-control"></textarea></label>
           <label>Minimum (also minimum population)<input id="preset-min" class="form-control"></label>
           <label>Maximum<input id="preset-max" class="form-control"></label>
+          <label>Date bounds<select id="preset-date-anchor" class="form-select"><option value="">Fixed ISO dates</option><option value="today">Day offsets from today (UTC)</option><option value="now">Day offsets from execution instant</option></select></label>
+          <label>Literal type<select id="preset-value-type" class="form-select"><option value="string">String</option><option value="number">Number</option><option value="boolean">Boolean (true/false)</option></select></label>
+          <label>Case policy<select id="preset-case" class="form-select"><option value="">Use contract setting</option><option value="true">Case sensitive</option><option value="false">Case insensitive</option></select></label>
+          <label>Maximum decimal places (optional)<input id="preset-decimals" type="number" min="0" max="15" class="form-control"></label>
+          <label>Composite identity columns (one per line; blank uses selected column)<textarea id="preset-columns" class="form-control"></textarea></label>
+          <label>Duplicate policy<select id="preset-duplicates" class="form-select"><option value="reject">Reject duplicate keys</option><option value="allow">Allow duplicates</option></select></label>
           <label><input type="checkbox" id="preset-exclusive"> Exclude range endpoints</label>
           <label>Other / condition column<select id="preset-other" class="form-select">${columnOptions(names, names[0] ?? "")}</select></label>
           <label>Column comparison<select id="preset-comparison" class="form-select">${["equalsColumn", "notEqualsColumn", "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual"].map(v => `<option>${v}</option>`).join("")}</select></label>
           <label>Null treatment<select id="preset-nulls" class="form-select"><option value="fail">Fail</option><option value="allow">Allow</option><option value="ignore">Ignore (exclude from selected rows)</option></select></label>
-          <p>Uniqueness uses the existing column constraint: configured nulls are ignored. Population sets schema.rowCount.min.</p>
+          <p>Uniqueness creates an identity. Allow nulls treats configured null markers as equal; Ignore excludes null-containing keys. Population sets schema.rowCount.min.</p>
           <button class="inc-btn inc-btn--primary" type="submit">Add validation</button><p id="preset-error" role="alert"></p>
         </form>
       </details>
@@ -332,7 +344,8 @@ function render(): void {
           <code>${escape(rule.id)}</code><button class="inc-btn inc-btn--outline-secondary" data-action="preview-rule" data-rule="${escape(rule.id)}">Run preview</button>
           <span>${escape(`${rule.when ? `when ${predicateDescription(rule.when)}; ` : ""}expect ${predicateDescription(rule.expect)}`)}</span>
         </div><details class="visual-rule"><summary>Edit ${escape(rule.id)}</summary><form data-rule-editor="${escape(rule.id)}">
-          ${rule.when ? `<div data-rule-when><h3>When</h3>${renderPredicate(rule.when, names)}</div>` : ""}
+          <button type="button" data-toggle-when>${rule.when ? "Remove condition selector" : "Add condition selector"}</button>
+          <div data-rule-when>${rule.when ? `<h3>When</h3>${renderPredicate(rule.when, names)}` : ""}</div>
           <div data-rule-expect><h3>Expect</h3>${renderPredicate(rule.expect, names)}</div>
           <p>Literal values remain strings unless an unchanged existing literal is numeric. List entries are literal strings. Changes apply to the draft; save normally.</p>
           <button type="submit" class="inc-btn inc-btn--primary">Apply rule changes</button><p role="alert" data-rule-error></p></form></details>`).join("")}
@@ -455,6 +468,11 @@ function firstUnusedColumn(used: string[]): string | undefined {
 }
 
 function bind(): void {
+  app.querySelectorAll<HTMLElement>("[data-toggle-when]").forEach(button => button.addEventListener("click", () => {
+    const holder = button.closest("form")!.querySelector("[data-rule-when]")!;
+    if (holder.children.length) { holder.innerHTML = ""; button.textContent = "Add condition selector"; }
+    else if (contract) { holder.innerHTML = `<h3>When</h3>${renderPredicate({ column: Object.keys(contract.schema.columns)[0], operator: "notNull" }, Object.keys(contract.schema.columns))}`; button.textContent = "Remove condition selector"; }
+  }));
   app.querySelectorAll<HTMLFormElement>("[data-rule-editor]").forEach(form => form.addEventListener("submit", event => {
     event.preventDefault();
     try {
@@ -463,7 +481,7 @@ function bind(): void {
       if (!rule) throw new Error("Rule no longer exists.");
       const expect = readPredicate(form.querySelector('[data-rule-expect] > fieldset')!);
       const whenNode = form.querySelector('[data-rule-when] > fieldset');
-      Object.assign(rule, { expect, ...(whenNode ? { when: readPredicate(whenNode) } : {}) });
+      Object.assign(rule, { expect, when: whenNode ? readPredicate(whenNode) : undefined });
       vscode.postMessage({ type: "updateContract", contract });
     } catch (error) { form.querySelector('[data-rule-error]')!.textContent = String(error); }
   }));
@@ -485,6 +503,8 @@ function bind(): void {
     const value = (id: string) => (document.getElementById(id) as HTMLInputElement).value;
     try {
       contract = insertPreset(contract, { kind: value("preset-kind"), id: value("preset-id"), column: value("preset-column"), value: value("preset-value"),
+        dateAnchor: value("preset-date-anchor") || undefined, valueType: value("preset-value-type"), caseSensitive: value("preset-case") ? value("preset-case") === "true" : undefined,
+        decimalPlaces: value("preset-decimals") === "" ? undefined : Number(value("preset-decimals")), columns: value("preset-columns").split(/\r?\n/).filter(Boolean), duplicates: value("preset-duplicates"),
         values: value("preset-values").split(/\r?\n/), minimum: value("preset-min"), maximum: value("preset-max"), otherColumn: value("preset-other"),
         exclusive: (document.getElementById("preset-exclusive") as HTMLInputElement).checked, comparison: value("preset-comparison"), nulls: value("preset-nulls") } as PresetInput);
       vscode.postMessage({ type: "updateContract", contract });
@@ -565,7 +585,7 @@ function bind(): void {
     vscode.postMessage({ type: "updateContract", contract });
   }));
   app.querySelector('[data-action="open-yaml"]')?.addEventListener("click", () => vscode.postMessage({ type: "openYaml" }));
-  app.querySelector('[data-action="export-issues"]')?.addEventListener("click", () => vscode.postMessage({ type: "exportIssues", filter: resultFilter }));
+  app.querySelector('[data-action="export-issues"]')?.addEventListener("click", () => vscode.postMessage({ type: "exportIssues", filter: resultFilter, selectedIssues: Array.from(app.querySelectorAll<HTMLElement>('[data-issue-selection]:checked')).map(input => input.dataset.issueSelection) }));
   app.querySelector('[data-action="run"]')?.addEventListener("click", () => {
     if (running) return;
     running = true;

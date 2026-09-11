@@ -16,6 +16,7 @@ export async function editBaseline(uri: vscode.Uri, read: () => CsvContract, wri
   if (!mode) return;
   let captured: SchemaBaseline;
   let columnMap: Record<string, string> = {};
+  let targetIndex: number | undefined;
   if (mode === "Manual definition") {
     const input = await vscode.window.showInputBox({ title: "Manual columns (JSON array)",
       value: JSON.stringify(Object.keys(original.schema.columns).map((name, i) => ({ name, ordinal: i + 1, required: original.schema.columns[name].presence === "required" }))),
@@ -39,23 +40,25 @@ export async function editBaseline(uri: vscode.Uri, read: () => CsvContract, wri
     captured = observation.snapshot();
   } else {
     if (!captureSql) throw new Error("SQL schema capture requires the desktop extension host.");
-    const target = await vscode.window.showQuickPick(resolveSqlServerTargets(effective(original)).map(t => ({ label: sqlServerTargetLabel(t), target: t })), { title: "Explicit SQL metadata capture", placeHolder: "Selecting a target reads its schema metadata." });
+    const target = await vscode.window.showQuickPick(resolveSqlServerTargets(effective(original)).map((t, index) => ({ label: sqlServerTargetLabel(t), target: t, index })), { title: "Explicit SQL metadata capture", placeHolder: "Selecting a target reads metadata. Target-list baselines apply only to that target." });
     if (!target) return;
     captured = await captureSql(target.target);
     columnMap = target.target.columnMap ?? {};
+    if (original.sqlServer?.targets?.length) targetIndex = target.index;
   }
   let next = captured;
   let baselineUri: vscode.Uri | undefined;
   let baselineText: string | undefined;
   if (review) {
-    const resolved = await resolveBaseline(original, uri.toString(), vscodeSuiteIO);
+    const binding = targetIndex === undefined ? original.baseline : original.sqlServer?.targets?.[targetIndex].baseline ?? original.baseline;
+    const resolved = await resolveBaseline({ ...original, baseline: binding }, uri.toString(), vscodeSuiteIO);
     if (!resolved.baseline || "ref" in resolved.baseline) throw new Error("Create a baseline before reviewing drift.");
-    if (original.baseline && "ref" in original.baseline) {
-      baselineUri = vscode.Uri.parse(vscodeSuiteIO.resolve(uri.toString(), original.baseline.ref));
+    if (binding && "ref" in binding && (targetIndex === undefined || original.sqlServer?.targets?.[targetIndex].baseline)) {
+      baselineUri = vscode.Uri.parse(vscodeSuiteIO.resolve(uri.toString(), binding.ref));
       baselineText = await vscodeSuiteIO.read(baselineUri.toString());
     }
     const changes = compareBaseline(resolved.baseline, captured, original, columnMap);
-    const selected = await vscode.window.showQuickPick(changes.map(c => ({ label: `${c.severity}: ${c.column} / ${c.kind}`, description: `${JSON.stringify(c.before)} → ${JSON.stringify(c.after)}`, detail: `${c.renameCandidate ? `Possible rename of ${c.renameCandidate}. ` : ""}Affected rules: ${c.affectedRules.join(", ") || "none"}`, change: c })), { canPickMany: true, title: "Select baseline changes to accept", placeHolder: "Only selected changes become expectations. Unknown metadata cannot be accepted." });
+    const selected = await vscode.window.showQuickPick(changes.map(c => ({ label: `${c.severity}: ${c.column} / ${c.kind}`, description: `${JSON.stringify(c.before)} → ${JSON.stringify(c.after)}`, detail: `${c.impact}. ${c.renameCandidate ? `Possible rename of ${c.renameCandidate}. ` : ""}Affected rules: ${c.affectedRules.join(", ") || "none"}`, change: c })), { canPickMany: true, title: "Select baseline changes to accept", placeHolder: "Only selected changes become expectations. Unknown metadata cannot be accepted." });
     if (!selected?.length) return;
     next = acceptBaselineChanges(resolved.baseline, captured, selected.map(c => c.change.id), columnMap);
   }
@@ -70,5 +73,7 @@ export async function editBaseline(uri: vscode.Uri, read: () => CsvContract, wri
     const edit = new vscode.WorkspaceEdit();
     edit.replace(doc.uri, new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)), stringify(next));
     if (!await vscode.workspace.applyEdit(edit)) throw new Error("Could not apply baseline revision.");
+  } else if (targetIndex !== undefined) {
+    await write({ ...original, sqlServer: { ...original.sqlServer, targets: original.sqlServer!.targets!.map((target, index) => index === targetIndex ? { ...target, baseline: next } : target) } });
   } else await write({ ...original, baseline: next });
 }

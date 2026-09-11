@@ -40,7 +40,7 @@ export async function run(): Promise<void> {
   await until(() => hooks.testStates.get(key)?.completedRuns === 1, "Explicit live enable must run initial CSV validation.");
   assert(hooks.testStates.get(key)?.runs[0].result?.valid === false, "Synthetic initial assertion must fail.");
   const edited = readEditorContract(liveDoc.getText(), "inline");
-  edited.rules![0].expect = { column: "Id", operator: "notNull" };
+  edited.rules![0].expect = { all: [{ column: "Id", operator: "notNull" }, { column: "Id", operator: "in", values: ["1", "2"], valueType: "number" }] };
   await send({ type: "updateContract", contract: edited, documentVersion: liveDoc.version });
   await until(() => hooks.testStates.get(key)?.completedRuns === 2, "Undoable inline document edits must trigger live reruns.");
   assert(hooks.testStates.get(key)?.runs[0].result?.valid === true, "Edited rule must pass through the actual host execution pipeline.");

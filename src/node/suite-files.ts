@@ -49,12 +49,18 @@ function rebaseTargets(doc: Document, from: string, to: string): string[] {
     doc.setIn(["baseline", "ref"], relative(dirname(to), absolute).split(sep).join("/") || absolute);
     dependencies.push(`schema baseline: ${absolute}`);
   }
+  for (const [index, target] of (value.sqlServer?.targets ?? []).entries()) if (target.baseline?.ref) {
+    const absolute = resolve(dirname(from), target.baseline.ref);
+    doc.setIn(["sqlServer", "targets", index, "baseline", "ref"], relative(dirname(to), absolute).split(sep).join("/") || absolute);
+    dependencies.push(`schema baseline: ${absolute}`);
+  }
   return dependencies;
 }
 function comparable(contract: CsvContract, source: string, defaults?: SuiteConnection): string {
   const copy = effectiveContract(contract, defaults);
   for (const target of copy.targets ?? []) if (target.path !== undefined) target.path = resolve(dirname(source), target.path);
   if (copy.baseline && "ref" in copy.baseline) copy.baseline.ref = resolve(dirname(source), copy.baseline.ref);
+  for (const target of copy.sqlServer?.targets ?? []) if (target.baseline && "ref" in target.baseline) target.baseline.ref = resolve(dirname(source), target.baseline.ref);
   return JSON.stringify(copy);
 }
 async function ensureWritable(paths: string[], force: boolean): Promise<void> {

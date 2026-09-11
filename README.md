@@ -4,7 +4,7 @@
 
 Define reusable YAML contracts for CSV files, edit them visually in VS Code, and run the same validations interactively or in unattended workflows.
 
-## Validator workflows in 0.14
+## Validator workflows in 0.15
 
 Standalone, referenced and inline suite members share the visual contract editor.
 Add validation presets, edit nested predicates, capture and review versioned schema

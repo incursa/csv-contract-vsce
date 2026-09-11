@@ -1,4 +1,4 @@
-import { resolveBaseline } from "./core/baseline";
+import { resolveBaseline, resolveTargetBaseline } from "./core/baseline";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { parseContract, serializeContract } from "./core/contract";
@@ -253,7 +253,7 @@ async function testSqlServer(args: ParsedArgs): Promise<void> {
     for (const specInput of args.specs) {
       try {
         const suite = await loadSuite(resolve(specInput), fileSuiteIO);
-        reports.push(await runSuite(suite, async (contract, target, source) => session.validate(await resolveBaseline(contract, source, fileSuiteIO), target, {
+        reports.push(await runSuite(suite, async (contract, target, source) => session.validate(await resolveBaseline(contract, source, fileSuiteIO), await resolveTargetBaseline(target, source, fileSuiteIO), {
           maxIssues: args.maxIssues,
           scopeValue: target.scope ? args.scopes[target.scope.parameter] : undefined
         }), args.failFast, undefined, { crossExecutor: plan => session.validateCross(plan) }));

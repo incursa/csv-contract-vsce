@@ -15,6 +15,30 @@ function sessionWithQuery(query: (text: string) => Promise<unknown>): SqlServerV
 const contract: CsvContract = { version: 1, schema: { columns: { Id: { presence: "required" } } }, sqlServer: target,
   rules: [{ id: "constant", expect: { column: "Id", operator: "equals", value: "0001" } }] };
 
+test("explicit SQL preview bounds retrieval and collects real passing/failing examples", async () => {
+  const session = sessionWithQuery(async text => {
+    if (text.includes("sys.columns")) return { recordset: [{ name: "Id", ordinal: 1 }] };
+    assert.match(text, /SELECT TOP \(2\)/);
+    return { recordset: [{ Id: "0001" }, { Id: "0002" }] };
+  });
+  const result = await session.validate(contract, target, { preview: { rowLimit: 2, exampleLimit: 1 } });
+  assert.equal(result.preview?.scope, "sample");
+  assert.deepEqual(result.ruleOutcomes, [{ id: "constant", selected: 2, passed: 1, failed: 1 }]);
+  assert.deepEqual(result.examples?.map(e => e.outcome), ["passed", "failed"]);
+});
+
+test("SQL target baseline overrides contract baseline without changing either", async () => {
+  const baseline = { baselineVersion: 1 as const, revision: 1, capturedAt: "2026-09-11T00:00:00Z", sourceKind: "sql" as const, captureMethod: "sql-metadata" as const, columns: [{ name: "Id", ordinal: 1, maxLength: 10 }] };
+  const session = sessionWithQuery(async text => {
+    if (text.includes("sys.columns")) return { recordset: [{ name: "Id", ordinal: 1, maxLength: 20 }] };
+    if (text.includes("AS RuleId")) return { recordsets: [[{ RuleId: "constant", RuleName: "constant", Code: "RULE_EXPECTATION_FAILED", Severity: "error", FailureCount: 0, SelectedCount: 1 }]] };
+    return { recordset: [{ count: 1 }] };
+  });
+  const result = await session.validate({ ...contract, baseline }, { ...target, baseline: { ...baseline, columns: [{ name: "Id", ordinal: 1, maxLength: 20 }] } });
+  assert.equal(result.valid, true);
+  assert.equal(baseline.columns[0].maxLength, 10);
+});
+
 test("SQL session preserves actual aggregate outcomes without retrieving example rows", async () => {
   const queries: string[] = [];
   const session = sessionWithQuery(async text => {

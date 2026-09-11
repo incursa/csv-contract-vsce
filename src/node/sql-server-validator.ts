@@ -1,4 +1,6 @@
 import { errorDetails } from "../core/error-details";
+import { resolveEvaluation } from "../core/evaluation";
+import { validatePreviewOptions, type PreviewOptions } from "../core/preview";
 import { crossResult, type CrossPlan } from "../core/cross-checks";
 import { baselineIssues, type BaselineColumn, type SchemaBaseline } from "../core/baseline";
 import sql from "mssql";
@@ -10,6 +12,8 @@ import { generateSqlServerValidation, sqlIdentifier } from "../core/sql-server-g
 import { canonicalSqlServerColumn, physicalSqlServerColumn, type ResolvedSqlServerTarget } from "../core/sql-server-targets";
 
 export interface SqlServerValidationOptions {
+  preview?: PreviewOptions;
+  evaluatedAt?: string;
   signal?: AbortSignal;
   maxIssues?: number;
   scopeValue?: string;
@@ -70,8 +74,12 @@ function runtimeInteger(name: string, fallback: number, maximum: number): number
 
 export class SqlServerValidationSession {
   public async validateCross(plan: CrossPlan, signal?: AbortSignal): Promise<ValidationResult> {
+    const fromValue = resolveScopeValue(plan.from), toValue = resolveScopeValue(plan.to);
     const handle = await this.getPool(plan.from.connection, plan.from.integratedConnection);
-    const result = await queryWithCancellation<{ FailureCount: number | string }>(handle.pool.request(), plan.sql, signal);
+    const request = handle.pool.request();
+    bindScope(request, handle.api, plan.from, fromValue);
+    bindScope(request, handle.api, plan.to, toValue);
+    const result = await queryWithCancellation<{ FailureCount: number | string }>(request, plan.sql, signal);
     if (result.recordset.length !== 1) throw new Error("Cross-check did not return one aggregate summary.");
     return crossResult(plan.check, result.recordset[0].FailureCount);
   }
@@ -89,6 +97,13 @@ export class SqlServerValidationSession {
     target: ResolvedSqlServerTarget,
     options: SqlServerValidationOptions = {}
   ): Promise<ValidationResult> {
+    const evaluatedAt = options.evaluatedAt ?? new Date().toISOString();
+    const result = await this.validateResolved(resolveEvaluation(contract, evaluatedAt), target, options);
+    return { ...result, evaluatedAt };
+  }
+  private async validateResolved(contract: CsvContract, target: ResolvedSqlServerTarget, options: SqlServerValidationOptions): Promise<ValidationResult> {
+    if (target.baseline) contract = { ...contract, baseline: target.baseline };
+    if (options.preview) validatePreviewOptions(options.preview);
     const handle = await this.getPool(target.connection, target.integratedConnection);
     const metadata = await readMetadata(handle, target, options.signal);
     if (metadata.length === 0) throw new Error(`SQL Server object ${target.schema}.${target.table} does not exist or is not visible to this connection.`);
@@ -103,9 +118,9 @@ export class SqlServerValidationSession {
     const present = new Set(metadata.map((column) => column.name));
     const mustFallback = generated.warnings.length > 0 || declared.some((column) => !present.has(physicalSqlServerColumn(target, column)));
     const scopeValue = resolveScopeValue(target, options.scopeValue);
-    if (mustFallback) {
-      const fallback = await validateClientSide(handle, { ...contract, baseline: undefined }, target, metadata, scopeValue, options.signal);
-      const reason = generated.warnings.length
+    if (mustFallback || options.preview) {
+      const fallback = await validateClientSide(handle, { ...contract, baseline: undefined }, target, metadata, scopeValue, options.signal, options.preview);
+      const reason = options.preview ? "Explicit preview uses the shared predicate engine to collect bounded examples." : generated.warnings.length
         ? generated.warnings.join(" ")
         : "One or more declared columns are absent, so rules that reference optional columns must preserve CSV-compatible behavior.";
       const fallbackNotice: ValidationIssue = {
@@ -279,7 +294,7 @@ function contractTestCount(contract: CsvContract): number {
     (contract.sqlServer?.conditionalRules?.length ?? 0);
 }
 
-function resolveScopeValue(target: ResolvedSqlServerTarget, explicit: string | undefined): string | undefined {
+function resolveScopeValue(target: ResolvedSqlServerTarget, explicit?: string): string | undefined {
   if (!target.scope) return undefined;
   const value = explicit ?? (target.scope.valueEnvironment ? process.env[target.scope.valueEnvironment] : undefined);
   if (value === undefined) {
@@ -301,7 +316,11 @@ async function readMetadata(handle: SqlPoolHandle, target: ResolvedSqlServerTarg
 SELECT c.name, c.column_id AS ordinal, TYPE_NAME(c.user_type_id) AS sqlType,
   CONVERT(int, c.max_length) AS maxLength, CONVERT(int, c.precision) AS precision,
   CONVERT(int, c.scale) AS scale, c.is_nullable AS nullable,
-  c.is_identity AS [identity], c.is_computed AS computed,
+  c.is_identity AS [identity], c.is_computed AS computed, c.collation_name AS collation,
+  (SELECT i.name, ic.key_ordinal AS ordinal FROM sys.index_columns ic
+    JOIN sys.indexes i ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+    WHERE ic.object_id = c.object_id AND ic.column_id = c.column_id AND i.is_unique = 1 AND ic.key_ordinal > 0
+    ORDER BY i.name, ic.key_ordinal FOR JSON PATH) AS uniqueKeys,
   COALESCE((SELECT ic.key_ordinal FROM sys.index_columns ic
     JOIN sys.indexes i ON i.object_id = ic.object_id AND i.index_id = ic.index_id
     WHERE ic.object_id = c.object_id AND ic.column_id = c.column_id AND i.is_primary_key = 1), 0) AS primaryKeyOrdinal
@@ -370,7 +389,8 @@ async function validateClientSide(
   target: ResolvedSqlServerTarget,
   metadata: MetadataRow[],
   scopeValue: string | undefined,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  preview?: PreviewOptions
 ): Promise<ValidationResult> {
   const present = new Set(metadata.map((column) => column.name));
   const columns = Object.keys(contract.schema.columns).filter((column) => present.has(physicalSqlServerColumn(target, column)));
@@ -396,7 +416,7 @@ async function validateClientSide(
     : "";
   const request = handle.pool.request();
   bindScope(request, handle.api, target, scopeValue);
-  const result = await queryWithCancellation<Record<string, string | null>>(request, `SELECT ${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope};`, signal);
+  const result = await queryWithCancellation<Record<string, string | null>>(request, `SELECT ${preview?.rowLimit ? `TOP (${preview.rowLimit}) ` : ""}${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope};`, signal);
   const rows = result.recordset.map((row) => columns.map((column) => row[column] ?? ""));
   const fallbackContract: CsvContract = {
     ...contract,
@@ -404,7 +424,7 @@ async function validateClientSide(
     rules: [...(contract.rules ?? []), ...((contract.sqlServer?.conditionalRules ?? []) as NonNullable<CsvContract["rules"]>)]
   };
   const nativeDates = Object.fromEntries([...dateAliases].map(([column, alias]) => [column, result.recordset.map(row => row[alias] ?? undefined)]));
-  return validateCsv(fallbackContract, Papa.unparse({ fields: columns, data: rows }), nativeDates);
+  return validateCsv(fallbackContract, Papa.unparse({ fields: columns, data: rows }), nativeDates, undefined, preview);
 }
 
 function mergeMetadataIssues(result: ValidationResult, metadataIssues: ValidationIssue[], actualColumnCount: number, maxIssues: number): ValidationResult {

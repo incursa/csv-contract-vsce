@@ -8,8 +8,8 @@ import { errorDetails } from "./core/error-details";
 import { effectiveContract, parseSuite, runSuite, type SuiteRun } from "./core/suite";
 import { editBaseline, type SqlSchemaReader } from "./vscode-baselines";
 import { preflight } from "./core/preflight";
-import { previewContract } from "./core/preview";
-import { resolveBaseline } from "./core/baseline";
+import { previewContract, type PreviewOptions } from "./core/preview";
+import { resolveBaseline, baselineReferences } from "./core/baseline";
 import { readEditorContract, ruleOffset, updateEditorContract } from "./core/editor-document";
 import { isSuiteText } from "./core/suite";
 import { editSuiteConnection, vscodeSuiteIO, registerSuiteDiagnostics, resolveSuiteEditor, showSuiteRun, showSuiteSql } from "./vscode-suites";
@@ -43,7 +43,7 @@ interface TargetRun {
   error?: string;
 }
 
-export type DesktopSqlServerRunner = (contract: CsvContract, target: ResolvedSqlServerTarget, signal?: AbortSignal) => Promise<ValidationResult>;
+export type DesktopSqlServerRunner = (contract: CsvContract, target: ResolvedSqlServerTarget, signal?: AbortSignal, preview?: PreviewOptions) => Promise<ValidationResult>;
 export type DesktopSqlServerBrowser = (profile: string) => Promise<SqlServerObjectInfo[]>;
 
 const sqlConnectionProfilesKey = "csvContract.sqlServer.connectionProfiles";
@@ -503,31 +503,38 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
       let contract = await resolveBaseline(draft.contract, document.uri.toString(), vscodeSuiteIO);
       let files = draft.targets ?? configuredTargets(document.uri, contract);
       let sqlTargets = resolveSqlServerTargets(contract, false);
+      let preview: PreviewOptions | undefined;
       if (draft.preview) {
         contract = previewContract(contract, draft.preview);
         const target = await vscode.window.showQuickPick([
           ...files.map((t, index) => ({ label: t.label, sourceKind: "csv", index })),
           ...sqlTargets.map((t, index) => ({ label: sqlServerTargetLabel(t), sourceKind: "sql", index }))
-        ], { title: `Run full-scope preview: ${draft.preview}`, placeHolder: "Executes the current draft against one selected source. Regex/date SQL predicates may read the full scope into the client." });
+        ], { title: `Select preview source: ${draft.preview}`, placeHolder: "Executes the current draft against one selected source. Regex/date SQL predicates may read the full scope into the client." });
         if (!target) {
           runNotice = "Preview canceled before execution.";
           return [{ suite: document.uri.toString(), spec: document.uri.toString(), member: memberId ?? "contract", status: "CANCELED", error: runNotice }];
         }
         files = target.sourceKind === "csv" ? [files[target.index]] : [];
-        sqlTargets = target.sourceKind === "sql" ? [sqlTargets[target.index]] : [];
+        sqlTargets = target.sourceKind === "sql" ? [{ ...sqlTargets[target.index], baseline: undefined }] : [];
+        const mode = await vscode.window.showQuickPick([
+          { label: "Sample up to 1,000 rows", rowLimit: 1000 },
+          { label: "Complete configured scope", rowLimit: undefined }
+        ], { title: "Preview execution scope", placeHolder: "Retains up to 5 passing and 5 failing examples per conditional rule. SQL samples are unordered; CSV samples use the first records." });
+        if (!mode) return [{ suite: document.uri.toString(), spec: document.uri.toString(), member: memberId ?? "contract", status: "CANCELED", error: "Preview scope selection canceled." }];
+        preview = { rowLimit: mode.rowLimit, exampleLimit: 5 };
       }
       if (!files.length && !sqlTargets.length) throw new Error("No targets configured. Choose a CSV or configure a SQL target.");
       contract = { ...contract, targets: files.map((_, index) => ({ path: String(index) })),
         sqlServer: sqlTargets.length ? { ...contract.sqlServer, table: undefined, targets: sqlTargets } : undefined };
       let completed = 0;
-      runNotice = `${draft.preview ? `Full-scope preview: ${draft.preview}` : "Full validation"} · ${new Date().toISOString()}`;
+      runNotice = `${draft.preview ? `${preview?.rowLimit ? "Sampled" : "Complete-scope"} preview: ${draft.preview}` : "Full validation"} · ${new Date().toISOString()}`;
       await panel.webview.postMessage({ type: "runState", running: true, total: files.length + sqlTargets.length });
       try {
         const report = await runSuite({ id: document.uri.toString(), source: document.uri.toString(), isSuite: false,
           members: [{ id: memberId ?? "contract", source: document.uri.toString(), contract }] }, async (c, target) => {
           if (!this.sqlServerRunner) throw new Error("SQL execution requires the desktop extension host.");
-          return this.sqlServerRunner(c, target, signal);
-        }, false, async (c, _source, target) => validateCsv(c, await readTargetText(files[Number(target.path)])), {
+          return this.sqlServerRunner(c, target, signal, preview);
+        }, false, async (c, _source, target) => validateCsv(c, await readTargetText(files[Number(target.path)]), undefined, undefined, preview), {
           signal, onProgress: run => { completed++; void panel.webview.postMessage({ type: "runState", running: true, target: run.table ?? files[Number(run.target)]?.label, index: completed, total: files.length + sqlTargets.length }); }
         });
         return report.runs.map(run => ({ ...run, target: run.table ?? files[Number(run.target)]?.label ?? run.target }));
@@ -551,7 +558,7 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         const savedTargets = configuredTargets(document.uri, contract);
         const activeTargets = manualTargets ?? savedTargets;
         const dependencies = [document.uri.toString(), ...(suiteContext ? [suiteContext.uri.toString()] : [])];
-        if (contract.baseline && "ref" in contract.baseline) dependencies.push(vscodeSuiteIO.resolve(document.uri.toString(), contract.baseline.ref));
+        dependencies.push(...baselineReferences(contract).map(ref => vscodeSuiteIO.resolve(document.uri.toString(), ref)));
         if (watchInputs) dependencies.push(...activeTargets.filter(t => typeof t.source !== "string").map(t => t.source.toString()));
         dependencyWatchers.set(dependencies);
         const sqlTargets = resolveSqlServerTargets(effective(contract), false);
@@ -582,9 +589,9 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
     const watcher = vscode.workspace.createFileSystemWatcher("**/*");
     const dependencyChange = (uri: vscode.Uri): void => {
       try {
-        const contract = read(), baseline = contract.baseline;
+        const contract = read();
         const inputChanged = watchInputs && (manualTargets ?? configuredTargets(document.uri, contract)).some(t => typeof t.source !== "string" && t.source.toString() === uri.toString());
-        if (inputChanged || baseline && "ref" in baseline && vscodeSuiteIO.resolve(document.uri.toString(), baseline.ref) === uri.toString()) { scheduler.change(); refreshRevision(); void postState(); }
+        if (inputChanged || baselineReferences(contract).some(ref => vscodeSuiteIO.resolve(document.uri.toString(), ref) === uri.toString())) { scheduler.change(); refreshRevision(); void postState(); }
       } catch { scheduler.change(); }
     };
     const dependencyWatchers = new DependencyWatchers(dependencyChange);
@@ -672,10 +679,11 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
           filters: format.label === "JSON" ? { "JSON files": ["json"] } : { "CSV files": ["csv"] }
         });
         if (!outputUri) return;
-        const exportRuns = filterResultRuns(latestRuns, String(message.filter ?? ""));
+        const exportRuns = filterResultRuns(latestRuns, String(message.filter ?? ""), message.selectedIssues);
+        const exportContext = { filter: message.filter ?? "", selectedIssues: message.selectedIssues ?? [], stale, runNotice, totals: "original target scope; exported details may be selected or filtered" };
         const content = format.label === "JSON"
-          ? JSON.stringify({ ...JSON.parse(validationRunExportJson(vscode.workspace.asRelativePath(document.uri, false), exportRuns)), exportScope: { filter: message.filter ?? "", stale, runNotice, totals: "original scope; details filtered over retained issues" } }, null, 2)
-          : issueRunsToCsv(exportRuns);
+          ? JSON.stringify({ ...JSON.parse(validationRunExportJson(vscode.workspace.asRelativePath(document.uri, false), exportRuns)), exportScope: exportContext }, null, 2)
+          : issueRunsToCsv(exportRuns, exportContext);
         await vscode.workspace.fs.writeFile(outputUri, new TextEncoder().encode(content));
         const totalIssueCount = latestRuns.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
         if (totalIssueCount > retainedIssueCount) {
@@ -721,7 +729,7 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         await editSuiteConnection(document, undefined, true, memberId);
       } else if (message.type === "history") {
         if (stale) throw new Error("Run current definitions before saving or comparing history.");
-        await manageHistory(this.context, `${document.uri.toString()}#${memberId ?? ""}`, latestRuns, JSON.stringify(read()));
+        await manageHistory(this.context, `${document.uri.toString()}#${memberId ?? ""}`, latestRuns, JSON.stringify(read()), stale);
       } else if (message.type === "insertTemplate") {
         const source = await pickFile({ "Rule template": ["yaml", "yml", "json"] });
         if (!source) return;

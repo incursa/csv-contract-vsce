@@ -1,4 +1,6 @@
 import { baselineIssues, CsvSchemaObservation, resolveBaseline } from "../core/baseline";
+import { resolveEvaluation } from "../core/evaluation";
+import { identityKey } from "../core/identity";
 import { fileSuiteIO } from "./suite-files";
 import { stat } from "node:fs/promises";
 import type {
@@ -47,6 +49,7 @@ export interface StreamingValidationOutput {
 }
 
 export interface StreamingValidationOptions {
+  evaluatedAt?: string;
   maxIssues?: number;
   progressInterval?: number;
   tempDirectory?: string;
@@ -412,10 +415,12 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
     if (column.uniqueTargetId !== undefined) uniqueness?.add(column.uniqueTargetId, normalized, recordNumber);
   }
 
-  if (state.identity && uniqueness) {
-    const values = state.identity.indexes.map((index) => normalize(fields[index] ?? "", state.options));
-    const identityKey = values.map((value) => `${value.length}:${value}`).join("");
-    uniqueness.add(state.identity.targetId, identityKey, recordNumber);
+  const identity = state.input.contract.identity;
+  if (identity && identity.columns.every(column => state.headerIndex.has(column) && state.declared.has(column))) {
+    const values = identity.columns.map(column => normalize(fields[state.headerIndex.get(column)!] ?? "", state.options));
+    const { key, nullFailure } = identityKey(values, identity, value => state.options.nullValues.some(marker => normalize(marker, state.options) === value));
+    if (nullFailure) state.collector.add({ level: "row", code: "IDENTITY_NULL", testId: identity.id, message: "Identity contains a configured null value.", row: recordNumber });
+    if (key !== undefined && state.identity) uniqueness?.add(state.identity.targetId, key, recordNumber);
   }
 
   for (const prepared of state.rowTests) {
@@ -491,6 +496,7 @@ function addDuplicateIssue(duplicate: DuplicateValue, checks: Map<number, Unique
     check.state.collector.add({
       level: "row",
       code: "IDENTITY_NOT_UNIQUE",
+      testId: check.state.input.contract.identity?.id,
       message: `Composite identity duplicates CSV record ${duplicate.firstRow}.`,
       row: duplicate.row
     });
@@ -616,7 +622,8 @@ export async function validateCsvFile(
   options: StreamingValidationOptions = {}
 ): Promise<StreamingValidationOutput> {
   if (inputs.length === 0) throw new Error("At least one contract is required.");
-  inputs = await Promise.all(inputs.map(async input => ({ ...input, contract: await resolveBaseline(input.contract, input.spec, fileSuiteIO) })));
+  const evaluatedAt = options.evaluatedAt ?? new Date().toISOString();
+  inputs = await Promise.all(inputs.map(async input => ({ ...input, contract: resolveEvaluation(await resolveBaseline(input.contract, input.spec, fileSuiteIO), evaluatedAt) })));
   const resolved = {
     ...options,
     maxIssues: options.maxIssues ?? 1000,
@@ -640,6 +647,7 @@ export async function validateCsvFile(
     runs.push(...await validateGroup(csvPath, group, pass, groups.size, resolved));
   }
   const durationMs = performance.now() - started;
+  runs.forEach(run => { run.result.evaluatedAt = evaluatedAt; });
   const totalRows = Math.max(...runs.map((run) => run.result.rowCount));
   return {
     valid: runs.every((run) => run.result.valid),

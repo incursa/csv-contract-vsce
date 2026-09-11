@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.0
+
+- Add visual nested branch creation, removal, grouping and reordering, plus condition selector controls in the shared contract editor.
+- Add typed literal/case policies, relative UTC date bounds with recorded evaluation time, decimal precision and composite uniqueness null/duplicate policies across execution engines.
+- Add sampled or complete CSV/SQL previews with bounded passing/failing examples and an explicit incomplete SAMPLED status.
+- Add per-issue selection/export parity and CSV run metadata while preserving complete aggregate counts and rejecting stale selections.
+- Add SQL-target baseline overrides, dependency rebasing/watching, collation and unique-key metadata, and conservative drift impact classification.
+- Add independently parameterized scoped cross-table checks and stable-rule aggregate history comparisons without retaining source values.
+- Extend regression, mocked SQL, rendered UI and actual VS Code host coverage. Remote database verification is not performed.
+
 ## 0.14.0
 
 - Share the visual contract editor across standalone, referenced and inline suite members, preserving YAML nodes and supporting nested predicate edits.

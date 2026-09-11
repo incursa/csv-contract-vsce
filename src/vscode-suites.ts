@@ -4,7 +4,7 @@ import type { CrossExecutor } from "./core/cross-checks";
 import { manageHistory } from "./vscode-history";
 import { contractPath, ruleOffset } from "./core/editor-document";
 import type { LoadedSuite } from "./core/suite";
-import { resolveBaseline } from "./core/baseline";
+import { resolveBaseline, resolveTargetBaseline, baselineReferences } from "./core/baseline";
 import { isMap } from "yaml";
 import * as vscode from "vscode";
 import { generateSuiteSql, loadSuite, parseSuite, runSuite, yamlDocument, type SuiteIO } from "./core/suite";
@@ -14,6 +14,7 @@ import { configuredTargets, readTargetText } from "./vscode-targets";
 import { validateCsv } from "./core/contract";
 import { renderSuiteWorkbench } from "./suite-workbench";
 import { suiteErrorsCsv, updateSuiteConnection } from "./suite-actions";
+import { filterResultRuns } from "./results-view";
 import { errorDetails } from "./core/error-details";
 import type { SuiteConnection } from "./core/suite";
 
@@ -166,7 +167,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
       const fingerprints = new Map<string, string>();
       for (const member of suite.members) {
         nextDependencies.add(member.source);
-        if (member.contract?.baseline && "ref" in member.contract.baseline) nextDependencies.add(vscodeSuiteIO.resolve(member.source, member.contract.baseline.ref));
+        if (member.contract) for (const ref of baselineReferences(member.contract)) nextDependencies.add(vscodeSuiteIO.resolve(member.source, ref));
         if (member.contract) member.contract = await resolveBaseline(member.contract, member.source, vscodeSuiteIO);
         const inputRevisions: unknown[] = [];
         if (watchInputs && member.contract) for (const target of configuredTargets(vscode.Uri.parse(member.source), member.contract)) {
@@ -202,7 +203,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
   const subscriptions = [watcher, watcher.onDidChange(uri => { void refresh(uri); }), watcher.onDidCreate(uri => { void refresh(uri); }), watcher.onDidDelete(uri => { void refresh(uri); }),
     vscode.workspace.onDidChangeTextDocument((event) => {
       if (/\.ya?ml$/i.test(event.document.uri.path)) void refresh(event.document.uri);
-    }), panel.webview.onDidReceiveMessage(async (message: { type?: string; index?: number; ruleId?: string; memberId?: string; memberIds?: string[] }) => {
+    }), panel.webview.onDidReceiveMessage(async (message: { type?: string; index?: number; ruleId?: string; memberId?: string; memberIds?: string[]; resultFilter?: string; selectedIssues?: string[] }) => {
       try {
         if (["run", "selected", "failed"].includes(message.type ?? "") && !running) {
           let members: string[] | undefined;
@@ -243,15 +244,18 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
         else if (message.type === "credentials" && !running) await vscode.commands.executeCommand("csv-contract-vsce.configureSqlServerConnection");
         else if (message.type === "history" && context) {
           if (stale) throw new Error("Run current definitions before saving or comparing history.");
-          await manageHistory(context, document.uri.toString(), report?.runs ?? [], JSON.stringify([...previous]));
+          await manageHistory(context, document.uri.toString(), report?.runs ?? [], JSON.stringify([...previous]), stale);
         }
         else if (message.type === "export" && report && !running) {
-          const snapshot = { ...report, runs: message.memberIds ? report.runs.filter(r => message.memberIds!.includes(r.member)) : report.runs, exportScope: message.memberIds ?? "all", stale };
+          const scoped = message.memberIds ? report.runs.filter(r => message.memberIds!.includes(r.member)) : report.runs;
+          const exportScope = { members: message.memberIds ?? "all", filter: message.resultFilter ?? "", selectedIssues: message.selectedIssues ?? [], stale, totals: "original scope; retained details may be filtered or selected" };
+          const filtered = filterResultRuns(scoped, message.resultFilter ?? "", message.selectedIssues);
+          const snapshot = { ...report, runs: filtered, members: report.members.map(member => ({ id: member.id, runs: filtered.filter(run => run.member === member.id) })).filter(member => member.runs.length), exportScope, stale };
           const format = await vscode.window.showQuickPick(["CSV", "JSON"], { title: "Export suite errors and results" });
           if (!format) return;
           const destination = await vscode.window.showSaveDialog({ title: "Export suite results", defaultUri: vscode.Uri.joinPath(document.uri, "..", `${snapshot.suite}.results.${format.toLowerCase()}`), filters: { [format]: [format.toLowerCase()] } });
           if (!destination) return;
-          const content = format === "CSV" ? suiteErrorsCsv(snapshot.runs) : JSON.stringify({ schema: "incursa.csv-suite-results/v1", ...snapshot }, null, 2) + "\n";
+          const content = format === "CSV" ? suiteErrorsCsv(snapshot.runs, exportScope) : JSON.stringify({ schema: "incursa.csv-suite-results/v1", ...snapshot }, null, 2) + "\n";
           await vscode.workspace.fs.writeFile(destination, new TextEncoder().encode(content));
           notice = `Exported results to ${destination.fsPath}`;
           await render();
@@ -311,7 +315,7 @@ export async function executeVscodeSuite(uri: vscode.Uri, runner?: DesktopSqlSer
 async function executeLoadedSuite(suite: LoadedSuite, runner?: DesktopSqlServerRunner, controls: Parameters<typeof runSuite>[4] = {}) {
   return runSuite(suite, async (contract, target, source) => {
     if (!runner) throw new Error("Database suite execution requires the desktop extension host.");
-    return runner(await resolveBaseline(contract, source, vscodeSuiteIO), target, controls.signal);
+    return runner(await resolveBaseline(contract, source, vscodeSuiteIO), await resolveTargetBaseline(target, source, vscodeSuiteIO), controls.signal);
   }, false, async (contract, source, target) => {
     const resolved = configuredTargets(vscode.Uri.parse(source), { ...contract, targets: [target] })[0];
     return validateCsv(await resolveBaseline(contract, source, vscodeSuiteIO), await readTargetText(resolved));

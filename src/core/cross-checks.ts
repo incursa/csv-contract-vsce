@@ -21,15 +21,19 @@ export function planCrossCheck(check: CrossCheck, members: { id: string; contrac
     if (!member?.contract || member.error) throw new Error(`Cross-check ${check.id}: member '${id}' is unavailable.`);
     const targets = resolveSqlServerTargets(member.contract);
     if (targets.length !== 1) throw new Error(`Cross-check ${check.id}: '${id}' requires exactly one SQL target.`);
-    if (targets[0].scope) throw new Error(`Cross-check ${check.id}: scoped comparisons require an explicit cross-table scope design; this version only supports complete objects.`);
     return { target: targets[0], contract: member.contract };
   };
   const left = find(check.from), right = find(check.to);
-  const from = left.target, to = right.target;
+  // Parameter namespaces are independent even when both contracts call theirs LoadId.
+  const scoped = (target: ResolvedSqlServerTarget, parameter: string): ResolvedSqlServerTarget => ({ ...target, scope: target.scope ? { ...target.scope, parameter } : undefined });
+  const from = scoped(left.target, "cross_from"), to = scoped(right.target, "cross_to");
   if (JSON.stringify(from.integratedConnection ?? from.connection) !== JSON.stringify(to.integratedConnection ?? to.connection)) throw new Error(`Cross-check ${check.id}: targets must use the same connection and database.`);
-  const object = (t: ResolvedSqlServerTarget) => `${sqlIdentifier(t.schema)}.${sqlIdentifier(t.table)}`;
+  const object = (t: ResolvedSqlServerTarget) => {
+    const name = `${sqlIdentifier(t.schema)}.${sqlIdentifier(t.table)}`;
+    return t.scope ? `(SELECT * FROM ${name} WHERE CONVERT(nvarchar(max), ${sqlIdentifier(physicalSqlServerColumn(t, t.scope.column))}) = CONVERT(nvarchar(max), @${t.scope.parameter}))` : name;
+  };
   let sql: string;
-  if (check.kind === "equalPopulation") sql = `SELECT ABS((SELECT COUNT_BIG(*) FROM ${object(from)}) - (SELECT COUNT_BIG(*) FROM ${object(to)})) AS FailureCount;`;
+  if (check.kind === "equalPopulation") sql = `SELECT ABS((SELECT COUNT_BIG(*) FROM ${object(from)} AS a) - (SELECT COUNT_BIG(*) FROM ${object(to)} AS b)) AS FailureCount;`;
   else if (check.kind === "equalTotal") {
     const columns = check.valueColumns;
     if (!columns || !left.contract.schema.columns[columns.from] || !right.contract.schema.columns[columns.to]) throw new Error(`Cross-check ${check.id}: equalTotal requires declared valueColumns.`);
@@ -38,7 +42,7 @@ export function planCrossCheck(check: CrossCheck, members: { id: string; contrac
     const aggregate = (target: ResolvedSqlServerTarget, column: string) => {
       const field = sqlIdentifier(physicalSqlServerColumn(target, column));
       // Invalid values must not disappear through SUM's null-elision behavior.
-      return `SELECT CAST(COALESCE(SUM(TRY_CONVERT(decimal(28,10), ${field})), 0) AS decimal(28,10)) AS Total, SUM(CAST(CASE WHEN ${field} IS NULL THEN ${check.nulls === "fail" ? 1 : 0} WHEN NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(max), ${field}))), N'') IS NULL OR TRY_CONVERT(decimal(28,10), ${field}) IS NULL THEN 1 ELSE 0 END AS bigint)) AS Invalid FROM ${object(target)}`;
+      return `SELECT CAST(COALESCE(SUM(TRY_CONVERT(decimal(28,10), ${field})), 0) AS decimal(28,10)) AS Total, SUM(CAST(CASE WHEN ${field} IS NULL THEN ${check.nulls === "fail" ? 1 : 0} WHEN NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(max), ${field}))), N'') IS NULL OR TRY_CONVERT(decimal(28,10), ${field}) IS NULL THEN 1 ELSE 0 END AS bigint)) AS Invalid FROM ${object(target)} AS scoped_total`;
     };
     sql = `SELECT CASE WHEN COALESCE(a.Invalid,0) + COALESCE(b.Invalid,0) > 0 OR ABS(a.Total-b.Total) > CAST('${tolerance}' AS decimal(38,10)) THEN 1 ELSE 0 END AS FailureCount FROM (${aggregate(from, columns.from)}) a CROSS JOIN (${aggregate(to, columns.to)}) b;`;
   }

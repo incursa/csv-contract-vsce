@@ -16,6 +16,9 @@ export interface BaselineColumn {
   identity?: boolean | null;
   computed?: boolean | null;
   primaryKeyOrdinal?: number | null;
+  collation?: string | null;
+  /** Ordered JSON metadata for unique index membership, including key ordinal. */
+  uniqueKeys?: string | null;
   observedType?: "string" | "number" | "unknown";
   observedNullable?: boolean;
 }
@@ -42,8 +45,9 @@ export interface SchemaChange {
   severity: DriftSeverity;
   affectedRules: string[];
   renameCandidate?: string;
+  impact: "breaking" | "widening" | "narrowing" | "observational" | "unknown" | "review";
 }
-const properties = ["sqlType", "maxLength", "precision", "scale", "nullable", "identity", "computed", "primaryKeyOrdinal", "observedType", "observedNullable"] as const;
+const properties = ["sqlType", "maxLength", "precision", "scale", "nullable", "identity", "computed", "primaryKeyOrdinal", "collation", "uniqueKeys", "observedType", "observedNullable"] as const;
 const shape = new Ajv({ strict: false, allErrors: true, validateFormats: false }).addSchema(contractSchema).compile({ $ref: `${contractSchema.$id}#/properties/baseline` });
 
 export function parseBaseline(text: string): SchemaBaseline {
@@ -73,9 +77,19 @@ export function baselineFor(contract: CsvContract): SchemaBaseline | undefined {
 }
 
 export async function resolveBaseline(contract: CsvContract, source: string, io: { read(p: string): Promise<string>; resolve(p: string, ref: string): string }): Promise<CsvContract> {
-  if (!contract.baseline || !("ref" in contract.baseline)) return contract;
-  const baseline = parseBaseline(await io.read(io.resolve(source, contract.baseline.ref)));
-  return { ...contract, baseline };
+  const load = async (binding?: BaselineBinding) => binding && "ref" in binding ? parseBaseline(await io.read(io.resolve(source, binding.ref))) : binding;
+  const baseline = await load(contract.baseline);
+  const targets = contract.sqlServer?.targets ? await Promise.all(contract.sqlServer.targets.map(async target => ({ ...target, ...(target.baseline ? { baseline: await load(target.baseline) } : {}) }))) : undefined;
+  return { ...contract, ...(baseline ? { baseline } : {}), ...(targets ? { sqlServer: { ...contract.sqlServer, targets } } : {}) };
+}
+
+/** Targets passed by runSuite are separate from the subsequently resolved contract. */
+export async function resolveTargetBaseline<T extends { baseline?: BaselineBinding }>(target: T, source: string, io: { read(p: string): Promise<string>; resolve(p: string, ref: string): string }): Promise<T> {
+  return target.baseline && "ref" in target.baseline ? { ...target, baseline: parseBaseline(await io.read(io.resolve(source, target.baseline.ref))) } : target;
+}
+
+export function baselineReferences(contract: CsvContract): string[] {
+  return [contract.baseline, ...(contract.sqlServer?.targets ?? []).map(t => t.baseline)].flatMap(b => b && "ref" in b ? [b.ref] : []);
 }
 
 /** Retains no source rows. Leading-zero identifiers remain strings. */
@@ -111,7 +125,10 @@ export function compareBaseline(expected: SchemaBaseline, actual: SchemaBaseline
   const observed = actual.columns.map(c => ({ ...c, name: canonical(c.name) }));
   const expectedColumns = expected.columns.map(c => ({ ...c, name: canonical(c.name) }));
   const add = (kind: string, column: string, before?: unknown, after?: unknown): void => {
-    changes.push({ id: JSON.stringify([kind, column]), kind, column, physicalColumn: columnMap[column] ?? column, before, after,
+    const impact: SchemaChange["impact"] = kind.startsWith("unknown:") ? "unknown" : kind.startsWith("observed") ? "observational" : kind === "removed" ? "breaking"
+      : kind === "maxLength" && typeof before === "number" && typeof after === "number" ? after === -1 || before !== -1 && after > before ? "widening" : "narrowing"
+      : kind === "nullable" ? after ? "widening" : "narrowing" : "review";
+    changes.push({ id: JSON.stringify([kind, column]), kind, column, physicalColumn: columnMap[column] ?? column, before, after, impact,
       severity: expected.policy?.columns?.[column] ?? expected.policy?.changes?.[kind] ?? expected.policy?.default ?? (kind.startsWith("observed") ? "warning" : "error"),
       affectedRules: rules.filter(r => JSON.stringify(r).includes(JSON.stringify(column))).map(r => r.id) });
   };
@@ -136,7 +153,8 @@ export function compareBaseline(expected: SchemaBaseline, actual: SchemaBaseline
     const candidate = removed.find(c => (c.before as BaselineColumn).ordinal === (addition.after as BaselineColumn).ordinal);
     if (candidate) addition.renameCandidate = candidate.column;
   }
-  if (expected.interpretation && JSON.stringify(expected.interpretation) !== JSON.stringify(actual.interpretation)) add("interpretation", "", expected.interpretation, actual.interpretation);
+  const interpretation = (value: CsvOptions = {}) => JSON.stringify(Object.entries({ delimiter: ",", encoding: "utf-8", header: "required", quote: '"', trimValues: false, caseSensitive: true, nullValues: [""], allowBlankRows: false, allowRaggedRows: false, ...value }).sort(([a], [b]) => a.localeCompare(b)));
+  if (expected.interpretation && interpretation(expected.interpretation) !== interpretation(actual.interpretation)) add("interpretation", "", expected.interpretation, actual.interpretation);
   return changes;
 }
 

@@ -1,6 +1,7 @@
 import type { CsvContract, SqlServerIntegratedConnection, SqlServerScope, SqlServerTableTarget } from "./model";
 
 export interface ResolvedSqlServerTarget {
+  baseline?: import("./baseline").BaselineBinding;
   name?: string;
   connection: string;
   integratedConnection?: SqlServerIntegratedConnection;
@@ -75,6 +76,7 @@ export function resolveSqlServerTargets(contract: CsvContract, requireConnection
     const duplicatePhysical = physicalNames.filter((value, position) => physicalNames.indexOf(value) !== position);
     if (duplicatePhysical.length) throw new Error(`SQL Server target ${target.schema}.${target.table} maps more than one contract column to the same physical column.`);
     return {
+      baseline: target.baseline,
       name: target.name,
       connection,
       integratedConnection: integrated ? {

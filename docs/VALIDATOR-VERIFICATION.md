@@ -1,59 +1,49 @@
-# Validator 0.14 verification
+# Validator 0.15 verification
 
-Verification used Windows x64, Node 26.7.0, PowerShell Core 7.6.5, Playwright
-Chromium and the actual stable VS Code web extension host. The release workflow
-separately uses Node 22 on Windows and repeats `npm run release:check` before
-Marketplace publication.
-
-Release [v0.14.0](https://github.com/incursa/csv-contract-vsce/releases/tag/v0.14.0)
-completed successfully in [workflow run 34638794918](https://github.com/incursa/csv-contract-vsce/actions/runs/34638794918)
-from commit `238ad5750f020b6e6a550984d2ebbb4583df81b3`. The hosted release gate and
-Marketplace publish step both passed; the publish log records version 0.14.0.
-An independent `vsce show incursa.csv-contract-vsce --json` query also returned
-0.14.0 as the newest public Marketplace version.
+Local verification used Windows x64, Node 26.7.0, PowerShell Core 7.6.5,
+Playwright Chromium and the actual stable VS Code web extension host.
+The established tag release workflow repeats `npm run release:check` on Windows
+with Node 22 before publishing to Marketplace. Publication confirmation is pending.
 
 ## Local checks
 
-- 99 regression tests passed; the normal run skips the opt-in client acceptance test.
+- 108 regression tests passed; one opt-in acceptance test is skipped by default.
 - All 25 PowerShell checks passed.
-- Rendered Workbench tests passed at desktop and narrow widths with the production
-  CSP restrictions, including both single and suite views.
+- Rendered desktop/narrow Workbench tests passed under production CSP, including
+  nested branch creation/reordering, literal preservation, selected issue export,
+  preset controls, inline member navigation and stale result navigation.
 - Actual VS Code host tests passed: explicit initial live execution, undoable inline
-  edits, coalesced save, invalid YAML suppression, external reload, pause, automatic
-  suite editor selection and unavailable-member execution errors.
-- Branding verifies nine PNGs, Marketplace metadata, README and the theme-aware mark.
-- The required gate is `npm run release:check`, including production VSIX packaging.
-  Sandbox networking initially prevented the official host-runtime check; the gate
-  was rerun with approved network access. This was not a database connection.
+  edits using nested typed predicates, coalesced save, invalid YAML suppression,
+  external reload, pause, automatic suite editor selection and unavailable-member errors.
+- `npm run release:check` passed, including branding and production VSIX packaging.
+- After the final integration fixes, the production regression bundles were rerun.
 
-Rendered interaction checks include preset leading-zero preservation, nested rule
-literal editing, explicit preview/live/baseline actions, filtered result navigation,
-stale labels, inline member navigation, 202-column scrolling, and responsive layout.
-Screenshots are written to the system temporary directory `csv-contract-webview-qa`:
-`nested-rule-editor.png`, `filtered-stale-results.png`, `suite-workbench.png`,
-`large-column-workbench.png`, and the existing Workbench scenarios. The nested rule
-and filtered-result screenshots were visually inspected. The two pre-existing
-modified screenshots under `images/` were not overwritten or included in the commit.
+Rendered screenshots are saved outside the repository in the system temporary
+`csv-contract-webview-qa` directory. The nested rule editor and filtered selected
+result screenshots were visually inspected. The two pre-existing modified images
+under `images/` are preserved and excluded from the release commit.
 
 ## Offline SQL-only acceptance
 
-The opt-in `test/suite-acceptance.test.ts` runs against a temporary copy of exactly
-23 McKee contract definitions, using `CSV_CONTRACT_ACCEPTANCE_DIR`. It checks
-unchanged definitions, 1,303 generated SQL checks, no translation warnings,
-synthetic verdict parity, heterogeneous combine/split semantics and portable
-round trips. Synthetic blank records intentionally fail most business assertions;
-those failures test parity and are not claims about database contents.
+The opt-in acceptance test uses a fresh temporary copy of exactly 23 McKee contract
+definitions. It compares unchanged definitions, 1,303 generated SQL rules with no
+translation warnings, synthetic verdict parity, heterogeneous combine/split
+semantics and portable round trips. Per-run evaluation timestamps are verified
+against each report's start time and excluded only from cross-run semantic equality.
 
-The original acceptance directory was not modified. No CSV targets were introduced
-into these SQL-only contracts. No remote database, employee records, stored
-procedures, staging reloads or database deployments were involved.
+Synthetic blank records intentionally fail most business assertions. They test
+parity, not database contents. The original acceptance directory is untouched;
+no CSV targets are introduced. No remote database, employee records, stored
+procedures, staging reloads, imports or database deployments are involved.
 
-Mocked SQL-session tests verify metadata failure versus drift, missing summaries,
-selected/pass/fail counts, native-date fallback without changing literal comparison,
-cancellation and opt-in transient retries. SQL plan tests cover identifier quoting,
-scope handling, connection boundaries and decimal-total guards. Actual SQL Server
-execution of new queries remains unverified without an approved database fixture.
+Mocked SQL tests cover complete summaries, real selected/pass/fail counts, bounded
+preview queries/examples, native date fallback, target baseline precedence,
+cancellation and retries. Pure plan tests cover independent scoped participants,
+identifier quoting, connection boundaries and decimal-total guards. Additional
+regressions cover relative evaluation, typed/precision/identity streaming parity,
+sampled incomplete status, history privacy and target baseline path round trips.
+Actual SQL Server execution of the new queries remains unverified without approval.
 
-See [roadmap status](VALIDATOR-ROADMAP.md) and [workflow limits](VALIDATOR-WORKFLOWS.md)
-for explicitly incomplete capabilities. Passing this gate does not mean the entire
-roadmap is implemented.
+[Roadmap status](VALIDATOR-ROADMAP.md) and [workflow documentation](VALIDATOR-WORKFLOWS.md)
+record the remaining boundaries. Linked templates remain optional future work;
+CSV targets share a contract baseline and cross-connection checks are unsupported.

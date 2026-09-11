@@ -42,7 +42,10 @@ test("23-table offline acceptance: unchanged sources, equivalent SQL and synthet
   };
   const refResult = await runSuite(referenced, synthetic);
   const inlineResult = await runSuite(inline, synthetic);
-  assert.deepEqual(refResult.runs.map((r) => r.result), inlineResult.runs.map((r) => r.result));
+  for (const report of [refResult, inlineResult]) assert(report.runs.every(r => r.result?.evaluatedAt === report.startedAt));
+  // Evaluation timestamps identify distinct executions; all validation semantics must match.
+  const semanticResults = (report: typeof refResult) => report.runs.map(r => r.result ? { ...r.result, evaluatedAt: undefined } : undefined);
+  assert.deepEqual(semanticResults(refResult), semanticResults(inlineResult));
   const temporary = await mkdtemp(join(tmpdir(), "mckee-suite-"));
   try {
     const split = await splitSuite(portable, temporary);

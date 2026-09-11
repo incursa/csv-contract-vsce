@@ -1,5 +1,8 @@
 import Papa from "papaparse";
 import Ajv from "ajv/dist/2020";
+import { resolveEvaluation } from "./evaluation";
+import { identityKey } from "./identity";
+import { validatePreviewOptions, type PreviewOptions } from "./preview";
 import schema from "../../schemas/csvtest.schema.json";
 import { baselineIssues, CsvSchemaObservation } from "./baseline";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
@@ -39,9 +42,10 @@ export function serializeContract(contract: CsvContract, schemaPath = "./schemas
   return `# yaml-language-server: $schema=${schemaPath}\n${stringifyYaml(contract, { lineWidth: 110 })}`;
 }
 
-export function parseCsv(text: string, options: CsvOptions = {}): ParsedCsv {
+export function parseCsv(text: string, options: CsvOptions = {}, rowLimit?: number): ParsedCsv {
   const config = { ...defaults, ...options };
   const parsed = Papa.parse<string[]>(text, {
+    preview: rowLimit === undefined ? undefined : rowLimit + 1,
     delimiter: config.delimiter,
     quoteChar: config.quote,
     skipEmptyLines: config.allowBlankRows ? false : "greedy"
@@ -99,10 +103,16 @@ function isNull(value: string, options: Required<CsvOptions>): boolean {
   return options.nullValues.some((item) => normalized(item, options) === candidate);
 }
 
-export function validateCsv(contract: CsvContract, csvText: string, nativeDates?: Record<string, (string | undefined)[]>): ValidationResult {
+export function validateCsv(contract: CsvContract, csvText: string, nativeDates?: Record<string, (string | undefined)[]>, evaluatedAt = new Date().toISOString(), preview?: PreviewOptions): ValidationResult {
+  if (preview) validatePreviewOptions(preview);
+  return { ...validateCsvResolved(resolveEvaluation(contract, evaluatedAt), csvText, nativeDates, preview), evaluatedAt,
+    ...(preview ? { preview: { ...preview, scope: preview.rowLimit === undefined ? "complete" as const : "sample" as const } } : {}) };
+}
+function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates?: Record<string, (string | undefined)[]>, preview?: PreviewOptions): ValidationResult {
+  const examples: NonNullable<ValidationResult["examples"]> = [];
   const ruleOutcomes: NonNullable<ValidationResult["ruleOutcomes"]> = [];
   const options = { ...defaults, ...(contract.csv ?? {}) };
-  const parsed = parseCsv(csvText, options);
+  const parsed = parseCsv(csvText, options, preview?.rowLimit);
   const issues: ValidationIssue[] = parsed.parseErrors.map((message) => ({ level: "file", code: "CSV_PARSE", message }));
   if (contract.baseline) {
     const observation = new CsvSchemaObservation(parsed.headers, contract.csv);
@@ -193,13 +203,16 @@ export function validateCsv(contract: CsvContract, csvText: string, nativeDates?
   if (contract.identity) {
     const missing = contract.identity.columns.filter((column) => !declared.has(column) || !headerIndex.has(column));
     missing.forEach((column) => issues.push({ level: "column", code: "IDENTITY_COLUMN_MISSING", message: `Identity column "${column}" must be declared and present.`, column }));
-    if (contract.identity.unique !== false && missing.length === 0) {
+    if (missing.length === 0) {
       const seen = new Map<string, number>();
       parsed.rows.forEach((row, rowIndex) => {
-        const key = contract.identity!.columns.map((column) => normalized(row[headerIndex.get(column)!] ?? "", options)).map(value => `${value.length}:${value}`).join("");
+        const values = contract.identity!.columns.map((column) => normalized(row[headerIndex.get(column)!] ?? "", options));
+        const { key, nullFailure } = identityKey(values, contract.identity!, value => options.nullValues.some(marker => normalized(marker, options) === value));
+        if (nullFailure) issues.push({ level: "row", code: "IDENTITY_NULL", testId: contract.identity!.id, message: "Identity contains a configured null value.", row: parsed.sourceRowNumbers[rowIndex] });
+        if (key === undefined) return;
         const first = seen.get(key);
         if (first !== undefined) {
-          issues.push({ level: "row", code: "IDENTITY_NOT_UNIQUE", message: `Composite identity duplicates CSV row ${first}.`, row: parsed.sourceRowNumbers[rowIndex] });
+          issues.push({ level: "row", code: "IDENTITY_NOT_UNIQUE", testId: contract.identity!.id, message: `Composite identity duplicates CSV row ${first}.`, row: parsed.sourceRowNumbers[rowIndex] });
         } else {
           seen.set(key, parsed.sourceRowNumbers[rowIndex]);
         }
@@ -261,7 +274,11 @@ export function validateCsv(contract: CsvContract, csvText: string, nativeDates?
       if (nativeDates) runtime.dateValue = column => nativeDates[column]?.[rowIndex];
       if (rule.when && !evaluatePredicate(rule.when, runtime)) return;
       outcome.selected++;
-      if (evaluatePredicate(rule.expect, runtime)) { outcome.passed++; return; }
+      const passed = evaluatePredicate(rule.expect, runtime);
+      if (preview && examples.filter(e => e.id === rule.id && e.outcome === (passed ? "passed" : "failed")).length < preview.exampleLimit) {
+        examples.push({ id: rule.id, outcome: passed ? "passed" : "failed", row: parsed.sourceRowNumbers[rowIndex], values: Object.fromEntries(parsed.headers.map((h, i) => [h, row[i] ?? ""])) });
+      }
+      if (passed) { outcome.passed++; return; }
       outcome.failed++;
       issues.push({
         level: "row",
@@ -331,6 +348,7 @@ export function validateCsv(contract: CsvContract, csvText: string, nativeDates?
   return {
     valid: errorCount === 0,
     ruleOutcomes,
+    ...(preview ? { examples } : {}),
     rowCount: parsed.rows.length,
     columnCount: parsed.headers.length,
     testCount: Object.keys(contract.schema.columns).length + (contract.rowTests?.length ?? 0) +

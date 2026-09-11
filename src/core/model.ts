@@ -73,6 +73,10 @@ export type PredicateOperator =
   | "dateBefore";
 
 export interface PredicateLeaf {
+  relativeDate?: { anchor: "today" | "now"; days: number };
+  valueType?: "string" | "number" | "boolean";
+  caseSensitive?: boolean;
+  decimalPlaces?: number;
   column: string;
   operator: PredicateOperator;
   value?: string | number;
@@ -154,6 +158,7 @@ export interface SqlServerIntegratedConnection {
 }
 
 export interface SqlServerTableTarget {
+  baseline?: import("./baseline").BaselineBinding;
   name?: string;
   /** Secret-backed profile for SQL authentication or a custom connection string. */
   connection?: string;
@@ -222,6 +227,8 @@ export interface CsvContract {
   targets?: CsvTarget[];
   csv?: CsvOptions;
   identity?: {
+    id?: string;
+    nulls?: "ignore" | "equal" | "fail";
     columns: string[];
     unique?: boolean;
   };
@@ -260,6 +267,9 @@ export interface ValidationIssue {
 }
 
 export interface ValidationResult {
+  preview?: { scope: "sample" | "complete"; rowLimit?: number; exampleLimit: number };
+  examples?: { id: string; outcome: "passed" | "failed"; row: number; values: Record<string, string> }[];
+  evaluatedAt?: string;
   ruleOutcomes?: { id: string; selected: number; passed: number; failed: number }[];
   valid: boolean;
   rowCount: number;

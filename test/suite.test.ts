@@ -10,6 +10,27 @@ import { validateCsv } from "../src/core/contract";
 import type { CsvContract } from "../src/core/model";
 import { assertCompleteSqlSummaries } from "../src/core/sql-server-results";
 import { spawnSync } from "node:child_process";
+import { resolveBaseline, resolveTargetBaseline, baselineReferences } from "../src/core/baseline";
+
+test("target baseline dependencies retain relative meaning through combine and split", async (t) => {
+  const { root, master } = await fixture(t);
+  const baseline = { baselineVersion: 1, revision: 1, capturedAt: "2026-09-11T00:00:00Z", sourceKind: "sql", captureMethod: "sql-metadata", columns: [{ name: "Id", ordinal: 1, collation: "Latin1_General_100_BIN2", uniqueKeys: '[{"name":"PK_Test","ordinal":1}]' }] };
+  await writeFile(join(root, "schema.yaml"), stringify(baseline));
+  const c = contract(); c.sqlServer = { targets: [{ connection: "test", schema: "dbo", table: "A", baseline: { ref: "../schema.yaml" } }] };
+  await writeFile(join(root, "contracts", "a.yaml"), stringify(c));
+  const bundle = join(root, "portable.yaml");
+  await combineSuite(master, bundle, { allowExternal: true });
+  const portable = await loadSuite(bundle, fileSuiteIO);
+  assert.deepEqual(baselineReferences(portable.members[0].contract!), ["schema.yaml"]);
+  const resolved = await resolveBaseline(portable.members[0].contract!, bundle, fileSuiteIO);
+  assert.deepEqual(resolved.sqlServer?.targets?.[0].baseline, baseline);
+  const executionTarget = await resolveTargetBaseline(portable.members[0].contract!.sqlServer!.targets![0], bundle, fileSuiteIO);
+  assert.deepEqual(executionTarget.baseline, baseline);
+  const split = await splitSuite(bundle, join(root, "split"));
+  const reloaded = await loadSuite(split.master, fileSuiteIO);
+  const again = await resolveBaseline(reloaded.members[0].contract!, reloaded.members[0].source, fileSuiteIO);
+  assert.deepEqual(again.sqlServer?.targets?.[0].baseline, baseline);
+});
 
 const contract = (table = "Employees"): CsvContract => ({ version: 1, schema: { columns: { Id: { presence: "required", constraints: { allowedValues: ["001", "NULL", "true"] } } } }, sqlServer: { connection: "test", schema: "dbo", table } });
 async function fixture(t: { after(fn: () => Promise<void>): void }) {

@@ -1,13 +1,14 @@
 import * as vscode from "vscode";
 import type { DisplayRun } from "./results-view";
-interface HistoryEntry { id: string; at: string; definition: string; runs: { identity: string; status: string; rows?: number; errors?: number; warnings?: number }[] }
+import { summarizeRules, compareRules, type RuleSummary } from "./core/history";
+interface HistoryEntry { id: string; at: string; definition: string; runs: { identity: string; status: string; rows?: number; errors?: number; warnings?: number; rules?: RuleSummary[] }[] }
 /** A local comparison fingerprint, not a cryptographic identity. Does not retain literals. */
 export function definitionFingerprint(text: string): string {
   let hash = 2166136261;
   for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
   return (hash >>> 0).toString(16);
 }
-export async function manageHistory(context: vscode.ExtensionContext, source: string, runs: DisplayRun[], definition: string): Promise<void> {
+export async function manageHistory(context: vscode.ExtensionContext, source: string, runs: DisplayRun[], definition: string, stale = false): Promise<void> {
   const key = `validator.history.${source}`;
   const limit = context.workspaceState.get<number>("validator.history.retention", 20);
   const history = context.workspaceState.get<HistoryEntry[]>(key, []);
@@ -19,9 +20,9 @@ export async function manageHistory(context: vscode.ExtensionContext, source: st
   }
   if (action === "Delete all saved snapshots") { await context.workspaceState.update(key, []); return; }
   const current: HistoryEntry = { id: globalThis.crypto.randomUUID(), at: new Date().toISOString(), definition: definitionFingerprint(definition),
-    runs: runs.map(r => ({ identity: JSON.stringify([r.member, r.table ?? r.target]), status: r.status ?? (r.result?.valid ? "PASS" : r.result ? "FAIL" : "ERROR"), rows: r.result?.rowCount, errors: r.result?.errorCount, warnings: r.result?.warningCount })) };
+    runs: runs.map(r => ({ identity: JSON.stringify([r.member, r.table ?? r.target]), status: r.status ?? (r.result?.valid ? "PASS" : r.result ? "FAIL" : "ERROR"), rows: r.result?.rowCount, errors: r.result?.errorCount, warnings: r.result?.warningCount, rules: summarizeRules(r.result) })) };
   if (action === "Save summary snapshot") {
-    if (!limit) throw new Error("History retention is disabled. Set a positive retention limit first.");
+    if (stale) throw new Error("Run the current definition before saving history; these results are stale."); if (!limit) throw new Error("History retention is disabled. Set a positive retention limit first.");
     if (!runs.length) throw new Error("Run tests before saving a snapshot.");
     await context.workspaceState.update(key, [...history, current].slice(-limit)); return;
   }
@@ -30,7 +31,10 @@ export async function manageHistory(context: vscode.ExtensionContext, source: st
   if (!selected) return;
   const old = new Map(selected.entry.runs.map(r => [r.identity, r]));
   const identities = new Set([...old.keys(), ...current.runs.map(r => r.identity)]);
-  const comparison = [...identities].map(identity => ({ identity, before: old.get(identity), after: current.runs.find(r => r.identity === identity) }));
+  const comparison = [...identities].map(identity => {
+    const before = old.get(identity), after = current.runs.find(r => r.identity === identity);
+    return { identity, before, after, rules: compareRules(before?.rules, after?.rules) };
+  });
   const content = JSON.stringify({ warning: selected.entry.definition !== current.definition ? "Definitions changed; verdicts are not directly comparable." : "Same definition fingerprint; target data may have changed.", before: selected.entry.at, after: current.at, comparison }, null, 2);
   await vscode.window.showTextDocument(await vscode.workspace.openTextDocument({ language: "json", content }), { viewColumn: vscode.ViewColumn.Beside });
 }

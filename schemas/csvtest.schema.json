@@ -13,25 +13,234 @@
     "baseline": {
       "description": "Versioned schema expectation or a sidecar path relative to the containing contract/suite. Never updated by validation.",
       "oneOf": [
-        {"type":"object","additionalProperties":false,"required":["ref"],"properties":{"ref":{"type":"string","minLength":1}}},
-        {"type":"object","required":["baselineVersion","revision","capturedAt","sourceKind","captureMethod","columns"],"additionalProperties":false,
-         "properties":{
-           "baselineVersion":{"const":1},"revision":{"type":"integer","minimum":1},"capturedAt":{"type":"string"},
-           "sourceKind":{"enum":["csv","sql","manual"]},"captureMethod":{"enum":["csv-header","sql-metadata","manual"]},
-           "object":{"type":"object","additionalProperties":false,"required":["schema","name"],"properties":{"schema":{"type":"string"},"name":{"type":"string"}}},
-           "interpretation":{"$ref":"#/$defs/csvOptions"},
-           "inference":{"type":"object","additionalProperties":false,"required":["scope","rows"],"properties":{"scope":{"enum":["complete","sample"]},"rows":{"type":"integer","minimum":0}}},
-           "policy":{"type":"object","additionalProperties":false,"properties":{"default":{"enum":["allowed","warning","error"]},"order":{"enum":["exact","ignore"]},"changes":{"type":"object","additionalProperties":{"enum":["allowed","warning","error"]}},"columns":{"type":"object","additionalProperties":{"enum":["allowed","warning","error"]}}}},
-           "columns":{"type":"array","items":{"type":"object","required":["name","ordinal"],"additionalProperties":false,"properties":{
-             "name":{"type":"string"},"ordinal":{"type":"integer","minimum":1},"required":{"type":"boolean"},"sqlType":{"type":["string","null"]},
-             "maxLength":{"type":["integer","null"]},"precision":{"type":["integer","null"]},"scale":{"type":["integer","null"]},
-             "nullable":{"type":["boolean","null"]},"identity":{"type":["boolean","null"]},"computed":{"type":["boolean","null"]},"primaryKeyOrdinal":{"type":["integer","null"]},
-             "observedType":{"enum":["unknown","string","number"]},"observedNullable":{"type":"boolean"}
-           }}}
-         }}
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ref"
+          ],
+          "properties": {
+            "ref": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "baselineVersion",
+            "revision",
+            "capturedAt",
+            "sourceKind",
+            "captureMethod",
+            "columns"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "baselineVersion": {
+              "const": 1
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "capturedAt": {
+              "type": "string"
+            },
+            "sourceKind": {
+              "enum": [
+                "csv",
+                "sql",
+                "manual"
+              ]
+            },
+            "captureMethod": {
+              "enum": [
+                "csv-header",
+                "sql-metadata",
+                "manual"
+              ]
+            },
+            "object": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "schema",
+                "name"
+              ],
+              "properties": {
+                "schema": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              }
+            },
+            "interpretation": {
+              "$ref": "#/$defs/csvOptions"
+            },
+            "inference": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "scope",
+                "rows"
+              ],
+              "properties": {
+                "scope": {
+                  "enum": [
+                    "complete",
+                    "sample"
+                  ]
+                },
+                "rows": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "policy": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "default": {
+                  "enum": [
+                    "allowed",
+                    "warning",
+                    "error"
+                  ]
+                },
+                "order": {
+                  "enum": [
+                    "exact",
+                    "ignore"
+                  ]
+                },
+                "changes": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "enum": [
+                      "allowed",
+                      "warning",
+                      "error"
+                    ]
+                  }
+                },
+                "columns": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "enum": [
+                      "allowed",
+                      "warning",
+                      "error"
+                    ]
+                  }
+                }
+              }
+            },
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "ordinal"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "ordinal": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "required": {
+                    "type": "boolean"
+                  },
+                  "sqlType": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "maxLength": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "precision": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "scale": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "nullable": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "identity": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "computed": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "primaryKeyOrdinal": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "observedType": {
+                    "enum": [
+                      "unknown",
+                      "string",
+                      "number"
+                    ]
+                  },
+                  "observedNullable": {
+                    "type": "boolean"
+                  },
+                  "collation": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "uniqueKeys": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
       ]
     },
-    "metadata": {"type":"object","description":"Opaque annotations preserved by combine/split; no execution behavior. Do not store secrets."},
+    "metadata": {
+      "type": "object",
+      "description": "Opaque annotations preserved by combine/split; no execution behavior. Do not store secrets."
+    },
     "version": {
       "const": 1,
       "description": "CSV Contract format version."
@@ -67,6 +276,17 @@
         "unique": {
           "type": "boolean",
           "default": true
+        },
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "nulls": {
+          "enum": [
+            "ignore",
+            "equal",
+            "fail"
+          ]
         }
       }
     },
@@ -277,47 +497,98 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "connection": { "type": "string", "minLength": 1, "description": "Secret-backed connection profile for the single-table form." },
-        "integratedConnection": { "$ref": "#/$defs/sqlServerIntegratedConnection" },
-        "schema": { "type": "string", "minLength": 1 },
-        "table": { "type": "string", "minLength": 1 },
-        "objectType": { "enum": ["table", "view"], "description": "Optional display metadata for the selected database object." },
-        "columnMap": { "$ref": "#/$defs/sqlServerColumnMap" },
+        "connection": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Secret-backed connection profile for the single-table form."
+        },
+        "integratedConnection": {
+          "$ref": "#/$defs/sqlServerIntegratedConnection"
+        },
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "table": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objectType": {
+          "enum": [
+            "table",
+            "view"
+          ],
+          "description": "Optional display metadata for the selected database object."
+        },
+        "columnMap": {
+          "$ref": "#/$defs/sqlServerColumnMap"
+        },
         "targets": {
           "type": "array",
           "minItems": 1,
-          "items": { "$ref": "#/$defs/sqlServerTableTarget" }
+          "items": {
+            "$ref": "#/$defs/sqlServerTableTarget"
+          }
         },
         "rowLocator": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
-        "detailLimit": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 100 },
+        "detailLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "default": 100
+        },
         "scope": {
           "$ref": "#/$defs/sqlServerScope"
         },
         "conditionalRules": {
           "type": "array",
-          "items": { "$ref": "#/$defs/conditionalRule" }
+          "items": {
+            "$ref": "#/$defs/conditionalRule"
+          }
         },
         "importedSchema": {
           "$ref": "#/$defs/importedSchema"
         }
       },
       "anyOf": [
-        { "required": ["schema", "table"] },
-        { "required": ["targets"] }
+        {
+          "required": [
+            "schema",
+            "table"
+          ]
+        },
+        {
+          "required": [
+            "targets"
+          ]
+        }
       ]
     },
     "sqlServerScope": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["column", "parameter", "sqlType"],
+      "required": [
+        "column",
+        "parameter",
+        "sqlType"
+      ],
       "properties": {
-        "column": { "type": "string", "minLength": 1 },
-        "parameter": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "column": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parameter": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
         "sqlType": {
           "type": "string",
           "description": "Safe SQL type for generated scripts, such as bigint, uniqueidentifier, or nvarchar(100)."
@@ -332,17 +603,51 @@
     "sqlServerTableTarget": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema", "table"],
-      "not": { "required": ["connection", "integratedConnection"] },
+      "required": [
+        "schema",
+        "table"
+      ],
+      "not": {
+        "required": [
+          "connection",
+          "integratedConnection"
+        ]
+      },
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "connection": { "type": "string", "minLength": 1 },
-        "integratedConnection": { "$ref": "#/$defs/sqlServerIntegratedConnection" },
-        "schema": { "type": "string", "minLength": 1 },
-        "table": { "type": "string", "minLength": 1 },
-        "objectType": { "enum": ["table", "view"] },
-        "columnMap": { "$ref": "#/$defs/sqlServerColumnMap" },
-        "scope": { "$ref": "#/$defs/sqlServerScope" }
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "connection": {
+          "type": "string",
+          "minLength": 1
+        },
+        "integratedConnection": {
+          "$ref": "#/$defs/sqlServerIntegratedConnection"
+        },
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "table": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objectType": {
+          "enum": [
+            "table",
+            "view"
+          ]
+        },
+        "columnMap": {
+          "$ref": "#/$defs/sqlServerColumnMap"
+        },
+        "scope": {
+          "$ref": "#/$defs/sqlServerScope"
+        },
+        "baseline": {
+          "$ref": "#/properties/baseline"
+        }
       }
     },
     "sqlServerIntegratedConnection": {
@@ -381,38 +686,86 @@
     "sqlServerColumnMap": {
       "type": "object",
       "minProperties": 1,
-      "propertyNames": { "minLength": 1 },
-      "additionalProperties": { "type": "string", "minLength": 1 },
+      "propertyNames": {
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      },
       "description": "Maps canonical contract column names to physical SQL Server column names."
     },
     "importedSchema": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["formatVersion", "sourceKind", "columns"],
+      "required": [
+        "formatVersion",
+        "sourceKind",
+        "columns"
+      ],
       "properties": {
-        "formatVersion": { "const": 1 },
-        "sourceKind": { "enum": ["create-table", "database-tracking", "database-knowledge"] },
+        "formatVersion": {
+          "const": 1
+        },
+        "sourceKind": {
+          "enum": [
+            "create-table",
+            "database-tracking",
+            "database-knowledge"
+          ]
+        },
         "columns": {
           "type": "array",
           "minItems": 1,
-          "items": { "$ref": "#/$defs/importedColumn" }
+          "items": {
+            "$ref": "#/$defs/importedColumn"
+          }
         }
       }
     },
     "importedColumn": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["ordinal", "name", "sqlType", "nullable"],
+      "required": [
+        "ordinal",
+        "name",
+        "sqlType",
+        "nullable"
+      ],
       "properties": {
-        "ordinal": { "type": "integer", "minimum": 1 },
-        "name": { "type": "string", "minLength": 1 },
-        "sqlType": { "type": "string", "minLength": 1 },
-        "nullable": { "type": "boolean" },
-        "identity": { "type": "boolean" },
-        "computed": { "type": "boolean" },
-        "maxLength": { "type": "integer", "minimum": -1 },
-        "precision": { "type": "integer", "minimum": 0 },
-        "scale": { "type": "integer", "minimum": 0 }
+        "ordinal": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sqlType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nullable": {
+          "type": "boolean"
+        },
+        "identity": {
+          "type": "boolean"
+        },
+        "computed": {
+          "type": "boolean"
+        },
+        "maxLength": {
+          "type": "integer",
+          "minimum": -1
+        },
+        "precision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scale": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "predicate": {
@@ -420,36 +773,76 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["column", "operator"],
+          "required": [
+            "column",
+            "operator"
+          ],
           "properties": {
-            "column": { "type": "string", "minLength": 1 },
-            "operator": {
-              "enum": ["equals", "notEquals", "in", "notIn", "isNull", "notNull", "isBlank", "notBlank", "equalsColumn", "notEqualsColumn"]
+            "column": {
+              "type": "string",
+              "minLength": 1
             },
-            "value": { "type": "string" },
+            "operator": {
+              "enum": [
+                "equals",
+                "notEquals",
+                "in",
+                "notIn",
+                "isNull",
+                "notNull",
+                "isBlank",
+                "notBlank",
+                "equalsColumn",
+                "notEqualsColumn"
+              ]
+            },
+            "value": {
+              "type": "string"
+            },
             "values": {
               "type": "array",
               "minItems": 1,
               "uniqueItems": true,
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             },
-            "otherColumn": { "type": "string", "minLength": 1 }
+            "otherColumn": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["all"],
+          "required": [
+            "all"
+          ],
           "properties": {
-            "all": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/predicate" } }
+            "all": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/predicate"
+              }
+            }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["any"],
+          "required": [
+            "any"
+          ],
           "properties": {
-            "any": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/predicate" } }
+            "any": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/predicate"
+              }
+            }
           }
         }
       ]
@@ -457,13 +850,31 @@
     "conditionalRule": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "expect"],
+      "required": [
+        "id",
+        "expect"
+      ],
       "properties": {
-        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
-        "name": { "type": "string" },
-        "severity": { "enum": ["error", "warning"], "default": "error" },
-        "when": { "$ref": "#/$defs/predicate" },
-        "expect": { "$ref": "#/$defs/predicate" }
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+        },
+        "name": {
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning"
+          ],
+          "default": "error"
+        },
+        "when": {
+          "$ref": "#/$defs/predicate"
+        },
+        "expect": {
+          "$ref": "#/$defs/predicate"
+        }
       }
     },
     "csvPredicate": {
@@ -471,58 +882,263 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["column", "operator"],
+          "required": [
+            "column",
+            "operator"
+          ],
           "properties": {
-            "column": { "type": "string", "minLength": 1 },
+            "column": {
+              "type": "string",
+              "minLength": 1
+            },
             "operator": {
               "enum": [
-                "equals", "notEquals", "in", "notIn", "isNull", "notNull", "isBlank", "notBlank",
-                "equalsColumn", "notEqualsColumn", "contains", "notContains", "startsWith", "endsWith",
-                "matches", "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual", "dateOnOrAfter", "dateOnOrBefore", "dateAfter", "dateBefore"
+                "equals",
+                "notEquals",
+                "in",
+                "notIn",
+                "isNull",
+                "notNull",
+                "isBlank",
+                "notBlank",
+                "equalsColumn",
+                "notEqualsColumn",
+                "contains",
+                "notContains",
+                "startsWith",
+                "endsWith",
+                "matches",
+                "greaterThan",
+                "greaterThanOrEqual",
+                "lessThan",
+                "lessThanOrEqual",
+                "dateOnOrAfter",
+                "dateOnOrBefore",
+                "dateAfter",
+                "dateBefore"
               ]
             },
-            "value": { "type": ["string", "number"] },
+            "value": {
+              "type": [
+                "string",
+                "number"
+              ]
+            },
             "values": {
               "type": "array",
               "minItems": 1,
               "uniqueItems": true,
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             },
-            "otherColumn": { "type": "string", "minLength": 1 }
+            "otherColumn": {
+              "type": "string",
+              "minLength": 1
+            },
+            "relativeDate": {
+              "type": "object",
+              "properties": {
+                "anchor": {
+                  "enum": [
+                    "today",
+                    "now"
+                  ]
+                },
+                "days": {
+                  "minimum": -365000,
+                  "type": "integer",
+                  "maximum": 365000
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "anchor",
+                "days"
+              ]
+            },
+            "valueType": {
+              "enum": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "caseSensitive": {
+              "type": "boolean"
+            },
+            "decimalPlaces": {
+              "minimum": 0,
+              "type": "integer",
+              "maximum": 15
+            }
           },
           "allOf": [
             {
-              "if": { "properties": { "operator": { "enum": ["equals", "notEquals", "contains", "notContains", "startsWith", "endsWith", "matches", "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual", "dateOnOrAfter", "dateOnOrBefore", "dateAfter", "dateBefore"] } } },
-              "then": { "anyOf": [{ "required": ["value"] }, { "required": ["otherColumn"] }] }
+              "if": {
+                "properties": {
+                  "operator": {
+                    "enum": [
+                      "equals",
+                      "notEquals",
+                      "contains",
+                      "notContains",
+                      "startsWith",
+                      "endsWith",
+                      "matches",
+                      "greaterThan",
+                      "greaterThanOrEqual",
+                      "lessThan",
+                      "lessThanOrEqual",
+                      "dateOnOrAfter",
+                      "dateOnOrBefore",
+                      "dateAfter",
+                      "dateBefore"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "value"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "otherColumn"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "relativeDate"
+                    ]
+                  }
+                ]
+              }
             },
             {
-              "if": { "properties": { "operator": { "enum": ["equals", "notEquals", "contains", "notContains", "startsWith", "endsWith", "matches"] } } },
-              "then": { "required": ["value"] }
+              "if": {
+                "properties": {
+                  "operator": {
+                    "enum": [
+                      "equals",
+                      "notEquals",
+                      "contains",
+                      "notContains",
+                      "startsWith",
+                      "endsWith",
+                      "matches"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "value"
+                ]
+              }
             },
             {
-              "if": { "properties": { "operator": { "enum": ["in", "notIn"] } } },
-              "then": { "required": ["values"] }
+              "if": {
+                "properties": {
+                  "operator": {
+                    "enum": [
+                      "in",
+                      "notIn"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "values"
+                ]
+              }
             },
             {
-              "if": { "properties": { "operator": { "enum": ["equalsColumn", "notEqualsColumn"] } } },
-              "then": { "required": ["otherColumn"] }
+              "if": {
+                "properties": {
+                  "operator": {
+                    "enum": [
+                      "equalsColumn",
+                      "notEqualsColumn"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "otherColumn"
+                ]
+              }
+            },
+            {
+              "then": {
+                "properties": {
+                  "operator": {
+                    "enum": [
+                      "dateOnOrAfter",
+                      "dateOnOrBefore",
+                      "dateAfter",
+                      "dateBefore"
+                    ]
+                  }
+                },
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "value"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "otherColumn"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "if": {
+                "required": [
+                  "relativeDate"
+                ]
+              }
             }
           ]
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["all"],
+          "required": [
+            "all"
+          ],
           "properties": {
-            "all": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/csvPredicate" } }
+            "all": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/csvPredicate"
+              }
+            }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["any"],
+          "required": [
+            "any"
+          ],
           "properties": {
-            "any": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/csvPredicate" } }
+            "any": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/csvPredicate"
+              }
+            }
           }
         }
       ]
@@ -530,55 +1146,113 @@
     "csvConditionalRule": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "expect"],
+      "required": [
+        "id",
+        "expect"
+      ],
       "properties": {
-        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
-        "name": { "type": "string" },
-        "severity": { "enum": ["error", "warning"], "default": "error" },
-        "when": { "$ref": "#/$defs/csvPredicate" },
-        "expect": { "$ref": "#/$defs/csvPredicate" }
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+        },
+        "name": {
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning"
+          ],
+          "default": "error"
+        },
+        "when": {
+          "$ref": "#/$defs/csvPredicate"
+        },
+        "expect": {
+          "$ref": "#/$defs/csvPredicate"
+        }
       }
     },
     "groupValueRequirement": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["column"],
+      "required": [
+        "column"
+      ],
       "properties": {
-        "column": { "type": "string", "minLength": 1 },
+        "column": {
+          "type": "string",
+          "minLength": 1
+        },
         "values": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "contains": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
       "anyOf": [
-        { "required": ["values"] },
-        { "required": ["contains"] }
+        {
+          "required": [
+            "values"
+          ]
+        },
+        {
+          "required": [
+            "contains"
+          ]
+        }
       ]
     },
     "groupRule": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "groupBy", "require"],
+      "required": [
+        "id",
+        "groupBy",
+        "require"
+      ],
       "properties": {
-        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
-        "name": { "type": "string" },
-        "severity": { "enum": ["error", "warning"], "default": "error" },
-        "when": { "$ref": "#/$defs/csvPredicate" },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+        },
+        "name": {
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning"
+          ],
+          "default": "error"
+        },
+        "when": {
+          "$ref": "#/$defs/csvPredicate"
+        },
         "groupBy": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
-        "require": { "$ref": "#/$defs/groupValueRequirement" }
+        "require": {
+          "$ref": "#/$defs/groupValueRequirement"
+        }
       }
     },
     "rowTest": {

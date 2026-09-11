@@ -4,10 +4,16 @@ import { isoDate } from "./predicate";
 export const presetCatalog = [
   ["neverNull", "Never null"], ["constant", "Always a constant"], ["allowed", "Allowed values"], ["prohibited", "Prohibited values"],
   ["numberRange", "Number range"], ["dateRange", "ISO date range"], ["pattern", "Text pattern"],
-  ["requiredWhen", "Required when"], ["compareColumns", "Compare columns"], ["unique", "Unique column"], ["population", "Population / row count"]
+  ["requiredWhen", "Required when"], ["compareColumns", "Compare columns"], ["unique", "Unique columns"], ["population", "Population / row count"]
 ] as const;
 export type PresetKind = typeof presetCatalog[number][0];
 export interface PresetInput {
+  dateAnchor?: "today" | "now";
+  valueType?: "string" | "number" | "boolean";
+  caseSensitive?: boolean;
+  decimalPlaces?: number;
+  columns?: string[];
+  duplicates?: "reject" | "allow";
   kind: PresetKind; id: string; column: string; value?: string; values?: string[];
   minimum?: string; maximum?: string; exclusive?: boolean; otherColumn?: string;
   comparison?: "equalsColumn" | "notEqualsColumn" | "greaterThan" | "greaterThanOrEqual" | "lessThan" | "lessThanOrEqual";
@@ -18,9 +24,12 @@ export function insertPreset(contract: CsvContract, input: PresetInput): CsvCont
   if (!next.schema.columns[input.column]) throw new Error("Choose a declared column.");
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(input.id)) throw new Error("Use a stable rule ID with lowercase letters, numbers, dots, underscores or hyphens.");
   const ids = [...(next.rules ?? []), ...(next.rowTests ?? []), ...(next.groupRules ?? []), ...(next.sqlServer?.conditionalRules ?? [])].map(r => r.id);
-  if (ids.includes(input.id)) throw new Error(`Rule ID '${input.id}' already exists.`);
+  if (ids.includes(input.id) || next.identity?.id === input.id) throw new Error(`Rule ID '${input.id}' already exists.`);
   if (input.kind === "unique") {
-    (next.schema.columns[input.column].constraints ??= {}).unique = true;
+    const columns = input.columns?.length ? input.columns : [input.column];
+    if (columns.some(c => !next.schema.columns[c]) || new Set(columns).size !== columns.length) throw new Error("Choose distinct declared identity columns.");
+    if (next.identity) throw new Error("This contract already has an identity. Edit it explicitly before replacing it.");
+    next.identity = { id: input.id, columns, unique: input.duplicates !== "allow", nulls: input.nulls === "allow" ? "equal" : input.nulls ?? "fail" };
     return next;
   }
   if (input.kind === "population") {
@@ -34,10 +43,10 @@ export function insertPreset(contract: CsvContract, input: PresetInput): CsvCont
   let when: Predicate | undefined;
   switch (input.kind) {
     case "neverNull": expect = leaf("notNull"); break;
-    case "constant": expect = leaf("equals", input.value ?? ""); break;
+    case "constant": expect = { ...leaf("equals", input.value ?? ""), valueType: input.valueType, caseSensitive: input.caseSensitive }; break;
     case "allowed": case "prohibited":
       if (!input.values?.length) throw new Error("Enter at least one literal value.");
-      expect = { column: input.column, operator: input.kind === "allowed" ? "in" : "notIn", values: [...input.values] }; break;
+      expect = { column: input.column, operator: input.kind === "allowed" ? "in" : "notIn", values: [...input.values], valueType: input.valueType, caseSensitive: input.caseSensitive }; break;
     case "pattern":
       new RegExp(input.value ?? "");
       expect = leaf("matches", input.value ?? ""); break;
@@ -51,12 +60,25 @@ export function insertPreset(contract: CsvContract, input: PresetInput): CsvCont
     case "numberRange": case "dateRange": {
       const bounds: Predicate[] = [];
       const date = input.kind === "dateRange";
+      if (date && input.dateAnchor) {
+        for (const [value, operator] of [[input.minimum, input.exclusive ? "dateAfter" : "dateOnOrAfter"], [input.maximum, input.exclusive ? "dateBefore" : "dateOnOrBefore"]] as const) {
+          if (value === undefined || value === "") continue;
+          if (!/^-?\d+$/.test(value) || Math.abs(Number(value)) > 365000) throw new Error("Relative bounds must be integer day offsets within ±365000.");
+          bounds.push({ column: input.column, operator, relativeDate: { anchor: input.dateAnchor, days: Number(value) } });
+        }
+        if (!bounds.length || input.minimum && input.maximum && Number(input.minimum) > Number(input.maximum)) throw new Error("Provide ordered relative day bounds.");
+        expect = { all: bounds }; break;
+      }
       const parse = date ? isoDate : Number;
       if (input.minimum && !Number.isFinite(parse(input.minimum)) || input.maximum && !Number.isFinite(parse(input.maximum))) throw new Error(date ? "Use a valid ISO date or instant with explicit timezone." : "Use finite numeric bounds.");
       if (input.minimum && input.maximum && parse(input.minimum) > parse(input.maximum)) throw new Error("Minimum exceeds maximum.");
       if (input.minimum) bounds.push(leaf(date ? input.exclusive ? "dateAfter" : "dateOnOrAfter" : input.exclusive ? "greaterThan" : "greaterThanOrEqual", input.minimum));
       if (input.maximum) bounds.push(leaf(date ? input.exclusive ? "dateBefore" : "dateOnOrBefore" : input.exclusive ? "lessThan" : "lessThanOrEqual", input.maximum));
       if (!bounds.length) throw new Error("Enter at least one bound.");
+      if (!date && input.decimalPlaces !== undefined) {
+        if (!Number.isInteger(input.decimalPlaces) || input.decimalPlaces < 0 || input.decimalPlaces > 15) throw new Error("Decimal places must be between 0 and 15.");
+        bounds.forEach(bound => Object.assign(bound, { decimalPlaces: input.decimalPlaces }));
+      }
       expect = { all: bounds }; break;
     }
   }

@@ -18,8 +18,7 @@ newer document revision.
 **Add validation** inserts ordinary contract rules. String literals such as
 `"0001"` remain strings. Null treatment can fail, allow or exclude configured null
 markers from conditional selection. Normalization remains controlled by `csv`:
-`trimValues`, `caseSensitive`, and `nullValues`. The unique-column preset uses the
-existing constraint, which ignores configured nulls; population sets
+`trimValues`, `caseSensitive`, and `nullValues`. The unique-columns preset creates an identity with explicit null and duplicate policies; population sets
 `schema.rowCount.min`. Existing rules remain editable in YAML.
 
 Fixed date predicates are `dateOnOrAfter`, `dateOnOrBefore`, `dateAfter`, and
@@ -28,8 +27,7 @@ Fixed date predicates are `dateOnOrAfter`, `dateOnOrBefore`, `dateAfter`, and
 locale-dependent parsing. Date predicates and JavaScript regexes use exact SQL
 client fallback. Numeric comparisons also accept `otherColumn` when `value` is
 absent; invalid or blank numeric operands fail the predicate. Bounds can be
-inclusive or exclusive. Relative dates and configurable decimal precision are
-not available in this increment.
+inclusive or exclusive. Relative dates and decimal precision are configured as described below.
 
 ## Schema baselines
 
@@ -111,11 +109,17 @@ write baselines.
 **Run preview** beside a conditional rule evaluates that draft rule against one
 explicitly selected target. It uses the same rule evaluator and SQL compiler as
 normal execution. It reports rows examined, selected, passed and failed. Zero
-selected rows are labeled explicitly. This increment performs full-scope
-evaluation, never a silently sampled run; it retrieves no SQL example records
-unless the existing exact fallback requires reading the scope. Coverage diagnostics
-and the source picker explain fallback before preview execution.
-
+selected rows are labeled explicitly. Choose **Sample up to 1,000 rows** or
+**Complete configured scope** after selecting a source. Samples use the first CSV
+records or unordered SQL `TOP` rows, not a statistical sample. Sample reports use
+`SAMPLED`, never overall PASS, even when all examined rows pass. Complete mode
+examines the full configured scope. Both modes retain at most five passing and
+five failing examples per conditional rule. Aggregate row/group checks retain
+aggregate outcomes, without invented row examples. SQL previews use the shared
+client evaluator and explicitly disclose that choice; complete mode can read the
+whole scope into memory. CSV file loading still reads the file before bounded parsing.
+Examples are held in the current report and included only in an explicit full JSON
+export; filtered/selected exports omit examples. History never retains examples.
 **Enable live tests** intentionally runs the initial tests and watches valid
 definition changes. It is off when an editor opens, is not persisted between
 sessions, and never polls database data. The debounce is 500 ms with one in-flight
@@ -162,7 +166,7 @@ exports retain the original aggregate counts and do not query the source again.
 storage of the newest 20 aggregate snapshots, with a definition fingerprint and
 timestamps. It retains no examples, credentials or rule literal values. Changed
 definitions are flagged when comparing; missing/unexecuted work is not considered
-newly passing. Retention is fixed in this increment.
+newly passing. Retention is configurable from 0 to 1000. Comparisons include stable rule IDs, selected/passed/failed counts when available, and explicit missing-result availability. Stale results cannot be saved as a current-definition snapshot.
 
 **Insert rule template** reads reviewed YAML/JSON, prompts for parameters and
 previews ordinary inserted rules. Existing rules are never linked to later
@@ -201,14 +205,13 @@ crossChecks:
     to: archive
 ```
 
-Each participating member must resolve to exactly one unscoped SQL object on the
+Each participating member must resolve to exactly one SQL object on the
 same connection/database. Foreign-key equality uses SQL's native typed equality
 and collation; `nulls: ignore` excludes rows with any SQL-null source key and
 `nulls: fail` fails them. CSV normalization markers do not redefine native SQL
 NULL for these relational checks. Canonical key names use each target's column map.
 Equal population compares `COUNT_BIG` totals. Queries are read-only aggregates
-and retrieve no employee/example records. Scoped and cross-connection comparisons
-are explicitly rejected. Selective/live changes to either participant invalidate
+and retrieve no employee/example records. Each scoped participant binds its own `scope.valueEnvironment` to an independent query parameter. Missing runtime values fail before connecting; values are never written into reports or generated SQL. Cross-connection comparisons are rejected. Generated scripts declare separate required parameters for both sides. Selective/live changes to either participant invalidate
 the cross-check. The Workbench, CLI dbtest and SQL generation share the same plan.
 
 ## Compatibility and verification
@@ -233,13 +236,11 @@ source examples or credentials.
 
 Existing nested conditional predicates can be edited through **Edit rule-id**:
 change columns/operators/literals or switch existing groups between all/any, then
-**Apply rule changes** and save normally. Adding/removing nested branches remains
-a YAML operation. Legacy SQL-only conditional rules retain their restricted schema;
+**Apply rule changes** and save normally. Add/remove branches, wrap groups, move branches up/down, and add/remove condition selectors directly in the visual form. A group must retain at least one branch. Legacy SQL-only conditional rules retain their restricted schema;
 the host rejects unsupported operators rather than changing their scope.
 
 Row tests and grouped rules have explicit preview buttons. Their aggregate result
-is displayed without fabricated per-row pass counts. Previews cover the complete
-configured scope, never a silently sampled subset. Date instants accept up to
+is displayed without fabricated per-row pass counts. Preview scope is selected explicitly and recorded in the result. Date instants accept up to
 seven fractional digits but compare at JavaScript millisecond precision. SQL native
 dates use a separate ISO projection in client fallback, preserving existing raw
 literal comparisons. No source examples are added to aggregate SQL reports.
@@ -250,28 +251,15 @@ integer digits; overflow is an execution error. SQL NULL values are ignored unle
 `nulls: fail`; blank/non-numeric values fail the check. This is an aggregate check
 with one failed assertion on mismatch/invalid input, not a count of bad rows.
 
-Incomplete roadmap items and their implementation barriers:
+Current boundaries:
 
-- Relative dates and richer typed/precision/uniqueness policies need a versioned
-  evaluation-context and policy representation shared by streaming, SQL compilation
-  and stored reports. This release offers fixed ISO bounds and existing literal/null
-  semantics only; it does not simulate dynamic dates by freezing an authoring time.
-- Sampled previews and bounded passing/failing SQL examples need a separate projection
-  and selection plan that preserves complete aggregate counts and row locators.
-  The existing exact fallback reads the scope, so it is explicitly disclosed rather
-  than presented as a bounded example query.
-- Per-issue selection/export, richer baseline impact classification and additional SQL
-  key kinds are incomplete. Current exports offer retained filtered issues in single
-  editors and selected member scope in suites; JSON records scope/staleness and keeps
-  original aggregate totals. CSV carries diagnostics but not all JSON run metadata.
-- Cross-table scopes need per-participant parameter binding and reproducible scope
-  identity. Scoped and cross-connection checks are rejected; complete same-connection
-  objects are supported. Linked templates remain the roadmap's future design option.
+- Linked templates remain an optional future design; inserted rules are independent.
+- In-flight pool acquisition and synchronous CSV work cannot be interrupted. Completion is discarded when stale.
+- CSV targets share their contract baseline; heterogeneous schemas belong in independent suite members. SQL targets support baseline overrides.
+- SQL cross-checks require one target per participant on the same connection. Scopes require environment values.
+- Unique-key metadata records index names and ordinals, not foreign-key definitions or filtered-index expressions. Type/key impact still requires review.
 
-These are missing implementation work, not features claimed to be complete or
-limitations requiring remote database access. Remote database verification remains
-separately unperformed because it requires the owner's approval.
-
+Remote database verification remains separately unperformed because it requires the owner's approval.
 Contracts remain `version: 1` and suites `suiteVersion: 1`. Existing literal values,
 member independence, rule ordering and validation semantics are retained. Parsing
 now validates the documented schema before executing valid drafts; unsupported
@@ -288,3 +276,46 @@ semantics offline. It is not remote database verification. Real host tests use
 the actual VS Code web extension host; rendered tests use Playwright with CSP and
 save screenshots outside the repository. Release checks remain
 `npm run release:check`; publication uses the existing `v*` tag workflow.
+
+### Rule policies and reproducible evaluation (0.15)
+
+Ordinary predicate leaves support `valueType: string|number|boolean`, an optional
+`caseSensitive` override, and `decimalPlaces: 0..15`. Typed comparisons interpret
+retained literals; they do not rewrite identifiers. Boolean literals are true/false;
+numeric equality/list matching requires valid finite numeric operands. Invalid
+operands fail even negative predicates. Decimal-place limits require plain decimal
+notation and count written fractional digits. Existing predicates retain their defaults.
+
+Date bounds may replace `value` with `relativeDate: {anchor: today, days: -7}`.
+`today` is UTC midnight; `now` is the run's UTC instant. Integer offsets range from
+-365000 to 365000 days. The run records `evaluatedAt` and resolves every bound once
+at execution start, including suite members and streaming CSV. Fixed dates retain
+strict ISO parsing. A maximum of today means midnight, not the end of the day.
+Typed/case/precision/date semantics use exact SQL client fallback when SQL cannot
+translate them faithfully. The CLI uses the same contract policies.
+
+The unique-columns preset creates `identity: {id: stable-key, columns: [A, B],
+unique: true, nulls: equal}`. `ignore` excludes keys containing any configured null;
+`equal` groups normalized null markers together; `fail` reports null keys. Setting
+`unique: false` permits duplicates while retaining explicit null checks. Existing
+identities without `nulls` preserve their legacy behavior. A preset will not
+silently replace an existing identity.
+
+### Baseline and export refinements (0.15)
+
+A `sqlServer.targets[]` entry may contain its own `baseline` mapping or `{ref: path}`.
+It overrides the contract default only for that target. SQL capture/review on a
+target-list entry writes that target's override; legacy single-table capture writes
+the contract baseline. Reviewed sidecar updates retain stale-document protection.
+Target dependencies participate in live invalidation and lossless combine/split
+rebasing. SQL capture additionally records `collation` and `uniqueKeys` (ordered
+JSON index-name/ordinal metadata). Unknown metadata never becomes an accepted
+expectation. Drift labels distinguish breaking, widening, narrowing, observational,
+unknown and review-required changes without overriding configured severity.
+
+Select individual issue checkboxes in either editor, optionally search results,
+then export. Suite member selection and result search both constrain export.
+Exports retain original aggregate counts, mark limited details and record selection
+scope. CSV includes run/work IDs, evaluation time, execution scope, status, export
+context and retained/total issue counts. Selection keys are bound to the current
+run; stale selections are rejected. Filtered exports omit preview example records.

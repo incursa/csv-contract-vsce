@@ -2,6 +2,10 @@ import type { ValidationResult } from "./core/model";
 import { rowsToCsv } from "./comparison/evidence";
 
 export interface IssueExportRun {
+  runId?: string;
+  workId?: string;
+  evaluatedAt?: string;
+  scope?: string;
   target: string;
   result?: ValidationResult;
   status?: string;
@@ -32,7 +36,7 @@ export function createValidationRunExport(contract: string, runs: IssueExportRun
     contract,
     totals: {
       targets: runs.length,
-      passed: runs.filter((run) => (run.result?.valid && (!run.status || run.status === "PASS"))).length,
+      passed: runs.filter((run) => (run.result?.valid && run.result.preview?.scope !== "sample" && (!run.status || run.status === "PASS"))).length,
       rowsScanned: runs.reduce((total, run) => total + (run.result?.rowCount ?? 0), 0),
       errors: runs.reduce((total, run) => total + (run.result?.errorCount ?? 0), 0),
       warnings: runs.reduce((total, run) => total + (run.result?.warningCount ?? 0), 0),
@@ -48,7 +52,7 @@ export function validationRunExportJson(contract: string, runs: IssueExportRun[]
   return `${JSON.stringify(createValidationRunExport(contract, runs), null, 2)}\n`;
 }
 
-export function issueRunsToCsv(runs: IssueExportRun[]): string {
+export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown): string {
   const columns = [
     "Target",
     "Severity",
@@ -61,6 +65,8 @@ export function issueRunsToCsv(runs: IssueExportRun[]): string {
     "Actual",
     "Expected"
   ];
+  const extended = context !== undefined || runs.some(run => run.runId);
+  const metadata = (run: IssueExportRun) => extended ? [run.runId ?? "", run.workId ?? "", run.evaluatedAt ?? "", run.scope ?? "", run.status ?? (run.result?.valid ? "PASS" : "FAIL"), JSON.stringify(context ?? {}), String(run.result?.issueCount ?? 0), String(run.result?.issues.length ?? 0), String(run.result?.truncated ?? false)] : [];
   const rows = runs.flatMap((run) => (run.result?.issues ?? []).map((issue) => [
     run.target,
     issue.severity ?? "error",
@@ -71,8 +77,12 @@ export function issueRunsToCsv(runs: IssueExportRun[]): string {
     issue.row === undefined ? "" : String(issue.row),
     issue.message,
     issue.actual === undefined ? "" : String(issue.actual),
-    issue.expected === undefined ? "" : String(issue.expected)
+    issue.expected === undefined ? "" : String(issue.expected), ...metadata(run)
   ]));
-  for (const run of runs) if (run.error) rows.push([run.target, run.status ?? "ERROR", "execution", "", "", "", "", run.error, "", ""]);
+  for (const run of runs) {
+    if (run.error) rows.push([run.target, run.status ?? "ERROR", "execution", "", "", "", "", run.error, "", "", ...metadata(run)]);
+    else if (extended && !run.result?.issues.length) rows.push([run.target, "", "summary", "", "", "", "", "No retained issue details in this scope.", "", "", ...metadata(run)]);
+  }
+  if (extended) columns.push("RunId", "WorkId", "EvaluatedAt", "EvaluationScope", "Status", "ExportScope", "TotalIssues", "RetainedIssues", "DetailsLimited");
   return rowsToCsv(columns, rows);
 }

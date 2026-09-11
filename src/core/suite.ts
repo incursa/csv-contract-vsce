@@ -1,4 +1,5 @@
 import { errorDetails } from "./error-details";
+import { resolveEvaluation } from "./evaluation";
 import { planCrossCheck, type CrossCheck, type CrossExecutor } from "./cross-checks";
 import { isScalar, parseDocument, stringify, visit } from "yaml";
 import { parseContract } from "./contract";
@@ -149,8 +150,12 @@ export async function loadSuite(source: string, io: SuiteIO, ancestors: string[]
   return { id: suite.id, source, isSuite: true, members, ...(suite.crossChecks ? { crossChecks: suite.crossChecks } : {}) };
 }
 
-export type SuiteStatus = "PASS" | "FAIL" | "ERROR" | "SKIPPED" | "CANCELED";
+export type SuiteStatus = "PASS" | "FAIL" | "ERROR" | "SKIPPED" | "CANCELED" | "SAMPLED";
 export interface SuiteRun {
+  workId?: string;
+  runId?: string;
+  evaluatedAt?: string;
+  scope?: string;
   durationMs?: number;
   suite: string;
   member: string;
@@ -175,7 +180,8 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
     if (stopped) { runs.push({ ...base, status: "SKIPPED", error: "Not executed after fail-fast." }); continue; }
     try {
       if (member.error || !member.contract) throw new Error(member.error ?? "Contract was not loaded.");
-      const targets = resolveSqlServerTargets(member.contract);
+      const evaluatedContract = resolveEvaluation(member.contract, startedAt);
+      const targets = resolveSqlServerTargets(evaluatedContract);
       if (!targets.length && !(validateFile && member.contract.targets?.length)) throw new Error("No SQL Server targets configured; dbtest requires a database target for every member.");
       for (const target of targets) {
         const identity = { ...base, table: `${target.schema}.${target.table}`, target: target.name ?? `${target.schema}.${target.table}` };
@@ -183,7 +189,8 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
         if (stopped) { runs.push({ ...identity, status: "SKIPPED", error: "Not executed after fail-fast." }); continue; }
         try {
           const started = Date.now();
-          const result = await validate(member.contract, target, member.source);
+          const result = await validate(evaluatedContract, target, member.source);
+          result.evaluatedAt = startedAt;
           runs.push(controls.signal?.aborted ? { ...identity, status: "CANCELED", error: "Canceled during execution; result discarded." }
             : { ...identity, status: result.valid ? "PASS" : "FAIL", result, durationMs: Date.now() - started });
           controls.onProgress?.(runs[runs.length - 1]);
@@ -200,7 +207,8 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
         if (stopped) { runs.push({ ...identity, status: "SKIPPED", error: "Not executed after fail-fast." }); continue; }
         try {
           const started = Date.now();
-          const result = await validateFile!(member.contract, member.source, target);
+          const result = await validateFile!(evaluatedContract, member.source, target);
+          result.evaluatedAt = startedAt;
           runs.push(controls.signal?.aborted ? { ...identity, status: "CANCELED", error: "Canceled during execution; result discarded." } : { ...identity, status: result.valid ? "PASS" : "FAIL", result, durationMs: Date.now() - started });
           controls.onProgress?.(runs[runs.length - 1]);
           if (failFast && !result.valid) stopped = true;
@@ -227,10 +235,12 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
       if (failFast && !result.valid) stopped = true;
     } catch (error) { runs.push({ ...base, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) }); if (failFast) stopped = true; }
   }
+  runs.forEach(run => { if (run.result?.preview?.scope === "sample") run.status = "SAMPLED"; });
   const status: SuiteStatus = runs.some((r) => r.status === "ERROR") || !runs.length ? "ERROR"
-    : runs.some((r) => r.status === "CANCELED") ? "CANCELED" : runs.some((r) => r.status === "FAIL") ? "FAIL" : runs.some((r) => r.status === "SKIPPED") ? "SKIPPED" : "PASS";
+    : runs.some((r) => r.status === "CANCELED") ? "CANCELED" : runs.some((r) => r.status === "FAIL") ? "FAIL" : runs.some((r) => r.status === "SKIPPED") ? "SKIPPED" : runs.some(r => r.status === "SAMPLED") ? "SAMPLED" : "PASS";
+  runs.forEach((run, index) => Object.assign(run, { workId: `${runId}:${index}`, runId, evaluatedAt: startedAt, scope: run.result?.preview ? JSON.stringify({ preview: run.result.preview, rules: run.result.ruleOutcomes?.map(r => r.id) }) : controls.members ? JSON.stringify(controls.members) : "all" }));
   return { suite: suite.id, runId, startedAt, completedAt: new Date().toISOString(), scope: controls.members ?? "all", valid: status === "PASS", status, exitCode: status === "PASS" ? 0 : status === "FAIL" ? 1 : 2,
-    summary: Object.fromEntries((["PASS", "FAIL", "ERROR", "SKIPPED", "CANCELED"] as const).map((s) => [s, runs.filter((r) => r.status === s).length])),
+    summary: { ...Object.fromEntries((["PASS", "FAIL", "ERROR", "SKIPPED", "CANCELED"] as const).map((s) => [s, runs.filter((r) => r.status === s).length])), ...(runs.some(r => r.status === "SAMPLED") ? { SAMPLED: runs.filter(r => r.status === "SAMPLED").length } : {}) },
     members: suite.members.map((m) => ({ id: m.id, runs: runs.filter((r) => r.member === m.id) })), runs };
 }
 
@@ -244,8 +254,9 @@ export function generateSuiteSql(suite: LoadedSuite) {
   });
   for (const check of suite.crossChecks ?? []) {
     const plan = planCrossCheck(check, suite.members);
+    const parameters = [plan.from, plan.to].flatMap(target => target.scope ? [`DECLARE @${target.scope.parameter} nvarchar(max) = NULL; -- Set this participant's runtime scope value.\nIF @${target.scope.parameter} IS NULL THROW 50001, 'Set @${target.scope.parameter} before running this cross-check.', 1;`] : []).join("\n");
     batches.push({ member: `cross:${check.id}`, table: `${check.from} → ${check.to}`, connection: plan.from.connection, integratedConnection: plan.from.integratedConnection,
-      sql: plan.sql, ruleCount: 1, warnings: [], rules: [{ id: check.id, name: check.id, severity: check.severity ?? "error", code: "CROSS_CHECK_FAILED" }] });
+      sql: parameters ? `${parameters}\n${plan.sql}` : plan.sql, ruleCount: 1, warnings: [], rules: [{ id: check.id, name: check.id, severity: check.severity ?? "error", code: "CROSS_CHECK_FAILED" }] });
   }
   const literal = (s: string): string => `N'${s.replaceAll("'", "''")}'`;
   return { batches, ruleCount: batches.reduce((sum, b) => sum + b.ruleCount, 0), warnings: batches.flatMap((b) => b.warnings.map((w) => `${suite.id}/${b.member}/${b.table}: ${w}`)),

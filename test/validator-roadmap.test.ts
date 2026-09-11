@@ -13,8 +13,96 @@ import { insertPreset } from "../src/core/presets";
 import { insertTemplate, coverageDiagnostics } from "../src/core/authoring";
 import { crossResult, planCrossCheck } from "../src/core/cross-checks";
 import { runSuite, type LoadedSuite } from "../src/core/suite";
-import { renderResults } from "../src/results-view";
+import { renderResults, filterResultRuns, issueSelectionKey } from "../src/results-view";
+import { issueRunsToCsv } from "../src/issue-export";
+import { summarizeRules, compareRules } from "../src/core/history";
+import { JSDOM } from "jsdom";
+import { renderPredicate, readPredicate, editPredicateTree } from "../src/webview/rule-editor";
+
+test("preview samples count actual outcomes, bound examples, and never pass a complete suite", async () => {
+  const contract: CsvContract = { version: 1, targets: [{ path: "local.csv" }], schema: { columns: { Id: { presence: "required" } } }, rules: [{ id: "check", expect: { column: "Id", operator: "equals", value: "yes" } }] };
+  const result = validateCsv(contract, "Id\nyes\nno\nyes\nno\n", undefined, undefined, { rowLimit: 3, exampleLimit: 1 });
+  assert.equal(result.rowCount, 3);
+  assert.deepEqual(result.ruleOutcomes, [{ id: "check", selected: 3, passed: 2, failed: 1 }]);
+  assert.equal(result.examples?.length, 2);
+  assert.match(renderResults([{ result }]), /SAMPLED/);
+  const report = await runSuite({ id: "s", source: "s", isSuite: false, members: [{ id: "m", source: "m", contract }] }, async () => result, false, async () => result);
+  assert.equal(report.status, "SAMPLED"); assert.equal(report.valid, false);
+  assert.throws(() => validateCsv(contract, "Id\n", undefined, undefined, { rowLimit: 0, exampleLimit: 1 }), /row limit/);
+});
+
+test("history compares stable rules without retaining literals or inventing missing outcomes", () => {
+  const result = validateCsv({ version: 1, schema: { columns: { Id: { presence: "required" } } }, rules: [{ id: "id", expect: { column: "Id", operator: "equals", value: "secret-literal" } }] }, "Id\nprivate-value\n");
+  const summaries = summarizeRules(result);
+  assert.deepEqual(summaries, [{ id: "id", selected: 1, passed: 0, failed: 1, retainedIssues: 1 }]);
+  assert.doesNotMatch(JSON.stringify(summaries), /secret|private/);
+  assert.equal(compareRules([], summaries)[0].availability, "only-current");
+  assert.equal(compareRules(summaries, [])[0].after, undefined);
+});
+
+test("cross-table scopes are independently parameterized on both sides", () => {
+  const make = (valueEnvironment: string): CsvContract => ({ version: 1, schema: { columns: { Id: { presence: "required" } } }, sqlServer: { connection: "local", schema: "dbo", table: "T", scope: { column: "Batch]Id", parameter: "load", sqlType: "nvarchar(20)", valueEnvironment } } });
+  for (const kind of ["foreignKey", "equalPopulation", "equalTotal"] as const) {
+    const plan = planCrossCheck({ id: "scoped", kind, from: "a", to: "b", keys: [{ from: "Id", to: "Id" }], valueColumns: { from: "Id", to: "Id" } }, [{ id: "a", contract: make("LEFT_BATCH") }, { id: "b", contract: make("RIGHT_BATCH") }]);
+    assert.match(plan.sql, /@cross_from/); assert.match(plan.sql, /@cross_to/);
+    assert.match(plan.sql, /\[Batch\]\]Id\]/);
+    assert.equal(plan.from.scope?.valueEnvironment, "LEFT_BATCH");
+    assert.equal(plan.to.scope?.valueEnvironment, "RIGHT_BATCH");
+    assert.doesNotMatch(plan.sql, /LEFT_BATCH|RIGHT_BATCH/);
+  }
+});
+
+test("nested branch editing preserves literals, order and nonempty predicates", () => {
+  const dom = new JSDOM(`<form>${renderPredicate({ all: [{ column: "Id", operator: "equals", value: "0001" }] }, ["Id"])}</form>`);
+  const doc = dom.window.document;
+  const act = (selector: string) => editPredicateTree(doc.querySelector(selector)! as unknown as HTMLElement, ["Id"]);
+  act('[data-predicate="group"] > [data-predicate-action="add"]');
+  act('fieldset > fieldset:last-child [data-predicate-action="up"]');
+  assert.deepEqual(readPredicate(doc.querySelector("fieldset")!), { all: [{ column: "Id", operator: "notNull" }, { column: "Id", operator: "equals", value: "0001" }] });
+  act('fieldset > fieldset:first-of-type [data-predicate-action="remove"]');
+  assert.throws(() => act('fieldset > fieldset [data-predicate-action="remove"]'), /at least one/);
+  assert.deepEqual(readPredicate(doc.querySelector("fieldset")!), { all: [{ column: "Id", operator: "equals", value: "0001" }] });
+});
+
+test("selected result exports preserve counts and reject stale identities", () => {
+  const result = validateCsv({ version: 1, schema: { columns: { Id: { presence: "required", constraints: { notNull: true } } } } }, 'Id,Other\n,x\n,y\n');
+  const run = { workId: "run:1", runId: "run", evaluatedAt: "2026-09-11T00:00:00Z", scope: "all", target: "local", status: "FAIL", result };
+  const selected = [issueSelectionKey(run, 0)];
+  const filtered = filterResultRuns([run], "", selected);
+  assert.equal(filtered[0].result.issues.length, 1);
+  assert.equal(filtered[0].result.issueCount, result.issueCount);
+  assert.equal(filtered[0].result.truncated, true);
+  assert.match(issueRunsToCsv(filtered, { stale: true, selected }), /EvaluatedAt/);
+  assert.match(issueRunsToCsv(filtered, { stale: true, selected }), /stale/);
+  assert.throws(() => filterResultRuns([{ ...run, workId: "new:1" }], "", selected), /stale/);
+  assert.equal(filterResultRuns([{ target: "x", status: "ERROR", error: "permission denied" }], "absent").length, 0);
+});
 import { previewContract } from "../src/core/preview";
+import { resolveEvaluation } from "../src/core/evaluation";
+
+test("relative dates, typed literals, precision and identity policies share streaming semantics", async () => {
+  const evaluatedAt = "2026-09-11T12:34:56Z";
+  const base: CsvContract = { version: 1, csv: { nullValues: ["", "NULL"] }, schema: { columns: { Id: { presence: "required" }, Date: { presence: "required" }, Amount: { presence: "required" } } } };
+  let contract = insertPreset(base, { id: "recent", kind: "dateRange", column: "Date", dateAnchor: "today", minimum: "-1", maximum: "0" });
+  contract = insertPreset(contract, { id: "money", kind: "numberRange", column: "Amount", minimum: "0", decimalPlaces: 2 });
+  contract = insertPreset(contract, { id: "numeric-id", kind: "allowed", column: "Id", values: ["1"], valueType: "number", nulls: "ignore" });
+  contract = insertPreset(contract, { id: "key", kind: "unique", column: "Id", columns: ["Id", "Date"], nulls: "allow" });
+  const resolved = resolveEvaluation(contract, evaluatedAt);
+  assert.match(JSON.stringify(resolved.rules?.[0]), /2026-09-10T00:00:00.000Z/);
+  assert.match(JSON.stringify(contract.rules?.[0]), /relativeDate/);
+  const csv = 'Id,Date,Amount\n0001,2026-09-10,1.20\n,2026-09-11,1.234\nNULL,2026-09-11,2\n';
+  const memory = validateCsv(contract, csv, undefined, evaluatedAt);
+  assert.equal(memory.errorCount, 2);
+  assert.ok(memory.issues.some(i => i.testId === "key"));
+  const directory = await mkdtemp(join(tmpdir(), "validator-policy-"));
+  try {
+    const file = join(directory, "data.csv"); await writeFile(file, csv);
+    const streamed = await validateCsvFile(file, [{ spec: join(directory, "contract.yaml"), contract }], { evaluatedAt });
+    assert.equal(streamed.runs[0].result.errorCount, memory.errorCount);
+    assert.equal(streamed.runs[0].result.evaluatedAt, evaluatedAt);
+    assert.deepEqual(streamed.runs[0].result.ruleOutcomes, memory.ruleOutcomes);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
 import { preflight } from "../src/core/preflight";
 
 test("aggregate previews isolate selected row/group rules without inventing row outcomes", () => {

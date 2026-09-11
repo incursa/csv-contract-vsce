@@ -1,4 +1,9 @@
 import type { CsvContract } from "./model";
+export interface PreviewOptions { rowLimit?: number; exampleLimit: number }
+export function validatePreviewOptions(options: PreviewOptions): void {
+  if (!Number.isSafeInteger(options.exampleLimit) || options.exampleLimit < 0 || options.exampleLimit > 100) throw new Error("Preview example limit must be 0–100 per outcome and rule.");
+  if (options.rowLimit !== undefined && (!Number.isSafeInteger(options.rowLimit) || options.rowLimit < 1 || options.rowLimit > 100000)) throw new Error("Preview row limit must be 1–100000.");
+}
 
 /** Isolates an ordinary rule; all parsing, normalization and execution remain in the normal engines. */
 export function previewContract(original: CsvContract, id: string): CsvContract {
