@@ -3,7 +3,14 @@
 Local verification used Windows x64, Node 26.7.0, PowerShell Core 7.6.5,
 Playwright Chromium and the actual stable VS Code web extension host.
 The established tag release workflow repeats `npm run release:check` on Windows
-with Node 22 before publishing to Marketplace. Publication confirmation is pending.
+with Node 22 before publishing to Marketplace.
+
+Release [v0.15.0](https://github.com/incursa/csv-contract-vsce/releases/tag/v0.15.0)
+passed in [workflow run 34644555030](https://github.com/incursa/csv-contract-vsce/actions/runs/34644555030)
+from commit `81011a244f1f13854515c456cd9d73f3e1b1ae96`. The hosted gate repeated
+108 passing regressions, 25 PowerShell checks, rendered and actual host tests,
+and VSIX packaging. The Marketplace publish log confirms 0.15.0 was accepted.
+An independent `vsce show incursa.csv-contract-vsce --json` query confirmed 0.15.0 as the newest public version, updated September 11, 2026 at 20:45:42 UTC.
 
 ## Local checks
 

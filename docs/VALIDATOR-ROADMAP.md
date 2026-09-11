@@ -22,7 +22,7 @@ skipped by default), separately passing 23-contract McKee offline acceptance
 (1,303 SQL rules, no translation warnings), rendered desktop/narrow Workbench
 interactions and an actual VS Code host run. `npm run release:check` passed,
 including 25 PowerShell checks, branding and production VSIX packaging.
-Marketplace publication confirmation is pending the established tag workflow.
+Version 0.15.0 was published by [release run 34644555030](https://github.com/incursa/csv-contract-vsce/actions/runs/34644555030) from commit `81011a244f1f13854515c456cd9d73f3e1b1ae96`. An independent public Marketplace query confirmed 0.15.0 as the newest version.
 [Verification details](VALIDATOR-VERIFICATION.md) describe the evidence.
 No remote database was contacted. McKee acceptance used a temporary copy of the
 23 contract definitions and synthetic blank records; it did not read employee data
