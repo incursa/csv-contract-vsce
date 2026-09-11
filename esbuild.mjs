@@ -18,6 +18,14 @@ await mkdir("dist/test", { recursive: true });
 const builds = [
   {
     ...shared,
+    entryPoints: ["src/node/sql-worker.ts"],
+    outfile: "dist/node/sql-worker.cjs",
+    format: "cjs",
+    platform: "node",
+    external: ["msnodesqlv8"]
+  },
+  {
+    ...shared,
     entryPoints: ["src/node/extension.ts"],
     outfile: "dist/node/extension.cjs",
     format: "cjs",

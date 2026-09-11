@@ -3,6 +3,7 @@ import { activate as activateShared, deactivate, sqlConnectionSecretKey } from "
 import { compareCsvFilesDesktop } from "./semantic-comparison";
 import { SqlServerValidationSession } from "./sql-server-validator";
 import { withSqlSession } from "./sql-lifecycle";
+import { runSqlWorker } from "./sql-worker-client";
 
 export function activate(context: vscode.ExtensionContext): void {
   const createSession = () => new SqlServerValidationSession(async (profile) => {
@@ -25,10 +26,11 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       if (scopeValue === undefined) throw new Error("SQL Server validation was cancelled because no scope value was supplied.");
     }
+    if (target.integratedConnection) return runSqlWorker({ kind: "validate", contract, target, options: { scopeValue, preview } }, signal);
     return withSqlSession(createSession, session => session.validate(contract, target, { scopeValue, signal, preview }));
   }, profile => withSqlSession(createSession, session => session.listObjects(profile)),
-  target => withSqlSession(createSession, session => session.captureSchema(target)),
-  (plan, signal) => withSqlSession(createSession, session => session.validateCross(plan, signal)));
+  target => target.integratedConnection ? runSqlWorker({ kind: "schema", target }) : withSqlSession(createSession, session => session.captureSchema(target)),
+  (plan, signal) => plan.from.integratedConnection ? runSqlWorker({ kind: "cross", plan }, signal) : withSqlSession(createSession, session => session.validateCross(plan, signal)));
 }
 
 export { deactivate };

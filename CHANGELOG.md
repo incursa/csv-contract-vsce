@@ -1,7 +1,8 @@
 # Changelog
 
-## 0.15.1
+## 0.15.2
 
+- Run Windows-integrated SQL operations in short-lived workers and await process exit to release native ODBC pools; force-stop canceled workers after a five-second cleanup grace period.
 - Close and await desktop SQL connections after every target, preview, cross-table check, schema capture and object browser operation instead of retaining extension-wide pools.
 - Clean up failed connection attempts, await every pool close, and surface cleanup errors instead of reporting successful completion.
 - Explicitly disable implicit transactions in SQL validation and metadata batches. Add mocked lifecycle regressions for success, assertion failure, errors, cancellation and failed connection setup.

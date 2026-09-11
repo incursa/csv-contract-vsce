@@ -54,13 +54,20 @@ Actual SQL Server execution of the new queries remains unverified without approv
 [Roadmap status](VALIDATOR-ROADMAP.md) and [workflow documentation](VALIDATOR-WORKFLOWS.md)
 record the remaining boundaries. Linked templates remain optional future work;
 CSV targets share a contract baseline and cross-connection checks are unsupported.
-## SQL lifecycle follow-up — 0.15.1
+## SQL lifecycle follow-up — 0.15.2
 
 The SQL lifetime fix removes desktop extension-wide pools. Each operation awaits
-its own cleanup, and suite targets advance only after closure. Seven additional
+its own cleanup, and suite targets advance only after closure. Nine additional
 mocked lifecycle tests cover suite ordering, assertion failures, exceptions,
 cancellation, failed connection setup, delayed/all-pool cleanup, implicit
 transaction settings and driver destroy failures that the pool library can hide.
-The final production test run passed 115 tests (one offline acceptance opt-in skipped).
+The final production test run passed 117 tests (one offline acceptance opt-in skipped).
 `npm run release:check` passed, including PowerShell, rendered Workbench, actual
 VS Code host and production packaging. Remote database inspection was not performed.
+Real child-process tests verify that the parent waits beyond IPC delivery until
+process exit, and that cancellation terminates an unresponsive child before returning.
+The packaged worker's error path is exercised without database access. All nine
+lifecycle tests also passed under the installed VS Code Electron executable in
+Node mode, verifying the actual runtime's fork and termination behavior without
+opening a window or contacting SQL Server. The 0.15.1 workflow was canceled before
+publication after native ODBC pooling was discovered; 0.15.2 includes process isolation.

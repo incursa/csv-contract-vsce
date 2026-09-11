@@ -4,6 +4,44 @@ import sql from "mssql";
 import { withSqlSession } from "../src/node/sql-lifecycle";
 import { SqlServerValidationSession, queryWithCancellation } from "../src/node/sql-server-validator";
 import { runSuite } from "../src/core/suite";
+import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { runSqlWorker } from "../src/node/sql-worker-client";
+
+test("native worker returns only after process exit and force-cancels an unresponsive process", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sql-worker-lifecycle-"));
+  const worker = join(directory, "worker.cjs");
+  await writeFile(worker, `const fs = require('node:fs');
+    process.on('message', message => {
+      if (message.kind === 'cancel') return;
+      fs.writeFileSync(__filename + '.pid', String(process.pid));
+      if (message.target.table === 'hang') { setInterval(() => {}, 1000); return; }
+      process.send({ok:true,result:{valid:true,rowCount:process.pid}}, () => setTimeout(() => process.exit(0), 100));
+    });`);
+  const target = { connection: "mock", schema: "dbo", table: "complete" };
+  try {
+    const result = await runSqlWorker<import("../src/core/model").ValidationResult>({ kind: "schema", target }, undefined, worker);
+    assert.throws(() => process.kill(result.rowCount, 0), /ESRCH|no such process/i);
+    await rm(worker + ".pid");
+    const controller = new AbortController();
+    const canceled = runSqlWorker({ kind: "schema", target: { ...target, table: "hang" } }, controller.signal, worker, 100);
+    const rejected = assert.rejects(canceled, /canceled; worker exited/);
+    let pid: number | undefined;
+    for (let i = 0; i < 200 && !pid; i++) {
+      try { pid = Number(await readFile(worker + ".pid", "utf8")); } catch { await new Promise(resolve => setTimeout(resolve, 20)); }
+    }
+    controller.abort();
+    await rejected;
+    assert(pid, "Synthetic child must have started.");
+    assert.throws(() => process.kill(pid, 0), /ESRCH|no such process/i);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("packaged SQL worker exits with an error before attempting a profile connection", async () => {
+  await assert.rejects(runSqlWorker({ kind: "schema", target: { connection: "never-connect", schema: "dbo", table: "T" } },
+    undefined, join(process.cwd(), "dist/node/sql-worker.cjs")), /integrated connections only/);
+});
 
 test("suite targets finish cleanup before the next target starts or a report is returned", async () => {
   let open = 0;

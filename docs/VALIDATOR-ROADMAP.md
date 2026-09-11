@@ -4,7 +4,7 @@ Discussion draft · September 10, 2026
 
 ## Implementation status — September 11, 2026
 
-SQL lifecycle follow-up (0.15.1): desktop operations await owned connection closure before completion, including failed/canceled work. Driver cleanup errors remain errors. No explicit transactions are opened; implicit transactions are disabled. See the verification and workflow documents for tests and limitations.
+SQL lifecycle follow-up (0.15.2): desktop operations await owned connection closure before completion, including failed/canceled work. Windows integrated operations additionally await isolated worker exit to release native ODBC pools. Driver cleanup errors remain errors. No explicit transactions are opened; implicit transactions are disabled. See the verification and workflow documents for tests and limitations.
 
 The roadmap remains the specification. Work is being delivered in tested increments;
 this table distinguishes implemented code from outstanding acceptance work.

@@ -319,7 +319,7 @@ Exports retain original aggregate counts, mark limited details and record select
 scope. CSV includes run/work IDs, evaluation time, execution scope, status, export
 context and retained/total issue counts. Selection keys are bound to the current
 run; stale selections are rejected. Filtered exports omit preview example records.
-### SQL connection lifetime (0.15.1)
+### SQL connection lifetime (0.15.2)
 
 Every desktop SQL operation owns its session: one target validation (including its
 preview and metadata reads), cross-table check, object browser request or schema
@@ -333,9 +333,21 @@ Connection attempts that fail also trigger cleanup. All pool close attempts sett
 before cleanup returns; cleanup failures are execution errors, not PASS. Validation
 and metadata batches explicitly disable implicit transactions, and the extension
 never starts an explicit transaction. No database objects or data are modified.
-If cancellation occurs while connecting, completion waits for the driver to settle
-and then closes its resources. Driver close errors mean closure cannot be confirmed
+For profile connections, cancellation during setup waits for the driver to settle and then closes its resources; integrated workers use the bounded termination policy below. Driver close errors mean closure cannot be confirmed
 and are reported as such. No claim is made about unrelated applications' sessions.
 
 Lifecycle regression tests use mocked pools and requests. Actual remote SQL Server
 session/transaction inspection has not been performed because it requires approval.
+Windows integrated authentication uses a short-lived hidden worker because
+`msnodesqlv8` enables process-wide native ODBC pooling. JavaScript `pool.close()`
+alone cannot guarantee that native pooled sessions disappear. The parent receives
+the result but does not report completion until the worker process exits, releasing
+its native pool and operating-system connections. The worker receives configuration
+through transient IPC; no credential or scope files are written. Parent disconnect
+also terminates the worker. Cancellation requests graceful cleanup first, then
+terminates an unresponsive worker after five seconds and still waits for exit.
+Fresh process startup adds some overhead per target. Profile-based connections use
+Tedious and await socket/pool closure directly. The CLI's process exits after its
+final pool cleanup, also releasing any process-local native ODBC pool.
+
+After upgrading, reload the VS Code window once to retire any native ODBC pools created in the previous extension host. New integrated runs use isolated workers.
