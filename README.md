@@ -194,3 +194,7 @@ Configured file paths and URLs are used automatically. Supply `-Csv` only when y
 ## Compound suites
 
 Use an ordered `*.csvsuite.yaml` master to reference contracts with different schemas and tables, or combine them into a portable inline bundle. Both forms run through Workspace Tests and the CLI. See [Compound suites](docs/COMPOUND-SUITES.md) for formats, connection precedence, combine/split commands, round-trip guarantees and execution reporting.
+
+## Save and reload comparisons
+
+Version 0.15.3 adds **Save comparison setup** in comparison results and **CSV Contract: Load Comparison Setup** in the Command Palette. Shared keyed CSV setups can also run in SSMS Database Tools 0.27.5. See [the format and compatibility guide](docs/comparison-setups.md) for supported conversions, relative paths, SQL limitations and legacy options.

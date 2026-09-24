@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { compareCsvTexts } from "./comparison/engine";
 import { createEvidenceFiles, rowsToCsv } from "./comparison/evidence";
 import type { ComparisonOptions, ComparisonResult } from "./comparison/model";
+import { compareDefinition, definitionFromResult, parseDefinition, validatePortableExecution, type ComparisonDefinition } from "./comparison/definition";
 
 const webMaxBytesPerFile = 20 * 1024 * 1024;
 const webMaxRowsPerFile = 250_000;
@@ -45,7 +46,25 @@ export function registerSemanticComparison(
     vscode.workspace.registerTextDocumentContentProvider(comparisonScheme, provider),
     vscode.commands.registerCommand("csv-contract-vsce.compareCsv", async (request?: ComparisonCommandRequest) =>
       compareCommand(context, provider, desktopRunner, request)
-    )
+    ),
+    vscode.commands.registerCommand("csv-contract-vsce.loadComparison", async () => {
+      try {
+        const file = (await vscode.window.showOpenDialog({ title: "Load comparison setup", canSelectMany: false, filters: { "Comparison setup": ["json"] } }))?.[0];
+        if (!file) return;
+        const stat = await vscode.workspace.fs.stat(file);
+        if (stat.size > 2 * 1024 * 1024) throw new Error("Comparison setup exceeds 2 MiB.");
+        const definition = parseDefinition(new TextDecoder("utf-8", { fatal: true }).decode(await vscode.workspace.fs.readFile(file)));
+        validatePortableExecution(definition);
+        const left = sourceUri(definition.left.path!, file), right = sourceUri(definition.right.path!, file);
+        const action = await vscode.window.showInformationMessage(`Loaded ${definition.name}. Read ${left.fsPath} and ${right.fsPath} and compare?`, "Run comparison", "View setup");
+        if (action === "View setup") { await vscode.window.showTextDocument(file); return; }
+        if (action !== "Run comparison") return;
+        const [leftText, rightText] = await Promise.all([readPortableCsv(left), readPortableCsv(right)]);
+        const result = compareDefinition(definition, leftText, rightText);
+        enforcePortableRowLimit(result, false);
+        showResultPanel(context, provider, result, left, right, definition);
+      } catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : "Could not load comparison setup."); }
+    })
   );
 }
 
@@ -87,6 +106,7 @@ async function compareCommand(
 }
 
 async function readPortableCsv(uri: vscode.Uri): Promise<string> {
+  if ((await vscode.workspace.fs.stat(uri)).size > webMaxBytesPerFile) throw new Error("Saved comparison execution is limited to 20 MiB per CSV in VS Code.");
   const bytes = await vscode.workspace.fs.readFile(uri);
   if (bytes.byteLength > webMaxBytesPerFile) {
     throw new Error(`Portable comparison is limited to ${webMaxBytesPerFile / 1024 / 1024} MiB per CSV. Use VS Code desktop for larger files.`);
@@ -209,7 +229,8 @@ function showResultPanel(
   provider: NormalizedComparisonProvider,
   result: ComparisonResult,
   leftUri: vscode.Uri,
-  rightUri: vscode.Uri
+  rightUri: vscode.Uri,
+  definition?: ComparisonDefinition
 ): void {
   const panel = vscode.window.createWebviewPanel(
     "csv-contract-vsce.comparisonResult",
@@ -219,7 +240,20 @@ function showResultPanel(
   );
   panel.webview.html = resultHtml(panel.webview, result, leftUri, rightUri);
   panel.webview.onDidReceiveMessage(async (message) => {
-    if (message.type === "diff") {
+    if (message.type === "saveSetup") {
+      try {
+        const file = await vscode.window.showSaveDialog({ title: "Save comparison setup", defaultUri: vscode.Uri.joinPath(leftUri, "..", "DataComparison.comparison.json"), filters: { "Comparison setup": ["comparison.json"] } });
+        if (!file) return;
+        const leftPath = relativeSource(leftUri, file), rightPath = relativeSource(rightUri, file);
+        const saved = definition ? { ...definition, left: { ...definition.left, path: leftPath }, right: { ...definition.right, path: rightPath } } : definitionFromResult(leftPath, rightPath, result);
+        const data = new TextEncoder().encode(JSON.stringify(saved, null, 2));
+        if (data.length > 2 * 1024 * 1024) throw new Error("Comparison setup exceeds 2 MiB.");
+        const temporary = file.with({ path: file.path + `.${Date.now()}.tmp` });
+        try { await vscode.workspace.fs.writeFile(temporary, data); await vscode.workspace.fs.rename(temporary, file, { overwrite: true }); }
+        finally { await vscode.workspace.fs.delete(temporary).then(undefined, () => undefined); }
+        void vscode.window.showInformationMessage(saved.vscodeOptions ? "Setup saved with VS Code legacy options. SSMS will explicitly reject unsupported rules." : "Portable comparison setup saved for SSMS and CSV Contract Workbench.");
+      } catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : "Could not save comparison."); }
+    } else if (message.type === "diff") {
       await openNormalizedDiff(provider, result);
     } else if (message.type === "save") {
       const directory = (await vscode.window.showOpenDialog({
@@ -234,6 +268,21 @@ function showResultPanel(
       }
     }
   }, undefined, context.subscriptions);
+}
+
+function sourceUri(path: string, definition: vscode.Uri): vscode.Uri {
+  if (/^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\")) return vscode.Uri.file(path);
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(path)) throw new Error("Source paths must be file paths, not URLs.");
+  if (path.startsWith("/")) return definition.with({ path });
+  return vscode.Uri.joinPath(definition, "..", path.replaceAll("\\", "/"));
+}
+
+function relativeSource(source: vscode.Uri, definition: vscode.Uri): string {
+  if (source.scheme !== definition.scheme || source.authority !== definition.authority) throw new Error("Save the setup on the same filesystem as its CSV sources.");
+  const base = definition.path.split("/"); base.pop(); const target = source.path.split("/");
+  if (/^\/?[a-z]:\//i.test(source.path) && base[1]?.toLowerCase() !== target[1]?.toLowerCase()) return source.fsPath;
+  while (base.length && target.length && base[0] === target[0]) { base.shift(); target.shift(); }
+  return [...base.map(() => ".."), ...target].join("/");
 }
 
 function resultHtml(webview: vscode.Webview, result: ComparisonResult, leftUri: vscode.Uri, rightUri: vscode.Uri): string {
@@ -273,9 +322,9 @@ function resultHtml(webview: vscode.Webview, result: ComparisonResult, leftUri: 
   <section><h2>Schema</h2><p>${summary.columns.comparableColumns.length} comparable columns. Left-only: ${escapeHtml(summary.columns.columnsOnlyInLeft.join(", ") || "none")}. Right-only: ${escapeHtml(summary.columns.columnsOnlyInRight.join(", ") || "none")}.</p></section>
   <section><h2>Changed cells by column</h2>${changed.length ? `<table><thead><tr><th>Column</th><th>Changed cells</th></tr></thead><tbody>${changed.map(([column, count]) => `<tr><td>${escapeHtml(column)}</td><td>${count}</td></tr>`).join("")}</tbody></table>` : "<p>No safely paired cell changes.</p>"}</section>
   <section><h2>Privacy-bounded diagnostics</h2><p>${summary.diagnostics.included} of ${summary.diagnostics.total} aggregate diagnostics shown. Cell values are withheld from this view.${result.details.detailsTruncated ? " Detailed spill-mode review rows are also bounded; aggregate counts remain exact." : ""}</p></section>
-  <div class="actions">${result.details.normalizedRowsTruncated ? "" : `<button id="diff">Open normalized diff</button>`}<button id="save">Save JSON, CSV, and Markdown evidence</button></div>
+  <div class="actions">${result.details.normalizedRowsTruncated ? "" : `<button id="diff">Open normalized diff</button>`}<button id="saveSetup">Save comparison setup</button><button id="save">Save JSON, CSV, and Markdown evidence</button></div>
 </main>
-<script nonce="${nonce}">const vscode=acquireVsCodeApi();document.getElementById("diff")?.addEventListener("click",()=>vscode.postMessage({type:"diff"}));document.getElementById("save").addEventListener("click",()=>vscode.postMessage({type:"save"}));</script>
+<script nonce="${nonce}">const vscode=acquireVsCodeApi();document.getElementById("diff")?.addEventListener("click",()=>vscode.postMessage({type:"diff"}));document.getElementById("saveSetup").addEventListener("click",()=>vscode.postMessage({type:"saveSetup"}));document.getElementById("save").addEventListener("click",()=>vscode.postMessage({type:"save"}));</script>
 </body>
 </html>`;
 }

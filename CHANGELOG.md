@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.15.3
+
+- Save reusable comparison setups from results and reopen them with CSV Contract: Load Comparison Setup.
+- Share versioned setup JSON with SSMS Database Tools 0.27.5 for keyed CSV comparisons, renamed columns, exclusions and supported typed conversions.
+- Preserve relative source paths and original rules; require an explicit run after load. Unsupported SQL sources/conversions and SSMS-incompatible legacy options are reported explicitly.
+- Add shared cross-application fixtures and preserve blank rows in portable comparison mode without changing legacy comparison behavior.
+
 ## 0.15.2
 
 - Run Windows-integrated SQL operations in short-lived workers and await process exit to release native ODBC pools; force-stop canceled workers after a five-second cleanup grace period.

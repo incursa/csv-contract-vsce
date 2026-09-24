@@ -1,0 +1,13 @@
+{
+  "schema": "incursa.data-comparison/v1",
+  "name": "Portable typed CSV comparison",
+  "left": { "kind": "CSV", "path": "before.csv" },
+  "right": { "kind": "CSV", "path": "after.csv" },
+  "mappings": [
+    { "left": "Id", "right": "Key", "key": true, "include": true, "conversion": "Exact" },
+    { "left": "Amount", "right": "Total", "key": false, "include": true, "conversion": "Decimal" },
+    { "left": "Day", "right": "Day", "key": false, "include": true, "conversion": "Date" },
+    { "left": "Label", "right": "Label", "key": false, "include": true, "conversion": "Trim text" },
+    { "left": "Ignored", "right": "Ignored", "key": false, "include": false, "conversion": "Exact" }
+  ]
+}

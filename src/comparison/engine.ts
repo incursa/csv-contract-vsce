@@ -232,7 +232,7 @@ function boundedDiagnostics(items: ComparisonDiagnostic[], max: number) {
   return { total: items.length, included: Math.min(items.length, max), truncated: items.length > max, items: items.slice(0, max) };
 }
 
-export function compareCsvTexts(leftText: string, rightText: string, requested: ComparisonOptions = {}): ComparisonResult {
+export function compareCsvTexts(leftText: string, rightText: string, requested: ComparisonOptions = {}, preserveBlankRows = false): ComparisonResult {
   const keyColumns = uniqueColumns([...(requested.keyColumns ?? [])], "keyColumns");
   const contextColumns = uniqueColumns([...(requested.contextColumns ?? [])], "contextColumns");
   const ignoredColumns = uniqueColumns([...(requested.ignoredColumns ?? [])], "ignoredColumns");
@@ -246,7 +246,7 @@ export function compareCsvTexts(leftText: string, rightText: string, requested: 
   const parseComparisonCsv = (text: string): ParsedCsv =>
     text.replace(/^\uFEFF/, "").length === 0
       ? { headers: [], rows: [], sourceRowNumbers: [], parseErrors: [] }
-      : parseCsv(text);
+      : preserveBlankRows ? parseCsv(text.replace(/(?:\r\n|\r|\n)$/, ""), { allowBlankRows: true }) : parseCsv(text);
   const leftParsed = parseComparisonCsv(leftText);
   const rightParsed = parseComparisonCsv(rightText);
   const leftIndex = headerIndex(leftParsed, "Left");
