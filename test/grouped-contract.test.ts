@@ -69,6 +69,64 @@ const valid = [headers,
   "alpha,PAUSE,2026-01-02,1,new", "alpha,RESUME,2026-01-03,1,new", "alpha,END,2026-01-04,1,new",
   "beta,START,2026-02-01,1,other", "beta,NOTE,2026-02-01,2,other"].join("\n") + "\n";
 
+function simpleRelations(): CsvContract {
+  const definition = parent();
+  definition.groupTests![0].contract = { version: 1, schema: { columns: {
+    EntityId: { presence: "required" }, Event: { presence: "required" }, Day: { presence: "required" }, Seq: { presence: "required" }
+  } }, rowTests: [{ id: "one_created", select: { Event: "CREATED" }, expect: { count: { exact: 1 } } }],
+  orderedRules: [{ id: "record_order", orderBy: [{ column: "Day", type: "date" }, { column: "Seq", type: "number", integer: true }],
+    relations: [
+      { id: "note_after_create", message: "A note needs a prior creation.", when: { column: "Event", operator: "equals", value: "NOTE" },
+        requirePrior: { column: "Event", operator: "equals", value: "CREATED" } },
+      { id: "restore_after_suspend", message: "Restore needs the preceding suspension.", when: { column: "Event", operator: "equals", value: "RESTORED" },
+        requirePrior: { column: "Event", operator: "equals", value: "SUSPENDED" }, maxGap: 0 },
+      { id: "suspend_next_restore", message: "Suspension needs a restore within two rows.", when: { column: "Event", operator: "equals", value: "SUSPENDED" },
+        requireNext: { column: "Event", operator: "equals", value: "RESTORED" }, maxGap: 1,
+        allowBetween: { column: "Event", operator: "equals", value: "NOTE" } },
+      { id: "no_note_after_archive", message: "A note cannot follow archive.", when: { column: "Event", operator: "equals", value: "NOTE" },
+        forbidPrior: { column: "Event", operator: "equals", value: "ARCHIVED" } }
+    ] }] };
+  return definition;
+}
+
+test("generic grouped counts and direct ordered relations produce normal findings", async () => {
+  const definition = simpleRelations();
+  const csv = [headers,
+    "alpha,CREATED,2026-01-01,1,x", "alpha,NOTE,2026-01-01,2,x", "alpha,SUSPENDED,2026-01-02,1,x",
+    "alpha,NOTE,2026-01-02,2,x", "alpha,RESTORED,2026-01-03,1,x",
+    "beta,NOTE,2026-01-01,1,y", "beta,CREATED,2026-01-02,1,y", "beta,CREATED,2026-01-03,1,y",
+    "beta,SUSPENDED,2026-01-04,1,y", "beta,ARCHIVED,2026-01-05,1,y", "beta,NOTE,2026-01-06,1,y"].join("\n") + "\n";
+  parseContract(stringify(definition));
+  await withFiles(csv, async (csvPath, specPath) => {
+    const memory = validateCsv(definition, csv);
+    const streamed = (await validateCsvFile(csvPath, [{ spec: specPath, contract: definition }])).runs[0].result;
+    for (const result of [memory, streamed]) {
+      const ids = result.issues.map(issue => issue.testId);
+      for (const id of ["events/one_created", "events/note_after_create", "events/restore_after_suspend",
+        "events/suspend_next_restore", "events/no_note_after_archive"]) assert(ids.includes(id), id);
+      assert(result.issues.some(issue => issue.testId === "events/note_after_create" && issue.group?.EntityId === "beta"));
+      assert(result.ruleOutcomes?.some(outcome => outcome.id === "events/suspend_next_restore" && outcome.failed === 1));
+      assert(JSON.stringify(result).includes("suspend_next_restore"));
+    }
+  });
+});
+
+test("string ordering uses sorted rows and child predicates resolve at run start", () => {
+  const definition = simpleRelations();
+  const childContract = definition.groupTests![0].contract!;
+  childContract.orderedRules = [{ id: "alphabetical", orderBy: [{ column: "Event", type: "string" }], relations: [
+    { id: "note_after_creation", message: "A note needs creation first.",
+      when: { column: "Event", operator: "equals", value: "NOTE" },
+      requirePrior: { column: "Event", operator: "equals", value: "CREATED" } }
+  ] }];
+  childContract.rules = [{ id: "recent", when: { column: "Event", operator: "equals", value: "NOTE" },
+    expect: { column: "Day", operator: "dateOnOrAfter", relativeDate: { anchor: "today", days: -1 } } }];
+  const csv = [headers, "alpha,NOTE,2026-09-25,2,x", "alpha,CREATED,2026-09-24,1,x"].join("\n") + "\n";
+  const result = validateCsv(definition, csv, undefined, "2026-09-26T12:00:00Z");
+  assert.equal(result.valid, true);
+  assert.equal(result.ruleOutcomes?.find(outcome => outcome.id === "events/note_after_creation")?.passed, 1);
+});
+
 test("child contracts validate multiple groups, same-day order, repeated neutral events and changed references", async () => {
   await withFiles(valid, async (csvPath, specPath) => {
     const result = (await validateCsvFile(csvPath, [{ spec: specPath, contract: parent() }])).runs[0].result;
@@ -110,10 +168,10 @@ test("reserved reason codes require a reviewed action mapping", () => {
   const definition = parent();
   const childContract = definition.groupTests![0].contract!;
   childContract.schema.columns.Reason = { presence: "required" };
-  childContract.orderedRules![0] = { ...ordered, event: { ...ordered.event, reasonColumn: "Reason",
+  childContract.orderedRules![0] = { ...ordered, event: { ...ordered.event!, reasonColumn: "Reason",
     reservedReasonCodes: ["HOLD"], mappings: [
       { event: "PAUSE", actionCodes: ["PAUSE"], reasonCodes: ["HOLD"] },
-      ...ordered.event.mappings.map(mapping => ({ ...mapping, reasonPolicy: "any" as const }))
+      ...ordered.event!.mappings.map(mapping => ({ ...mapping, reasonPolicy: "any" as const }))
     ] } };
   const csv = "EntityId,Event,Reason,Day,Seq\nalpha,START,,2026-01-01,1\nalpha,NOTE,HOLD,2026-01-02,1\n";
   const result = validateCsv(definition, csv);
@@ -195,6 +253,35 @@ test("SQL grouped evaluation uses bounded target reads and matches CSV findings"
     assert.deepEqual(sqlResult.issues.filter(i => i.testId?.startsWith("events/")).map(i => i.testId),
       comparison.issues.filter(i => i.testId?.startsWith("events/")).map(i => i.testId));
     assert(queries.some(q => /FETCH NEXT 2000 ROWS ONLY/.test(q)));
+  });
+});
+
+test("direct grouped relations have SQL and CSV parity", async () => {
+  const csv = [headers, "alpha,CREATED,2026-01-01,1,x", "alpha,SUSPENDED,2026-01-02,1,x",
+    "alpha,NOTE,2026-01-03,1,x", "alpha,RESTORED,2026-01-04,1,x",
+    "beta,NOTE,2026-01-01,1,y", "beta,CREATED,2026-01-02,1,y"].join("\n") + "\n";
+  const data = csv.trim().split("\n").slice(1).map(line => {
+    const [EntityId, Event, Day, Seq, ExternalRef] = line.split(",");
+    return { EntityId, Event, Day, Seq, ExternalRef };
+  });
+  await withFiles(csv, async (csvPath, specPath) => {
+    const definition: CsvContract = { ...simpleRelations(), sqlServer: { rowLocator: ["EntityId", "Day", "Seq"] } };
+    const comparison = (await validateCsvFile(csvPath, [{ spec: specPath, contract: definition }])).runs[0].result;
+    const target = { connection: "mock", schema: "dbo", table: "Records" };
+    const generated = generateSqlServerValidation(definition, { target, includeDetailQueries: false });
+    const session = new SqlServerValidationSession(() => { throw new Error("Mock must not connect."); });
+    Object.defineProperty(session, "getPool", { value: async () => ({ api: { NVarChar: () => "nvarchar" }, pool: { request: () => {
+      const request = { input: () => request, cancel: () => {}, query: async (sql: string) => {
+        if (sql.includes("sys.columns")) return { recordset: Object.keys(data[0]).map((name, index) => ({ name, ordinal: index + 1, sqlType: "nvarchar" })) };
+        if (sql.includes("OFFSET")) return { recordset: data };
+        if (sql.includes("RuleId")) return { recordsets: [generated.rules.map(rule => ({ RuleId: rule.id, RuleName: rule.name,
+          Severity: rule.severity, Code: rule.code, ColumnName: "", FailureCount: 0, SelectedCount: null }))] };
+        return { recordset: [{ count: data.length }] };
+      } }; return request;
+    } } }) });
+    const sqlResult = await session.validate(definition, target);
+    assert.deepEqual(sqlResult.issues.filter(i => i.testId?.startsWith("events/")).map(i => i.testId),
+      comparison.issues.filter(i => i.testId?.startsWith("events/")).map(i => i.testId));
   });
 });
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.17.0
+
+- Add direct ordered row relations for required or forbidden prior records and required next records with bounded gaps and optional intervening-row criteria.
+- Let ordered rules use relations without event mappings while retaining state transitions for full sequences. Report tied or invalid sort keys with default checks when custom messages are omitted.
+- Resolve relative date predicates inside child contracts and ordered relations at run start.
+- Document generic per-group counts and ordering, and verify CSV, in-memory, and mocked SQL Server results.
+
 ## 0.16.0
 
 - Apply inline or referenced child contracts to groups selected from a CSV file or SQL Server table or view, including a whole-input group.

@@ -196,7 +196,45 @@ groupTests:
     ref: ./event-group.csvtest.yaml
 ```
 
-The child can use `schema.rowCount`, `rowTests`, `rules`, `groupRules`, and `orderedRules`. An ordered rule declares `orderBy` keys with `type: date`, `number`, or `string`; date keys can use `format: yyyy/MM/dd` or `iso`, and numeric keys can require `integer: true` and a `minimum`. Each check has a stable `id` and `message`. `duplicateOrder` reports tied keys; `invalidOrder` reports values that cannot be parsed. Event mappings, transitions, cardinality, final states, and adjacency checks operate within one group. Mappings are reviewed in declaration order; an unmatched action and reason pair is a finding.
+The child can use `schema.rowCount`, `rowTests`, `rules`, `groupRules`, and `orderedRules`. A child `rowTests` count can require exactly one row of a given kind in each group; the same test at the root applies to the whole input. An ordered rule declares `orderBy` keys with `type: date`, `number`, or `string`; date keys can use `format: yyyy/MM/dd` or `iso`, and numeric keys can require `integer: true` and a `minimum`. Tied and invalid order keys always fail. The default check IDs are `<rule-id>.duplicate_order` and `<rule-id>.invalid_order`; `duplicateOrder` and `invalidOrder` can set custom IDs and messages.
+
+For direct row relationships, use `relations`. Each relation applies its `when` predicate to each sorted row and declares exactly one of `requirePrior`, `forbidPrior`, or `requireNext`. Prior means an earlier row in the same group; next means a later row. `requirePrior` searches any preceding row unless `maxGap` limits the number of intervening rows. `requireNext` defaults to the immediately following row; `maxGap` permits a bounded number of intervening rows, and `allowBetween` restricts those rows. `allowFinal: true` permits an unmatched trigger at the end. All checks restart at each group or `partitionBy` boundary. A rule can contain relations alone or alongside an event state machine.
+
+```yaml
+groupTests:
+  - id: records_by_entity
+    groupBy: [EntityId]
+    contract:
+      version: 1
+      schema:
+        columns:
+          EntityId: { presence: required }
+          Event: { presence: required }
+          OccurredAt: { presence: required }
+          Position: { presence: required }
+      rowTests:
+        - id: one_creation
+          select: { Event: CREATED }
+          expect: { count: { exact: 1 } }
+      orderedRules:
+        - id: lifecycle_order
+          orderBy:
+            - { column: OccurredAt, type: date, format: iso }
+            - { column: Position, type: number, integer: true }
+          relations:
+            - id: note_after_creation
+              message: Notes require a prior creation.
+              when: { column: Event, operator: equals, value: NOTE }
+              requirePrior: { column: Event, operator: equals, value: CREATED }
+            - id: suspension_followed_by_restore
+              message: A restore must follow a suspension within two rows.
+              when: { column: Event, operator: equals, value: SUSPENDED }
+              requireNext: { column: Event, operator: equals, value: RESTORED }
+              maxGap: 1
+              allowBetween: { column: Event, operator: equals, value: NOTE }
+```
+
+Event mappings, transitions, cardinality, final states, and adjacency checks remain available when every step of a sequence needs explicit states. Mappings are reviewed in declaration order; an unmatched action and reason pair is a finding.
 
 When `reasonColumn` is declared, each event mapping must list `reasonCodes` or explicitly set `reasonPolicy: any`. `reservedReasonCodes` prevents a broad mapping from consuming a reason code reserved for a specific event pair. Unknown combinations fail the `unmapped` check.
 

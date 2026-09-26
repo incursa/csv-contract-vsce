@@ -1,36 +1,59 @@
-import type { CsvOptions, OrderedCheck, OrderedRule, ValidationIssue } from "./model";
+import type { CsvOptions, OrderedCheck, OrderedRelation, OrderedRule, ValidationIssue } from "./model";
+import { evaluatePredicate, predicateColumns } from "./predicate";
 
 export interface OrderedRow { row: number; values: Record<string, string> }
 
+function duplicateCheck(rule: OrderedRule): OrderedCheck { return rule.duplicateOrder ?? { id: `${rule.id}.duplicate_order`, message: "Order keys must be unique." }; }
+function invalidCheck(rule: OrderedRule): OrderedCheck { return rule.invalidOrder ?? { id: `${rule.id}.invalid_order`, message: "Order keys must be valid." }; }
+
 export function orderedColumns(rule: OrderedRule): string[] {
-  return [...new Set([...(rule.partitionBy ?? []), ...rule.orderBy.map(key => key.column), rule.event.actionColumn,
-    ...(rule.event.reasonColumn ? [rule.event.reasonColumn] : [])])];
+  return [...new Set([...(rule.partitionBy ?? []), ...rule.orderBy.map(key => key.column),
+    ...(rule.event ? [rule.event.actionColumn, ...(rule.event.reasonColumn ? [rule.event.reasonColumn] : [])] : []),
+    ...(rule.relations ?? []).flatMap(r => [r.when, r.requirePrior, r.forbidPrior, r.requireNext, r.allowBetween].flatMap(predicateColumns))])];
 }
 
 export function orderedChecks(rule: OrderedRule): OrderedCheck[] {
-  return [rule.duplicateOrder, rule.invalidOrder, rule.event.unmapped, rule.initial, rule.invalidTransition, rule.invalidFinal,
-    ...rule.transitions, ...(rule.cardinality ?? []), ...(rule.adjacency ?? [])];
+  return [duplicateCheck(rule), invalidCheck(rule), ...(rule.event ? [rule.event.unmapped, rule.initial!, rule.invalidTransition!, rule.invalidFinal!,
+    ...(rule.transitions ?? []), ...(rule.cardinality ?? []), ...(rule.adjacency ?? [])] : []), ...(rule.relations ?? [])];
 }
 
 export function validateOrderedDefinition(rule: OrderedRule, declared: Set<string>): void {
   for (const column of orderedColumns(rule)) if (!declared.has(column)) throw new Error(`Sequence ${rule.id} references undeclared column ${column}.`);
+  if (rule.orderBy.length === 0) throw new Error(`Ordered rule ${rule.id} needs order keys.`);
+  if (!rule.event && !rule.relations?.length) throw new Error(`Ordered rule ${rule.id} needs relations or an event sequence.`);
+  if (rule.event && (!rule.initial || !rule.transitions?.length || !rule.invalidTransition || !rule.invalidFinal || !rule.finalStates?.length))
+    throw new Error(`Sequence ${rule.id} needs a complete event sequence.`);
+  if (!rule.event && (rule.initial || rule.transitions || rule.invalidTransition || rule.invalidFinal || rule.finalStates || rule.cardinality || rule.adjacency || rule.neutralEvents))
+    throw new Error(`Ordered rule ${rule.id} has sequence fields without an event mapping.`);
+  if (rule.event && !rule.transitions!.some(t => t.from === rule.initial!.state && t.event === rule.initial!.event)) throw new Error(`Sequence ${rule.id} has no initial event transition.`);
   const ids = new Set<string>();
   for (const check of orderedChecks(rule)) {
     if (ids.has(check.id)) throw new Error(`Sequence ${rule.id} repeats rule id ${check.id}.`);
     ids.add(check.id);
   }
-  if (rule.orderBy.length === 0) throw new Error(`Ordered rule ${rule.id} needs order keys.`);
-  if (!rule.transitions.some(t => t.from === rule.initial.state && t.event === rule.initial.event)) throw new Error(`Sequence ${rule.id} has no initial event transition.`);
   const strictKeys = (check: OrderedCheck, extra: string[] = []): void => {
     const unknown = Object.keys(check).filter(key => !["id", "message", ...extra].includes(key));
     if (unknown.length) throw new Error(`Ordered check ${check.id} has unknown fields ${unknown.join(", ")}. Quote YAML messages that contain commas.`);
   };
-  strictKeys(rule.duplicateOrder); strictKeys(rule.invalidOrder); strictKeys(rule.event.unmapped);
-  strictKeys(rule.initial, ["state", "event"]); strictKeys(rule.invalidTransition); strictKeys(rule.invalidFinal);
-  rule.transitions.forEach(t => strictKeys(t, ["from", "event", "to"]));
+  if (rule.duplicateOrder) strictKeys(rule.duplicateOrder);
+  if (rule.invalidOrder) strictKeys(rule.invalidOrder);
+  if (rule.event) strictKeys(rule.event.unmapped);
+  if (rule.initial) strictKeys(rule.initial, ["state", "event"]);
+  if (rule.invalidTransition) strictKeys(rule.invalidTransition);
+  if (rule.invalidFinal) strictKeys(rule.invalidFinal);
+  rule.transitions?.forEach(t => strictKeys(t, ["from", "event", "to"]));
   rule.cardinality?.forEach(c => strictKeys(c, ["event", "exact", "min", "max"]));
   rule.adjacency?.forEach(a => strictKeys(a, ["event", "preceding", "following", "dateRelation", "allowFinal"]));
-  if (rule.event.reasonColumn) for (const mapping of rule.event.mappings) {
+  for (const relation of rule.relations ?? []) {
+    const modes = [relation.requirePrior, relation.forbidPrior, relation.requireNext].filter(Boolean).length;
+    if (modes !== 1) throw new Error(`Ordered relation ${relation.id} needs exactly one of requirePrior, forbidPrior, or requireNext.`);
+    if (relation.maxGap !== undefined && (!Number.isSafeInteger(relation.maxGap) || relation.maxGap < 0 || relation.maxGap > 10000))
+      throw new Error(`Ordered relation ${relation.id} maxGap must be from 0 to 10000.`);
+    if (relation.forbidPrior && relation.maxGap !== undefined) throw new Error(`Ordered relation ${relation.id} cannot use maxGap with forbidPrior.`);
+    if ((relation.allowBetween || relation.allowFinal) && !relation.requireNext)
+      throw new Error(`Ordered relation ${relation.id} allows intervening or final rows only with requireNext.`);
+  }
+  if (rule.event?.reasonColumn) for (const mapping of rule.event.mappings) {
     if (!mapping.reasonCodes && mapping.reasonPolicy !== "any") throw new Error(`Ordered rule ${rule.id} must explicitly map or ignore reason codes for ${mapping.event}.`);
   }
 }
@@ -95,6 +118,8 @@ export class OrderedRuleEvaluator {
   private ordinal = 0;
   private priorOrder?: string;
   private outcomes = new Map<string, { id: string; selected: number; passed: number; failed: number }>();
+  private seen = new Map<string, { row: OrderedRow; ordinal: number }>();
+  private pending = new Map<string, { items: Array<{ row: OrderedRow; ordinal: number }>; head: number }>();
 
   public constructor(private readonly rule: OrderedRule, private readonly options: CsvOptions,
     private readonly issue: (issue: ValidationIssue) => void) {
@@ -115,33 +140,82 @@ export class OrderedRuleEvaluator {
   }
 
   private eventFor(row: OrderedRow): string | undefined {
-    const action = normalized(row.values[this.rule.event.actionColumn] ?? "", this.options);
-    const reason = this.rule.event.reasonColumn ? normalized(row.values[this.rule.event.reasonColumn] ?? "", this.options) : "";
-    const reserved = this.rule.event.reservedReasonCodes?.some(c => normalized(c, this.options) === reason) ?? false;
-    const matches = this.rule.event.mappings.filter(m => m.actionCodes.some(c => normalized(c, this.options) === action) &&
+    const mapping = this.rule.event!;
+    const action = normalized(row.values[mapping.actionColumn] ?? "", this.options);
+    const reason = mapping.reasonColumn ? normalized(row.values[mapping.reasonColumn] ?? "", this.options) : "";
+    const reserved = mapping.reservedReasonCodes?.some(c => normalized(c, this.options) === reason) ?? false;
+    const matches = mapping.mappings.filter(m => m.actionCodes.some(c => normalized(c, this.options) === action) &&
       (m.reasonCodes?.some(c => normalized(c, this.options) === reason) ||
-        !m.reasonCodes && (!this.rule.event.reasonColumn || m.reasonPolicy === "any" && !reserved)));
-    this.check(this.rule.event.unmapped, matches.length > 0, row,
-      `Action=${row.values[this.rule.event.actionColumn] ?? ""}; reason=${this.rule.event.reasonColumn ? row.values[this.rule.event.reasonColumn] ?? "" : ""}.`);
+        !m.reasonCodes && (!mapping.reasonColumn || m.reasonPolicy === "any" && !reserved)));
+    this.check(mapping.unmapped, matches.length > 0, row,
+      `Action=${row.values[mapping.actionColumn] ?? ""}; reason=${mapping.reasonColumn ? row.values[mapping.reasonColumn] ?? "" : ""}.`);
     return matches[0]?.event;
+  }
+
+  private matches(relationPredicate: OrderedRelation["when"], row: OrderedRow): boolean {
+    return evaluatePredicate(relationPredicate, {
+      value: column => row.values[column] ?? "", normalize: value => normalized(value, this.options),
+      isNull: value => (this.options.nullValues ?? [""]).some(nullValue => normalized(nullValue, this.options) === normalized(value, this.options)),
+      caseSensitive: this.options.caseSensitive !== false, trimValues: this.options.trimValues
+    });
+  }
+
+  private checkRelations(row: OrderedRow): void {
+    for (const relation of this.rule.relations ?? []) {
+      const prior = relation.requirePrior ?? relation.forbidPrior;
+      const seen = this.seen.get(relation.id);
+      if (relation.requireNext) {
+        const pending = this.pending.get(relation.id) ?? { items: [], head: 0 };
+        const expected = this.matches(relation.requireNext, row);
+        const allowed = !relation.allowBetween || this.matches(relation.allowBetween, row);
+        if (expected || !allowed) {
+          for (let index = pending.head; index < pending.items.length; index++) {
+            const trigger = pending.items[index];
+            const withinGap = this.ordinal - trigger.ordinal - 1 <= (relation.maxGap ?? 0);
+            this.check(relation, expected && withinGap, trigger.row,
+              expected && withinGap ? "" : `Expected a matching row within ${(relation.maxGap ?? 0) + 1} row(s).`,
+              expected && withinGap ? [] : [row.row]);
+          }
+          pending.items = [];
+          pending.head = 0;
+        } else {
+          while (pending.head < pending.items.length && this.ordinal - pending.items[pending.head].ordinal - 1 >= (relation.maxGap ?? 0)) {
+            this.check(relation, false, pending.items[pending.head].row,
+              `Expected a matching row within ${(relation.maxGap ?? 0) + 1} row(s).`, [row.row]);
+            pending.head++;
+          }
+          if (pending.head > 1024) { pending.items = pending.items.slice(pending.head); pending.head = 0; }
+        }
+        if (this.matches(relation.when, row)) pending.items.push({ row, ordinal: this.ordinal });
+        this.pending.set(relation.id, pending);
+      } else {
+        if (this.matches(relation.when, row)) {
+          const gap = seen ? this.ordinal - seen.ordinal - 1 : Infinity;
+          this.check(relation, relation.requirePrior ? !!seen && (relation.maxGap === undefined || gap <= relation.maxGap) : !seen,
+            row, relation.requirePrior ? "Required prior row was not found within the allowed gap." : "Forbidden prior row was found.", seen ? [seen.row.row] : []);
+        }
+        if (prior && this.matches(prior, row)) this.seen.set(relation.id, { row, ordinal: this.ordinal });
+      }
+    }
   }
 
   public add(row: OrderedRow): void {
     const key = partitionKey(row, this.rule, this.options);
-    if (key !== this.partition) { this.finishPartition(); this.partition = key; this.state = this.rule.initial.state; this.ordinal = 0; this.counts.clear(); this.first = row; this.priorOrder = undefined; }
+    if (key !== this.partition) { this.finishPartition(); this.partition = key; this.state = this.rule.initial?.state ?? ""; this.ordinal = 0; this.counts.clear(); this.seen.clear(); this.pending.clear(); this.first = row; this.priorOrder = undefined; }
     this.ordinal++;
-    for (const sort of this.rule.orderBy) this.check(this.rule.invalidOrder,
+    for (const sort of this.rule.orderBy) this.check(invalidCheck(this.rule),
       sortValue(row.values[sort.column] ?? "", sort) !== undefined, row,
       `Invalid ${sort.type} sort value in ${sort.column}.`);
     const currentOrder = orderKey(row, this.rule);
-    if (this.previous && this.priorOrder === currentOrder) this.check(this.rule.duplicateOrder, false, row, "Sort key matches another row.", [this.previous.row]);
-    else this.check(this.rule.duplicateOrder, true, row);
-    const event = this.eventFor(row);
-    if (this.ordinal === 1) this.check(this.rule.initial, event === this.rule.initial.event, row);
-    if (event) {
+    if (this.previous && this.priorOrder === currentOrder) this.check(duplicateCheck(this.rule), false, row, "Sort key matches another row.", [this.previous.row]);
+    else this.check(duplicateCheck(this.rule), true, row);
+    this.checkRelations(row);
+    const event = this.rule.event ? this.eventFor(row) : undefined;
+    if (this.rule.initial && this.ordinal === 1) this.check(this.rule.initial, event === this.rule.initial.event, row);
+    if (event && this.rule.event) {
       this.counts.set(event, (this.counts.get(event) ?? 0) + 1);
-      const transition = this.rule.transitions.find(t => t.from === this.state && t.event === event);
-      this.check(this.rule.invalidTransition, !!transition, row, `Event ${event} is not allowed in state ${this.state}.`);
+      const transition = this.rule.transitions!.find(t => t.from === this.state && t.event === event);
+      this.check(this.rule.invalidTransition!, !!transition, row, `Event ${event} is not allowed in state ${this.state}.`);
       if (transition) { this.check(transition, true, row); this.state = transition.to; }
       for (const adjacency of this.rule.adjacency ?? []) {
         if (adjacency.event !== event || !adjacency.preceding) continue;
@@ -173,8 +247,13 @@ export class OrderedRuleEvaluator {
 
   private finishPartition(): void {
     if (!this.first || !this.previous) return;
+    for (const relation of this.rule.relations ?? []) {
+      const pending = this.pending.get(relation.id);
+      if (pending) for (let index = pending.head; index < pending.items.length; index++)
+        this.check(relation, !!relation.allowFinal, pending.items[index].row, "No matching next row before the partition ended.");
+    }
     if (this.previousEvent) this.checkFollowing(this.previous, this.previousEvent);
-    this.check(this.rule.invalidFinal, this.rule.finalStates.includes(this.state), this.previous, `Final state is ${this.state}.`);
+    if (this.rule.invalidFinal) this.check(this.rule.invalidFinal, this.rule.finalStates!.includes(this.state), this.previous, `Final state is ${this.state}.`);
     for (const check of this.rule.cardinality ?? []) {
       const count = this.counts.get(check.event) ?? 0;
       this.check(check, (check.exact === undefined || count === check.exact) &&

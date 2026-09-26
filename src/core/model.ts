@@ -136,25 +136,39 @@ export interface OrderedCheck {
   message: string;
 }
 
+export interface OrderedRelation extends OrderedCheck {
+  when: Predicate;
+  requirePrior?: Predicate;
+  forbidPrior?: Predicate;
+  requireNext?: Predicate;
+  /** Maximum number of intervening rows. Omit for any prior row; defaults to zero for requireNext. */
+  maxGap?: number;
+  /** For requireNext, rows between the trigger and match must satisfy this predicate. */
+  allowBetween?: Predicate;
+  /** A trigger at the end of a partition may remain unmatched. */
+  allowFinal?: boolean;
+}
+
 export interface OrderedRule {
   id: string;
   partitionBy?: string[];
   orderBy: Array<{ column: string; type: "date" | "number" | "string"; format?: "yyyy/MM/dd" | "iso"; integer?: boolean; minimum?: number }>;
-  duplicateOrder: OrderedCheck;
-  invalidOrder: OrderedCheck;
-  event: {
+  duplicateOrder?: OrderedCheck;
+  invalidOrder?: OrderedCheck;
+  relations?: OrderedRelation[];
+  event?: {
     actionColumn: string;
     reasonColumn?: string;
     reservedReasonCodes?: string[];
     mappings: Array<{ event: string; actionCodes: string[]; reasonCodes?: string[]; reasonPolicy?: "any" }>;
     unmapped: OrderedCheck;
   };
-  initial: { state: string; event: string } & OrderedCheck;
-  transitions: Array<{ from: string; event: string; to: string } & OrderedCheck>;
-  invalidTransition: OrderedCheck;
+  initial?: { state: string; event: string } & OrderedCheck;
+  transitions?: Array<{ from: string; event: string; to: string } & OrderedCheck>;
+  invalidTransition?: OrderedCheck;
   neutralEvents?: string[];
-  finalStates: string[];
-  invalidFinal: OrderedCheck;
+  finalStates?: string[];
+  invalidFinal?: OrderedCheck;
   cardinality?: Array<{ event: string; exact?: number; min?: number; max?: number } & OrderedCheck>;
   adjacency?: Array<{ event: string; preceding?: string; following?: string; allowFinal?: boolean; dateRelation?: "nextDay" | "later" | "sameDay" } & OrderedCheck>;
 }

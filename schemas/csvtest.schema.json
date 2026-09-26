@@ -375,7 +375,8 @@
     },
     "orderedRule": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "orderBy", "duplicateOrder", "invalidOrder", "event", "initial", "transitions", "invalidTransition", "finalStates", "invalidFinal"],
+      "required": ["id", "orderBy"],
+      "anyOf": [{ "required": ["relations"] }, { "required": ["event", "initial", "transitions", "invalidTransition", "finalStates", "invalidFinal"] }],
       "properties": {
         "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
         "partitionBy": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
@@ -387,6 +388,21 @@
           } } },
         "duplicateOrder": { "$ref": "#/$defs/orderedCheck" },
         "invalidOrder": { "$ref": "#/$defs/orderedCheck" },
+        "relations": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false,
+          "required": ["id", "message", "when"],
+          "properties": {
+            "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+            "message": { "type": "string", "minLength": 1 },
+            "when": { "$ref": "#/$defs/predicate" },
+            "requirePrior": { "$ref": "#/$defs/predicate" },
+            "forbidPrior": { "$ref": "#/$defs/predicate" },
+            "requireNext": { "$ref": "#/$defs/predicate" },
+            "maxGap": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "allowBetween": { "$ref": "#/$defs/predicate" },
+            "allowFinal": { "type": "boolean" }
+          },
+          "oneOf": [{ "required": ["requirePrior"] }, { "required": ["forbidPrior"] }, { "required": ["requireNext"] }]
+        } },
         "event": { "type": "object", "additionalProperties": false, "required": ["actionColumn", "mappings", "unmapped"],
           "properties": {
             "actionColumn": { "type": "string", "minLength": 1 },
