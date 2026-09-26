@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { EventEmitter } from "node:events";
 import { stringify } from "yaml";
 import type { CsvContract, OrderedRule } from "../src/core/model";
 import { loadSuite } from "../src/core/suite";
@@ -227,6 +228,18 @@ test("large groups spill to disk and match the in-memory evaluator", async () =>
   });
 });
 
+test("many small groups retain grouped outcomes without per-group file validation", async () => {
+  const rows = [headers];
+  for (let index = 1; index <= 3000; index++) rows.push(`entity-${index},CREATED,2026-01-01,1,ref`);
+  const csv = rows.join("\n") + "\n";
+  await withFiles(csv, async (csvPath, specPath) => {
+    const result = (await validateCsvFile(csvPath, [{ spec: specPath, contract: simpleRelations() }])).runs[0].result;
+    assert.equal(result.valid, true);
+    assert.deepEqual(result.groupOutcomes?.find(outcome => outcome.id === "events"),
+      { id: "events", groups: 3000, passed: 3000, failed: 0 });
+  });
+});
+
 test("SQL grouped evaluation uses bounded target reads and matches CSV findings", async () => {
   const csv = [headers, "alpha,START,2026-01-01,1,x", "alpha,PAUSE,2026-01-02,1,x"].join("\n") + "\n";
   const data = [{ EntityId: "alpha", Event: "START", Day: "2026-01-01", Seq: "1", ExternalRef: "x" },
@@ -238,21 +251,25 @@ test("SQL grouped evaluation uses bounded target reads and matches CSV findings"
       sqlServer: { rowLocator: ["EntityId", "Day", "Seq"] } };
     const generated = generateSqlServerValidation(definition, { target, includeDetailQueries: false });
     const queries: string[] = [];
+    const streamedQueries: string[] = [];
     const session = new SqlServerValidationSession(() => { throw new Error("Mock must not connect."); });
     Object.defineProperty(session, "getPool", { value: async () => ({ api: { NVarChar: () => "nvarchar" }, pool: { request: () => {
-      const request = { input: () => request, cancel: () => {}, query: async (sql: string) => {
+      const request = Object.assign(new EventEmitter(), { stream: false, input: () => request, cancel: () => {}, query: async (sql: string) => {
         queries.push(sql);
         if (sql.includes("sys.columns")) return { recordset: Object.keys(data[0]).map((name, index) => ({ name, ordinal: index + 1, sqlType: "nvarchar" })) };
-        if (sql.includes("OFFSET")) return { recordset: data };
+        if (request.stream) { streamedQueries.push(sql); data.forEach(row => request.emit("row", row)); return { recordset: [] }; }
         if (sql.includes("RuleId")) return { recordsets: [generated.rules.map(rule => ({ RuleId: rule.id, RuleName: rule.name,
           Severity: rule.severity, Code: rule.code, ColumnName: "", FailureCount: 0, SelectedCount: null }))] };
         return { recordset: [{ count: data.length }] };
-      } }; return request;
+      } }); return request;
     } } }) });
     const sqlResult = await session.validate(definition, target);
     assert.deepEqual(sqlResult.issues.filter(i => i.testId?.startsWith("events/")).map(i => i.testId),
       comparison.issues.filter(i => i.testId?.startsWith("events/")).map(i => i.testId));
-    assert(queries.some(q => /FETCH NEXT 2000 ROWS ONLY/.test(q)));
+    assert.equal(streamedQueries.length, 1);
+    assert(queries.every(q => !q.includes("OFFSET")));
+    data.push({ ...data[data.length - 1] });
+    await assert.rejects(session.validate(definition, target), /row locator.*not unique/i);
   });
 });
 
@@ -271,13 +288,13 @@ test("direct grouped relations have SQL and CSV parity", async () => {
     const generated = generateSqlServerValidation(definition, { target, includeDetailQueries: false });
     const session = new SqlServerValidationSession(() => { throw new Error("Mock must not connect."); });
     Object.defineProperty(session, "getPool", { value: async () => ({ api: { NVarChar: () => "nvarchar" }, pool: { request: () => {
-      const request = { input: () => request, cancel: () => {}, query: async (sql: string) => {
+      const request = Object.assign(new EventEmitter(), { stream: false, input: () => request, cancel: () => {}, query: async (sql: string) => {
         if (sql.includes("sys.columns")) return { recordset: Object.keys(data[0]).map((name, index) => ({ name, ordinal: index + 1, sqlType: "nvarchar" })) };
-        if (sql.includes("OFFSET")) return { recordset: data };
+        if (request.stream) { data.forEach(row => request.emit("row", row)); return { recordset: [] }; }
         if (sql.includes("RuleId")) return { recordsets: [generated.rules.map(rule => ({ RuleId: rule.id, RuleName: rule.name,
           Severity: rule.severity, Code: rule.code, ColumnName: "", FailureCount: 0, SelectedCount: null }))] };
         return { recordset: [{ count: data.length }] };
-      } }; return request;
+      } }); return request;
     } } }) });
     const sqlResult = await session.validate(definition, target);
     assert.deepEqual(sqlResult.issues.filter(i => i.testId?.startsWith("events/")).map(i => i.testId),

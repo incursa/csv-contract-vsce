@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.1
+
+- Stream grouped and ordered SQL rows without repeated offset queries. Keep small child groups in memory and spill larger groups to disk.
+- Compare scoped SQL columns in their configured type so indexed scope filters can be used.
+- Organize Workbench tools into a collapsible menu and give conditional and group rules clearer, responsive editors.
+
 ## 0.17.0
 
 - Add direct ordered row relations for required or forbidden prior records and required next records with bounded gaps and optional intervening-row criteria.

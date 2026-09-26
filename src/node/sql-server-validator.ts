@@ -8,7 +8,7 @@ import { assertCompleteSqlSummaries } from "../core/sql-server-results";
 import Papa from "papaparse";
 import { validateCsv } from "../core/contract";
 import type { CountExpectation, CsvContract, SqlServerIntegratedConnection, SqlServerObjectInfo, ValidationIssue, ValidationResult } from "../core/model";
-import { generateSqlServerValidation, sqlIdentifier } from "../core/sql-server-generator";
+import { generateSqlServerValidation, safeSqlType, sqlIdentifier } from "../core/sql-server-generator";
 import { canonicalSqlServerColumn, physicalSqlServerColumn, type ResolvedSqlServerTarget } from "../core/sql-server-targets";
 import { OrderedRuleEvaluator, orderedColumns, compareOrderedRows } from "../core/ordered-rule";
 import { RowSortStore } from "./row-sort-store";
@@ -72,6 +72,44 @@ export async function queryWithCancellation<T>(request: Pick<sql.Request, "query
     }
   }
   finally { signal?.removeEventListener("abort", cancel); }
+}
+
+/** Consume one SQL result as it arrives instead of re-running sorted OFFSET pages. */
+async function queryRows<T>(request: sql.Request, query: string, onRow: (row: T) => void, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  request.stream = true;
+  let streamed = false;
+  let rowFailure: unknown;
+  let streamError: unknown;
+  let count = 0;
+  const cancel = (): void => { request.cancel(); };
+  const onError = (error: unknown): void => { streamError ??= error; };
+  const receive = (row: T): void => {
+    if (rowFailure) return;
+    streamed = true;
+    try {
+      onRow(row);
+      if (++count % 2000 === 0 && typeof request.pause === "function") {
+        request.pause();
+        setImmediate(() => { if (!signal?.aborted && !rowFailure) request.resume(); });
+      }
+    } catch (error) { rowFailure = error; request.cancel(); }
+  };
+  request.on("row", receive);
+  request.on("error", onError);
+  signal?.addEventListener("abort", cancel, { once: true });
+  try {
+    const result = await request.query<T>(`SET IMPLICIT_TRANSACTIONS OFF;\n${query}`);
+    if (streamError) throw streamError;
+    // A few test and alternate drivers return a recordset without emitting row events.
+    if (!streamed) result.recordset.forEach(onRow);
+    if (rowFailure) throw rowFailure;
+  } catch (error) { throw rowFailure ?? streamError ?? error; }
+  finally {
+    signal?.removeEventListener("abort", cancel);
+    request.removeListener("row", receive);
+    request.removeListener("error", onError);
+  }
 }
 
 function runtimeInteger(name: string, fallback: number, maximum: number): number {
@@ -380,25 +418,28 @@ async function validateSqlGroups(handle: SqlPoolHandle, contract: CsvContract, t
   metadata: MetadataRow[], scopeValue: string | undefined, maximum: number, signal?: AbortSignal): Promise<GroupSummary[]> {
   const headers = [...new Set(metadata.map(m => canonicalSqlServerColumn(target, m.name)))];
   const projection = headers.map(c => `CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, c))}) AS ${sqlIdentifier(c)}`).join(", ");
-  const scope = target.scope ? `WHERE CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, target.scope.column))}) = CONVERT(nvarchar(max), @${target.scope.parameter})` : "";
+  const scope = scopeWhere(target);
   const runners = (contract.groupTests ?? []).map(group => new GroupTestRunner(group, headers, contract.csv ?? {},
     group.resolvedSource ?? "<sql-contract>"));
   try {
-    const batch = 2000;
     const locator = contract.sqlServer?.rowLocator;
     if (!locator?.length) throw new Error("Grouped SQL validation requires sqlServer.rowLocator for bounded ordered reads.");
-    const order = [...locator, ...headers.filter(c => !locator.includes(c))]
-      .map(c => `CONVERT(nvarchar(4000), t.${sqlIdentifier(physicalSqlServerColumn(target, c))}) COLLATE Latin1_General_100_BIN2`).join(", ");
-    for (let offset = 0; ; offset += batch) {
-      signal?.throwIfAborted();
-      const request = handle.pool.request();
-      bindScope(request, handle.api, target, scopeValue);
-      const rows = await queryWithCancellation<Record<string, string | null>>(request,
-        `SELECT ${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope} ORDER BY ${order} OFFSET ${offset} ROWS FETCH NEXT ${batch} ROWS ONLY;`, signal);
-      rows.recordset.forEach((record, index) => runners.forEach(runner => runner.add(offset + index + 1,
-        headers.map(h => record[h] == null ? "" : String(record[h])))));
-      if (rows.recordset.length < batch) break;
-    }
+    const order = locator.map(column => `t.${sqlIdentifier(physicalSqlServerColumn(target, column))}`).join(", ");
+    const request = handle.pool.request();
+    bindScope(request, handle.api, target, scopeValue);
+    let sourceRow = 0;
+    let previousLocator: string | undefined;
+    await queryRows<Record<string, string | null>>(request,
+      `SELECT ${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope} ORDER BY ${order};`,
+      record => {
+        const locatorValues = locator.map(column => record[column]);
+        if (locatorValues.some(value => value == null)) throw new Error(`SQL row locator for ${target.schema}.${target.table} contains null values.`);
+        const locatorKey = JSON.stringify(locatorValues);
+        if (locatorKey === previousLocator) throw new Error(`SQL row locator for ${target.schema}.${target.table} is not unique.`);
+        previousLocator = locatorKey;
+        sourceRow++;
+        runners.forEach(runner => runner.add(sourceRow, headers.map(h => record[h] == null ? "" : String(record[h]))));
+      }, signal);
     return await Promise.all(runners.map(runner => runner.finish(maximum)));
   } finally { runners.forEach(runner => runner.dispose()); }
 }
@@ -426,18 +467,14 @@ async function validateSqlSequences(handle: SqlPoolHandle, contract: CsvContract
           k.type === "number" ? `TRY_CONVERT(decimal(38, 10), t.${sqlIdentifier(physicalSqlServerColumn(target, k.column))})` :
             `t.${sqlIdentifier(physicalSqlServerColumn(target, k.column))}`),
         ...columns.map(c => `CONVERT(nvarchar(4000), t.${sqlIdentifier(physicalSqlServerColumn(target, c))}) COLLATE Latin1_General_100_BIN2`)].join(", ");
-      const scope = target.scope ? `WHERE CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, target.scope.column))}) = CONVERT(nvarchar(max), @${target.scope.parameter})` : "";
-      const batch = 2000;
-      for (let offset = 0; ; offset += batch) {
-        signal?.throwIfAborted();
-        const request = handle.pool.request();
-        bindScope(request, handle.api, target, scopeValue);
-        const result = await queryWithCancellation<Record<string, string | null>>(request,
-          `SELECT ${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope} ORDER BY ${order} OFFSET ${offset} ROWS FETCH NEXT ${batch} ROWS ONLY;`, signal);
-        result.recordset.forEach((record, index) => store.add({ row: offset + index + 1,
-          values: Object.fromEntries(columns.map(c => [c, record[c] == null ? "" : String(record[c])])) }));
-        if (result.recordset.length < batch) break;
-      }
+      const scope = scopeWhere(target);
+      const request = handle.pool.request();
+      bindScope(request, handle.api, target, scopeValue);
+      let sourceRow = 0;
+      await queryRows<Record<string, string | null>>(request,
+        `SELECT ${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope} ORDER BY ${order};`,
+        record => store.add({ row: ++sourceRow,
+          values: Object.fromEntries(columns.map(c => [c, record[c] == null ? "" : String(record[c])])) }), signal);
       const evaluator = new OrderedRuleEvaluator(rule, contract.csv ?? {}, add);
       for await (const row of store.rows()) evaluator.add(row);
       evaluator.finish();
@@ -459,6 +496,12 @@ function resolveScopeValue(target: ResolvedSqlServerTarget, explicit?: string): 
 
 function bindScope(request: sql.Request, api: SqlApi, target: ResolvedSqlServerTarget, value: string | undefined): void {
   if (target.scope) request.input(target.scope.parameter, api.NVarChar(api.MAX), value);
+}
+
+function scopeWhere(target: ResolvedSqlServerTarget): string {
+  if (!target.scope) return "";
+  const column = sqlIdentifier(physicalSqlServerColumn(target, target.scope.column));
+  return `WHERE t.${column} = TRY_CONVERT(${safeSqlType(target.scope.sqlType)}, @${target.scope.parameter})`;
 }
 
 async function readMetadata(handle: SqlPoolHandle, target: ResolvedSqlServerTarget, signal?: AbortSignal): Promise<MetadataRow[]> {
@@ -493,9 +536,7 @@ export function sqlSchemaSnapshot(target: { schema: string; table: string }, col
 async function readRowCount(handle: SqlPoolHandle, target: ResolvedSqlServerTarget, scopeValue: string | undefined, signal?: AbortSignal): Promise<number> {
   const request = handle.pool.request();
   bindScope(request, handle.api, target, scopeValue);
-  const scope = target.scope
-    ? `WHERE CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, target.scope.column))}) = CONVERT(nvarchar(max), @${target.scope.parameter})`
-    : "";
+  const scope = scopeWhere(target);
   const result = await queryWithCancellation<{ count: number | string }>(request, `SELECT COUNT_BIG(*) AS count FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope};`, signal);
   const count = result.recordset[0]?.count;
   if (count === undefined || count === null || !Number.isSafeInteger(Number(count)) || Number(count) < 0) throw new Error("SQL row-count query did not return a valid count.");
@@ -564,9 +605,7 @@ async function validateClientSide(
     projections.push(`${type === "date" || type === "datetimeoffset" ? iso : `${iso} + N'Z'`} AS ${sqlIdentifier(alias)}`);
   }
   const projection = projections.join(", ");
-  const scope = target.scope
-    ? `WHERE CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, target.scope.column))}) = CONVERT(nvarchar(max), @${target.scope.parameter})`
-    : "";
+  const scope = scopeWhere(target);
   const request = handle.pool.request();
   bindScope(request, handle.api, target, scopeValue);
   const result = await queryWithCancellation<Record<string, string | null>>(request, `SELECT ${preview?.rowLimit ? `TOP (${preview.rowLimit}) ` : ""}${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope};`, signal);

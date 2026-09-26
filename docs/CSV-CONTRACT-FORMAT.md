@@ -238,7 +238,7 @@ Event mappings, transitions, cardinality, final states, and adjacency checks rem
 
 When `reasonColumn` is declared, each event mapping must list `reasonCodes` or explicitly set `reasonPolicy: any`. `reservedReasonCodes` prevents a broad mapping from consuming a reason code reserved for a specific event pair. Unknown combinations fail the `unmapped` check.
 
-Group findings carry the group key, child rule ID, source row, related rows when applicable, and actual values in the normal results JSON and Workbench. Failure details obey the usual `maxIssues` limit. CSV groups are sorted in temporary runs, so a large group does not need to fit in memory. SQL validation reads bounded pages from the existing target session and requires `sqlServer.rowLocator` to page predictably. Generated standalone SQL does not represent child or ordered rules; use normal `test` or `dbtest` execution for the complete contract.
+Group findings carry the group key, child rule ID, source row, related rows when applicable, and actual values in the normal results JSON and Workbench. Failure details obey the usual `maxIssues` limit. CSV groups are sorted in temporary runs; small groups are checked in memory and large groups spill to temporary disk. SQL validation streams the ordered target once through the existing read-only session and requires `sqlServer.rowLocator` for stable source positions. Generated standalone SQL does not represent child or ordered rules; use normal `test` or `dbtest` execution for the complete contract.
 
 ## Exact header order
 

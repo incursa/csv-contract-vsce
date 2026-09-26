@@ -22,12 +22,23 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .workbench-header h1 { margin: 0; font-size: 1.5rem; font-weight: 600; }
 .workbench-header p { margin: .25rem 0 0; color: #dfe5ff; }
 .inc-card { border: 1px solid #dbdcdc; border-radius: 4px; background: #fff; box-shadow: 0 1px 4px rgba(18,19,22,.08); }
-.workbench-target { display: grid; grid-template-columns: minmax(14rem, 1.15fr) minmax(14rem, 1.4fr) auto; align-items: end; gap: 1.5rem; margin: 1.25rem 2rem 1rem; padding: 1rem; }
+.workbench-target { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 1rem 1.5rem; margin: 1.25rem 2rem 1rem; padding: 1rem; }
 .workbench-target > div { min-width: 0; }
 .workbench-target h2, .pane h2 { margin: 0; font-size: 1rem; }
 .workbench-target code { display: block; margin-top: .4rem; font-size: .85rem; }
+.target-overview { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(10rem, 1fr); gap: .75rem 1.25rem; min-width: 0; }
+.target-overview > div { min-width: 0; }
+.target-overview code { overflow-wrap: anywhere; }
+.target-save-state { display: block; margin-top: .2rem; color: var(--inc-text-secondary); font-size: .75rem; }
 .field-label { display: block; margin-top: .8rem; color: #656668; font-size: .7rem; font-weight: 600; letter-spacing: .04em; }
-.workbench-actions { display: flex; flex-wrap: wrap; gap: .65rem; justify-content: flex-end; }
+.workbench-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; justify-content: flex-end; }
+.workbench-tools { grid-column: 1 / -1; min-width: 0; border-top: 1px solid var(--inc-border-default); padding-top: .75rem; }
+.workbench-tools > summary { width: fit-content; color: #344bbd; font-size: .82rem; font-weight: 600; cursor: pointer; }
+.workbench-tools > summary:hover { text-decoration: underline; }
+.workbench-tools__groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; padding: .8rem 0 .25rem; }
+.workbench-tools__group { display: grid; align-content: start; gap: .4rem; min-width: 0; }
+.workbench-tools__group h3 { margin: 0 0 .2rem; color: var(--inc-text-secondary); font-size: .72rem; letter-spacing: .04em; text-transform: uppercase; }
+.workbench-tools__group .inc-btn { width: 100%; min-height: 2rem; text-align: left; }
 .run-button { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; min-width: 6.5rem; }
 .run-button:disabled { cursor: wait; opacity: .82; }
 .workbench-run-status { grid-column: 1 / -1; display: flex; min-width: 0; align-items: center; gap: .75rem; padding: .75rem .85rem; border: 1px solid #b8c1f7; border-radius: 4px; color: #263b9f; background: #edf0ff; }
@@ -67,6 +78,19 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .columns-scroll { max-height: min(62vh, 42rem); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .columns-scroll:focus-visible { outline: 2px solid var(--inc-action-primary); outline-offset: -2px; }
 .pane-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.advanced-rules-pane { margin: 0 2rem 1rem; }
+.advanced-rules-pane > details { padding: .55rem 0; border-bottom: 1px solid var(--inc-border-default); }
+.advanced-rules-pane > details > summary { cursor: pointer; font-size: .82rem; font-weight: 600; }
+.advanced-rules-pane > .pane-heading { margin-top: 1rem; }
+.rule-list { display: grid; gap: .65rem; margin-top: .8rem; }
+.rule-card { min-width: 0; padding: .8rem .9rem; border: 1px solid var(--inc-border-default); border-radius: 4px; background: #fafafa; }
+.rule-card__heading, .rule-card__identity { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; min-width: 0; }
+.rule-card__heading { justify-content: space-between; }
+.rule-card__identity code { margin: 0; overflow-wrap: anywhere; font-size: .82rem; font-weight: 600; }
+.rule-card__type { padding: .2rem .4rem; border-radius: 3px; color: #344bbd; background: #e9edff; font-size: .66rem; font-weight: 700; letter-spacing: .035em; }
+.rule-card__summary { margin: .55rem 0 0; color: var(--inc-text-secondary); font-size: .8rem; line-height: 1.5; overflow-wrap: anywhere; }
+.rule-card__footer { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; }
+.rule-card__footer p { margin: 0; color: #b01524; font-size: .78rem; }
 .pane-heading p, .pane > p { margin: .25rem 0 0; color: #656668; font-size: .8rem; }
 .column-row { color: inherit; background: #fff; cursor: pointer; }
 .column-row:nth-child(odd) { background: #f6f6f6; }
@@ -97,6 +121,7 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .row-test-editor--empty h3 { color: #121316; }
 .row-test-editor--empty p { margin: .35rem 0 0; font-size: .85rem; }
 .row-test-editor__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.row-test-editor__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .4rem; }
 .row-test-editor h3 { margin: .15rem 0 0; font-size: .95rem; }
 .editor-eyebrow { color: #656668; font-size: .68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
 .row-test-basics { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
@@ -194,6 +219,7 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 }
 
 @media (max-width: 900px) {
+  .workbench-tools__groups { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .split { grid-template-columns: 1fr; }
   .metrics { grid-template-columns: repeat(3, 1fr); }
   .configured-targets__heading { align-items: flex-start; flex-direction: column; }
@@ -205,9 +231,12 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 
 @media (max-width: 560px) {
   .workbench-header { padding-inline: 1rem; }
-  .workbench-target, .metrics, .split, .lower, .results-pane { margin-inline: 1rem; }
+  .workbench-target, .metrics, .split, .lower, .results-pane, .advanced-rules-pane { margin-inline: 1rem; }
   .workbench-target { gap: 1rem; }
+  .target-overview, .workbench-tools__groups { grid-template-columns: 1fr; }
   .workbench-actions { flex-wrap: wrap; }
+  .workbench-actions .inc-btn { flex: 1 1 auto; }
+  .row-test-editor__heading { flex-wrap: wrap; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .row-test-basics, .count-grid, .test-editor-row { grid-template-columns: 1fr; }
   .configured-target-row { grid-template-columns: 3.25rem minmax(0, 1fr) 2rem; }
@@ -233,8 +262,22 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .results th, .results td { padding: 8px; border-bottom: 1px solid var(--vscode-panel-border, #ddd); text-align: left; overflow-wrap: anywhere; }
 .results button { font: inherit; color: inherit; border: 0; background: transparent; text-decoration: underline; cursor: pointer; }
 .results .error { color: var(--vscode-errorForeground, #bb3030); white-space: pre-wrap; }
-/* Nested rule forms remain usable without widening the document. */
-.visual-rule fieldset { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; min-width: 0; border: 1px solid var(--vscode-panel-border, #ddd); }
+.visual-rule { margin-top: .7rem; padding-top: .6rem; border-top: 1px solid var(--inc-border-default); }
+.visual-rule > summary, .predicate-more > summary { width: fit-content; color: #344bbd; font-size: .78rem; font-weight: 600; cursor: pointer; }
+.visual-rule form { display: grid; gap: .75rem; padding-top: .8rem; }
+.visual-rule form > div > h3 { margin: .2rem 0 .45rem; font-size: .82rem; }
+.visual-rule form > p { margin: 0; color: var(--inc-text-secondary); font-size: .75rem; }
+.visual-rule fieldset { display: grid; gap: .75rem; min-width: 0; margin: .4rem 0; padding: .85rem; border: 1px solid var(--inc-border-default); border-radius: 4px; background: #fff; }
+.visual-rule fieldset[data-predicate="group"] { background: #f4f6ff; }
 .visual-rule fieldset > fieldset { width: 100%; }
-.visual-rule label { display: grid; gap: 4px; max-width: 100%; }
-.visual-rule input, .visual-rule select, .visual-rule textarea { max-width: 100%; }
+.visual-rule legend { padding: 0 .3rem; font-size: .78rem; font-weight: 600; }
+.visual-rule label { display: grid; gap: .3rem; min-width: 0; color: var(--inc-text-secondary); font-size: .73rem; }
+.visual-rule input, .visual-rule select, .visual-rule textarea { width: 100%; min-width: 0; min-height: 2rem; padding: .4rem .5rem; border: 1px solid #c4c4c5; border-radius: 4px; color: var(--inc-text-primary); background: #fff; }
+.visual-rule textarea { min-height: 4rem; resize: vertical; }
+.predicate-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; min-width: 0; }
+.predicate-more { min-width: 0; }
+.predicate-more > .predicate-fields { padding-top: .6rem; }
+.predicate-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+.predicate-actions button, .visual-rule [data-predicate-action="add"] { padding: .35rem .55rem; border: 1px solid #c4c4c5; border-radius: 4px; color: var(--inc-text-primary); background: #fff; font-size: .72rem; cursor: pointer; }
+.predicate-actions button:hover, .visual-rule [data-predicate-action="add"]:hover { border-color: #98a5e8; background: #f4f6ff; }
+@media (max-width: 560px) { .predicate-fields { grid-template-columns: 1fr; } }

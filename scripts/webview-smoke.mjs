@@ -139,6 +139,8 @@ openMessage = await page.evaluate(() => window.__messages.at(-1));
 if (openMessage?.type !== "openTargetExternally" || openMessage.index !== 2) {
   throw new Error("Open externally did not send the expected host message.");
 }
+if ((await page.locator('.workbench-actions button:visible').count()) !== 3) throw new Error("The primary header should show only three actions when idle.");
+await page.locator('.workbench-tools > summary').click();
 await page.locator('[data-action="open-active-target-vscode"]').click();
 openMessage = await page.evaluate(() => window.__messages.at(-1));
 if (openMessage?.type !== "openActiveTargetInVsCode") {
@@ -165,6 +167,7 @@ if (openMessage?.type !== "addSqlServerTarget") {
   throw new Error("Adding a SQL Server table or view did not send the expected host message.");
 }
 await mkdir(qaScreenshotDir, { recursive: true });
+await page.locator('.workbench-tools > summary').click();
 
 await page.screenshot({ path: join(qaScreenshotDir, "workbench-column-rules.png"), fullPage: true });
 await page.locator('[data-action="remove-sql-target"]').click();
@@ -264,6 +267,28 @@ if (addUrlMessage?.type !== "addTargetUrl") throw new Error("Add URL did not sen
 await page.screenshot({ path: join(qaScreenshotDir, "workbench-results.png"), fullPage: true });
 await page.screenshot({ path: join(qaScreenshotDir, "webview-workbench.png"), fullPage: true });
 
+const ruleState = { ...state, contract: { ...state.contract,
+  rules: [{ id: "active-has-email", when: { all: [
+    { column: "Status", operator: "equals", value: "Active" },
+    { column: "CustomerId", operator: "notBlank" }
+  ] }, expect: { column: "Email", operator: "notBlank" } }],
+  groupRules: [{ id: "status-has-record", groupBy: ["Status"], require: { column: "CustomerId", values: ["C000123"] } }]
+} };
+await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), ruleState);
+if ((await page.locator(".rule-card").count()) !== 2) throw new Error("Conditional and group rules did not render as separate cards.");
+if ((await page.locator(".advanced-rules-pane .configured-target-row").count()) !== 0) throw new Error("Rules still use the cramped target row layout.");
+await page.locator('.rule-card [data-action="preview-rule"]').first().click();
+if ((await page.evaluate(() => window.__messages.at(-1))).type !== "preview") throw new Error("Rule card preview did not respond.");
+await page.locator(".visual-rule > summary").click();
+if ((await page.locator(".visual-rule .predicate-fields").count()) < 2) throw new Error("Rule editor did not show structured condition fields.");
+await page.locator(".advanced-rules-pane").screenshot({ path: join(qaScreenshotDir, "conditional-group-rules.png") });
+await page.locator(".workbench-target").screenshot({ path: join(qaScreenshotDir, "workbench-target-actions.png") });
+await page.setViewportSize({ width: 600, height: 900 });
+const rulesOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+if (rulesOverflow > 1) throw new Error(`Conditional rule editor has ${rulesOverflow}px horizontal overflow at 600px.`);
+await page.locator(".advanced-rules-pane").screenshot({ path: join(qaScreenshotDir, "conditional-group-rules-narrow.png") });
+await page.setViewportSize({ width: 1440, height: 1000 });
+
 const largeColumns = Object.fromEntries(Array.from({ length: 202 }, (_, index) => {
   const name = index === 0 ? "CustomerId" : `Column_${String(index + 1).padStart(3, "0")}`;
   return [name, { presence: "required", constraints: { maxLength: 24 } }];
@@ -350,7 +375,7 @@ const presetMessage = await page.evaluate(() => window.__messages.at(-1));
 if (presetMessage?.type !== "updateContract" || presetMessage.contract.rules[0].expect.all[1].value !== "0001") throw new Error("Preset form did not preserve the literal identifier.");
 await page.locator('[data-action="preview-rule"][data-rule="literal-preview"]').click();
 if ((await page.evaluate(() => window.__messages.at(-1))).type !== "preview") throw new Error("Rule preview did not dispatch explicitly.");
-await page.locator(".visual-rule > summary").filter({ hasText: "Edit literal-preview" }).click();
+await page.locator(".visual-rule > summary").filter({ hasText: "Edit conditions" }).click();
 const visualRule = page.locator('[data-rule-editor="literal-preview"]');
 await visualRule.locator('[data-field="value"]').last().fill("0002");
 await visualRule.locator('button[type="submit"]').click();
@@ -363,6 +388,7 @@ await visualRule.locator('button[type="submit"]').click();
 const branched = await page.evaluate(() => window.__messages.at(-1));
 if (branched.contract.rules[0].expect.all[2].value !== "0002") throw new Error("Rendered branch reorder lost an unsaved literal.");
 await page.locator(".visual-rule").first().screenshot({ path: join(qaScreenshotDir, "nested-rule-editor.png") });
+await page.locator('.workbench-tools > summary').click();
 await page.locator('[data-action="live"]').click();
 if ((await page.evaluate(() => window.__messages.at(-1))).type !== "live") throw new Error("Live toggle did not dispatch explicitly.");
 await page.locator('[data-action="create-baseline"]').click();

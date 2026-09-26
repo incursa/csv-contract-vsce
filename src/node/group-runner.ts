@@ -5,7 +5,11 @@ import { createInterface } from "node:readline";
 import Papa from "papaparse";
 import type { CsvOptions, GroupTest, ValidationIssue, ValidationResult } from "../core/model";
 import type { OrderedRow } from "../core/ordered-rule";
+import { validateCsv } from "../core/contract";
 import { RowSortStore } from "./row-sort-store";
+
+const inMemoryGroupRows = 5000;
+const inMemoryGroupBytes = 4 * 1024 * 1024;
 
 export interface GroupSummary {
   issues: ValidationIssue[];
@@ -73,24 +77,50 @@ export class GroupTestRunner {
     const mapPath = join(directory, "rows.txt");
     let csvFd: number | undefined;
     let mapFd: number | undefined;
+    let groupOpen = false;
+    let memoryRows: OrderedRow[] = [];
+    let memoryBytes = 0;
     let currentKey: string | undefined;
     let currentGroup: Record<string, string> = {};
     let hasRows = false;
     const openGroup = (row?: OrderedRow): void => {
-      csvFd = openSync(csvPath, "w"); mapFd = openSync(mapPath, "w");
-      writeSync(csvFd, Papa.unparse([this.headers]) + "\n");
+      groupOpen = true;
+      memoryRows = [];
+      memoryBytes = 0;
       currentGroup = Object.fromEntries(this.group.groupBy.map(c => [c, row?.values[c] ?? ""]));
       summary.groupCounts[0].count++;
     };
+    const writeRow = (row: OrderedRow): void => {
+      writeSync(csvFd!, Papa.unparse([this.headers.map(h => row.values[h] ?? "")]) + "\n");
+      writeSync(mapFd!, String(row.row) + "\n");
+    };
+    const spillGroup = (): void => {
+      csvFd = openSync(csvPath, "w"); mapFd = openSync(mapPath, "w");
+      writeSync(csvFd, Papa.unparse([this.headers]) + "\n");
+      memoryRows.forEach(writeRow);
+      memoryRows = [];
+      memoryBytes = 0;
+    };
     const closeGroup = async (): Promise<void> => {
-      if (csvFd === undefined || mapFd === undefined) return;
-      closeSync(csvFd); closeSync(mapFd); csvFd = undefined; mapFd = undefined;
+      if (!groupOpen) return;
+      groupOpen = false;
       const child = (this.group.resolvedContract ?? this.group.contract)!;
       const normalizedChild = { ...child, csv: { ...child.csv, delimiter: ",", quote: "\"", header: "required" as const } };
-      const { validateCsvFile } = await import("./streaming-validator");
-      const run = await validateCsvFile(csvPath, [{ spec: this.group.resolvedSource ?? (this.source === "<sql-contract>" ? csvPath : this.source), contract: normalizedChild }],
-        { maxIssues, tempDirectory: this.tempRoot });
-      const result = run.runs[0].result;
+      let result: ValidationResult;
+      let rowMap: Map<number, number>;
+      if (csvFd === undefined || mapFd === undefined) {
+        const csv = Papa.unparse({ fields: this.headers, data: memoryRows.map(row => this.headers.map(h => row.values[h] ?? "")) });
+        result = validateCsv(normalizedChild, csv);
+        rowMap = new Map(memoryRows.map((row, index) => [index + 2, row.row]));
+      } else {
+        closeSync(csvFd); closeSync(mapFd); csvFd = undefined; mapFd = undefined;
+        const { validateCsvFile } = await import("./streaming-validator");
+        const run = await validateCsvFile(csvPath, [{ spec: this.group.resolvedSource ?? (this.source === "<sql-contract>" ? csvPath : this.source), contract: normalizedChild }],
+          { maxIssues, tempDirectory: this.tempRoot });
+        result = run.runs[0].result;
+        const wanted = new Set(result.issues.flatMap(issue => [...(issue.row === undefined ? [] : [issue.row]), ...(issue.relatedRows ?? [])]));
+        rowMap = await sourceRows(mapPath, wanted);
+      }
       if (result.valid) summary.passedGroups++;
       else summary.failedGroups++;
       summary.testCount = Math.max(summary.testCount, 1 + result.testCount);
@@ -106,8 +136,6 @@ export class GroupTestRunner {
         if (aggregate) { aggregate.groups += outcome.groups; aggregate.passed += outcome.passed; aggregate.failed += outcome.failed; }
         else summary.nestedGroupOutcomes.push({ ...outcome, id });
       }
-      const wanted = new Set(result.issues.flatMap(issue => [...(issue.row === undefined ? [] : [issue.row]), ...(issue.relatedRows ?? [])]));
-      const rowMap = await sourceRows(mapPath, wanted);
       summary.issueCount += result.issueCount;
       summary.errorCount += result.errorCount;
       summary.warningCount += result.warningCount;
@@ -122,8 +150,12 @@ export class GroupTestRunner {
         hasRows = true;
         const nextKey = key(row, this.group.groupBy, this.options);
         if (nextKey !== currentKey) { await closeGroup(); openGroup(row); currentKey = nextKey; }
-        writeSync(csvFd!, Papa.unparse([this.headers.map(h => row.values[h] ?? "")]) + "\n");
-        writeSync(mapFd!, String(row.row) + "\n");
+        if (csvFd !== undefined) writeRow(row);
+        else {
+          memoryRows.push(row);
+          memoryBytes += this.headers.reduce((bytes, h) => bytes + (row.values[h]?.length ?? 0), 0);
+          if (memoryRows.length > inMemoryGroupRows || memoryBytes > inMemoryGroupBytes) spillGroup();
+        }
       }
       if (!hasRows && this.group.groupBy.length === 0) openGroup();
       await closeGroup();

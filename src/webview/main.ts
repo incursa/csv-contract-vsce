@@ -117,7 +117,10 @@ function renderRowTestEditor(names: string[]): string {
   return `<div class="row-test-editor" aria-label="Edit row and cell test">
     <div class="row-test-editor__heading">
       <div><span class="editor-eyebrow">Selected test</span><h3>Edit row &amp; cell test</h3></div>
-      <button type="button" class="inc-btn inc-btn--outline-secondary inc-btn--sm danger-button" data-action="delete-row-test">Delete</button>
+      <div class="row-test-editor__actions">
+        <button type="button" class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="preview-rule" data-rule="${escape(test.id)}">Run preview</button>
+        <button type="button" class="inc-btn inc-btn--outline-secondary inc-btn--sm danger-button" data-action="delete-row-test">Delete</button>
+      </div>
     </div>
     <div class="row-test-basics">
       <label>Test ID
@@ -164,6 +167,7 @@ function renderRowTestEditor(names: string[]): string {
 }
 
 function render(): void {
+  const toolsOpen = app.querySelector(".workbench-tools")?.hasAttribute("open") ?? false;
   if (!contract) {
     app.innerHTML = parseError ? `<div role="alert">${escape(parseError)}</div>` : `<div class="workbench-loading">Loading contract…</div>`;
     return;
@@ -204,37 +208,50 @@ function render(): void {
       <p>Build, inspect, and run reusable YAML contracts against CSV exports and SQL Server tables.</p>
     </header>
     <section class="inc-card workbench-target">
-      <div>
-        <h2>Test target</h2>
-        <span class="field-label">TARGET</span>
-        <code>${escape(sourceLabel)}</code>
-      </div>
-      <div>
-        <span class="field-label">CONTRACT</span>
-        <code>${escape(contractName)}</code><span>${dirty ? "Unsaved draft" : "Saved"}</span>
+      <div class="target-overview">
+        <div>
+          <h2>Test target</h2>
+          <span class="field-label">TARGET</span>
+          <code>${escape(sourceLabel)}</code>
+        </div>
+        <div>
+          <span class="field-label">CONTRACT</span>
+          <code>${escape(contractName)}</code><span class="target-save-state">${dirty ? "Unsaved draft" : "Saved"}</span>
+        </div>
       </div>
       <div class="workbench-actions">
         <button class="inc-btn inc-btn--outline-secondary" data-action="choose-csv">Select test CSV</button>
-        ${configuredTargetCount > 0 && !usingConfiguredTargets ? `<button class="inc-btn inc-btn--outline-secondary" data-action="use-configured-targets">Use configured targets</button>` : ""}
-        ${fileTargetCount > 0 ? `<button class="inc-btn inc-btn--outline-secondary" data-action="open-active-target-vscode">Open CSV in VS Code</button>
-        <button class="inc-btn inc-btn--outline-secondary" data-action="open-active-target-external">Open CSV externally</button>` : ""}
         <button class="inc-btn inc-btn--outline-secondary" data-action="open-yaml">Open YAML</button>
-        <button class="inc-btn inc-btn--outline-secondary" data-action="generate-sql">Generate staging SQL</button>
-        <button class="inc-btn inc-btn--outline-secondary" data-action="configure-sql">Configure SQL connection</button>
-        <button class="inc-btn inc-btn--outline-secondary" data-action="edit-connection">Edit connection</button>
-        <button class="inc-btn inc-btn--outline-secondary" data-action="preflight">Test connection / preflight</button>
-        <button class="inc-btn inc-btn--outline-secondary" data-action="history">Run history</button>
-        <button class="inc-btn inc-btn--outline-secondary" data-action="insert-template">Insert rule template</button>
-        <button class="inc-btn inc-btn--outline-secondary" data-action="import-sql-schema">Import table schema</button>
-        <button class="inc-btn inc-btn--outline-secondary" data-action="create-baseline">Create schema baseline</button>
-        <button class="inc-btn inc-btn--outline-secondary" data-action="review-baseline">Review schema drift</button>
-        <button class="inc-btn inc-btn--outline-secondary" data-action="live">${live ? "Pause live tests" : "Enable live tests"}</button>
-        <button class="inc-btn inc-btn--outline-secondary" data-action="cancel">Cancel execution</button>
-        <button class="inc-btn inc-btn--outline-secondary" data-action="watch-inputs">${watchInputs ? "Stop watching CSV input" : "Watch CSV input changes"}</button>
+        ${running ? `<button class="inc-btn inc-btn--outline-secondary" data-action="cancel">Cancel execution</button>` : ""}
         <button class="inc-btn inc-btn--primary run-button" data-action="run" ${running ? "disabled aria-busy=\"true\"" : ""}>
           ${running ? `<span class="run-spinner run-spinner--button" aria-hidden="true"></span><span>Running…</span>` : "Run tests"}
         </button>
       </div>
+      <details class="workbench-tools" ${toolsOpen ? "open" : ""}>
+        <summary>More tools and settings</summary>
+        <div class="workbench-tools__groups">
+          <div class="workbench-tools__group"><h3>Sources and connections</h3>
+            ${configuredTargetCount > 0 && !usingConfiguredTargets ? `<button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="use-configured-targets">Use configured targets</button>` : ""}
+            ${fileTargetCount > 0 ? `<button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="open-active-target-vscode">Open CSV in VS Code</button>
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="open-active-target-external">Open CSV externally</button>` : ""}
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="configure-sql">Configure SQL connection</button>
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="edit-connection">Edit connection</button>
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="preflight">Test connection / preflight</button>
+          </div>
+          <div class="workbench-tools__group"><h3>Contract design</h3>
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="insert-template">Insert rule template</button>
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="import-sql-schema">Import table schema</button>
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="generate-sql">Generate staging SQL</button>
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="create-baseline">Create schema baseline</button>
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="review-baseline">Review schema drift</button>
+          </div>
+          <div class="workbench-tools__group"><h3>Runs and updates</h3>
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="history">Run history</button>
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="live">${live ? "Pause live tests" : "Enable live tests"}</button>
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="watch-inputs">${watchInputs ? "Stop watching CSV input" : "Watch CSV input changes"}</button>
+          </div>
+        </div>
+      </details>
       ${running ? `<div class="workbench-run-status" role="status" aria-live="polite">
         <span class="run-spinner" aria-hidden="true"></span>
         <div><strong>Running contract tests</strong><span title="${escape(runningTarget)}">${escape(runningDetail)}</span></div>
@@ -338,24 +355,26 @@ function render(): void {
         <div><h2>Conditional &amp; group rules</h2><p>${conditionalRules.length} conditional · ${groupRules.length} grouped</p></div>
         <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="open-yaml">Edit advanced rules in YAML</button>
       </div>
-      <div class="configured-target-list">
-        ${conditionalRules.map((rule) => `<div class="configured-target-row">
-          <span class="target-type">${escape((rule.severity ?? "error").toUpperCase())}</span>
-          <code>${escape(rule.id)}</code><button class="inc-btn inc-btn--outline-secondary" data-action="preview-rule" data-rule="${escape(rule.id)}">Run preview</button>
-          <span>${escape(`${rule.when ? `when ${predicateDescription(rule.when)}; ` : ""}expect ${predicateDescription(rule.expect)}`)}</span>
-        </div><details class="visual-rule"><summary>Edit ${escape(rule.id)}</summary><form data-rule-editor="${escape(rule.id)}">
-          <button type="button" data-toggle-when>${rule.when ? "Remove condition selector" : "Add condition selector"}</button>
-          <div data-rule-when>${rule.when ? `<h3>When</h3>${renderPredicate(rule.when, names)}` : ""}</div>
-          <div data-rule-expect><h3>Expect</h3>${renderPredicate(rule.expect, names)}</div>
-          <p>Literal values remain strings unless an unchanged existing literal is numeric. List entries are literal strings. Changes apply to the draft; save normally.</p>
-          <button type="submit" class="inc-btn inc-btn--primary">Apply rule changes</button><p role="alert" data-rule-error></p></form></details>`).join("")}
-        ${groupRules.map((rule) => `<div class="configured-target-row">
-          <span class="target-type">GROUP</span>
-          <code>${escape(rule.id)}</code><button class="inc-btn inc-btn--outline-secondary" data-action="preview-rule" data-rule="${escape(rule.id)}">Run preview</button>
-          <span>${escape(`group by ${rule.groupBy.join(", ")}; require ${[...(rule.require.values ?? []), ...(rule.require.contains ?? []).map((value) => `contains ${value}`)].join(", ")} in ${rule.require.column}`)}</span>
-        </div>`).join("")}
+      <div class="rule-list">
+        ${conditionalRules.map((rule) => `<article class="rule-card">
+          <div class="rule-card__heading"><div class="rule-card__identity">
+            <span class="rule-card__type">${escape((rule.severity ?? "error").toUpperCase())}</span><code>${escape(rule.id)}</code>
+          </div><button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="preview-rule" data-rule="${escape(rule.id)}">Run preview</button></div>
+          <p class="rule-card__summary">${escape(`${rule.when ? `When ${predicateDescription(rule.when)}, ` : "For every row, "}expect ${predicateDescription(rule.expect)}.`)}</p>
+          <details class="visual-rule"><summary>Edit conditions</summary><form data-rule-editor="${escape(rule.id)}">
+            <button type="button" class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-toggle-when>${rule.when ? "Remove condition selector" : "Add condition selector"}</button>
+            <div data-rule-when>${rule.when ? `<h3>When</h3>${renderPredicate(rule.when, names)}` : ""}</div>
+            <div data-rule-expect><h3>Expect</h3>${renderPredicate(rule.expect, names)}</div>
+            <p>Literal values remain strings unless an unchanged existing literal is numeric. Changes apply to the draft; save normally.</p>
+            <div class="rule-card__footer"><button type="submit" class="inc-btn inc-btn--primary inc-btn--sm">Apply rule changes</button><p role="alert" data-rule-error></p></div>
+          </form></details>
+        </article>`).join("")}
+        ${groupRules.map((rule) => `<article class="rule-card">
+          <div class="rule-card__heading"><div class="rule-card__identity"><span class="rule-card__type">GROUP</span><code>${escape(rule.id)}</code></div>
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="preview-rule" data-rule="${escape(rule.id)}">Run preview</button></div>
+          <p class="rule-card__summary">${escape(`Group by ${rule.groupBy.join(", ")}; require ${[...(rule.require.values ?? []), ...(rule.require.contains ?? []).map((value) => `contains ${value}`)].join(", ")} in ${rule.require.column}.`)}</p>
+        </article>`).join("")}
         ${conditionalRules.length + groupRules.length === 0 ? `<p class="empty compact-empty">No conditional or grouped rules configured.</p>` : ""}
-        ${(contract.rowTests ?? []).map(rule => `<button class="inc-btn inc-btn--outline-secondary" data-action="preview-rule" data-rule="${escape(rule.id)}">Preview row test: ${escape(rule.id)}</button>`).join("")}
       </div>
     </section>
     <section class="split">

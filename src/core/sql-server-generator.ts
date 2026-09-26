@@ -159,7 +159,7 @@ function addConditionalRule(
   });
 }
 
-function safeSqlType(value: string): string {
+export function safeSqlType(value: string): string {
   const type = value.trim();
   if (!/^(?:bigint|int|smallint|tinyint|bit|uniqueidentifier|date|datetime2(?:\([0-7]\))?|nvarchar\((?:max|[1-9][0-9]{0,3})\)|varchar\((?:max|[1-9][0-9]{0,3})\))$/i.test(type)) {
     throw new Error(`Scope sqlType '${value}' is not in the supported safe type list.`);
@@ -229,7 +229,7 @@ function generatePhysicalSqlServerValidation(contract: CsvContract, options: Sql
   const scope = target.scope;
   if (scope && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(scope.parameter)) throw new Error("sqlServer.scope.parameter must be a valid SQL variable name without @.");
   const parameter = scope ? `@${scope.parameter}` : undefined;
-  const scopeSql = scope ? `CONVERT(nvarchar(max), t.${sqlIdentifier(scope.column)}) = CONVERT(nvarchar(max), ${parameter})` : "1 = 1";
+  const scopeSql = scope ? `t.${sqlIdentifier(scope.column)} = ${parameter}` : "1 = 1";
   addCountExpectations(rules, "row-count", "Row count", `(SELECT COUNT_BIG(*) FROM ${table} AS t WHERE ${scopeSql})`, contract.schema.rowCount);
 
   for (const [column, definition] of Object.entries(contract.schema.columns)) {

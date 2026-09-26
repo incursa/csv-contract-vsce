@@ -70,6 +70,8 @@ test("generates read-only scoped SQL for column and conditional rules", () => {
   const result = generateSqlServerValidation(contract());
   assert.equal(result.ruleCount, 6);
   assert.match(result.sql, /DECLARE @LoadId nvarchar\(100\) = NULL/);
+  assert.match(result.sql, /t\.\[LoadId\] = @LoadId/);
+  assert.doesNotMatch(result.sql, /CONVERT\(nvarchar\(max\), t\.\[LoadId\]\) =/);
   assert.match(result.sql, /FROM \[staging\]\.\[Daytime Load\] AS t/);
   assert.match(result.sql, /N'completed-requires-date' AS RuleId/);
   assert.match(result.sql, /TOP \(25\).*t\.\[LoadId\], t\.\[SourceRow\], t\.\*/);

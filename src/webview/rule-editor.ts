@@ -11,16 +11,21 @@ export function renderPredicate(predicate: Predicate, columns: string[]): string
   }
   const options = (values: string[], current: string) => [...new Set([current, ...values])].map(v => `<option ${v === current ? "selected" : ""}>${escape(v)}</option>`).join("");
   return `<fieldset data-predicate="leaf"><legend>Condition</legend>
-    <label>Column <select data-field="column">${options(columns, predicate.column)}</select></label>
-    <label>Operator <select data-field="operator">${options(operators, predicate.operator)}</select></label>
-    <label>Literal <input data-field="value" value="${escape(predicate.value)}" data-original="${escape(JSON.stringify(predicate.value ?? ""))}"></label>
-    <label>Comparison column (optional) <select data-field="otherColumn">${options(["", ...columns], predicate.otherColumn ?? "")}</select></label>
-    <label>List literals, one per line <textarea data-field="values">${escape(predicate.values?.join("\n") ?? "")}</textarea></label>
-    <label>Literal type <select data-field="valueType">${options(["", "string", "number", "boolean"], predicate.valueType ?? "")}</select></label>
-    <label>Case policy (blank inherits) <select data-field="caseSensitive">${options(["", "true", "false"], predicate.caseSensitive === undefined ? "" : String(predicate.caseSensitive))}</select></label>
-    <label>Max decimal places <input type="number" min="0" max="15" data-field="decimalPlaces" value="${escape(predicate.decimalPlaces)}"></label>
-    <label>Relative date anchor <select data-field="dateAnchor">${options(["", "today", "now"], predicate.relativeDate?.anchor ?? "")}</select></label>
-    <label>Relative days <input type="number" data-field="relativeDays" value="${escape(predicate.relativeDate?.days ?? 0)}"></label>
+    <div class="predicate-fields">
+      <label>Column <select data-field="column">${options(columns, predicate.column)}</select></label>
+      <label>Operator <select data-field="operator">${options(operators, predicate.operator)}</select></label>
+      <label>Literal <input data-field="value" value="${escape(predicate.value)}" data-original="${escape(JSON.stringify(predicate.value ?? ""))}"></label>
+      <label>Comparison column <select data-field="otherColumn">${options(["", ...columns], predicate.otherColumn ?? "")}</select></label>
+    </div>
+    <details class="predicate-more" ${predicate.values || predicate.valueType || predicate.caseSensitive !== undefined || predicate.decimalPlaces !== undefined || predicate.relativeDate ? "open" : ""}>
+      <summary>Value options</summary><div class="predicate-fields">
+        <label>List literals, one per line <textarea data-field="values">${escape(predicate.values?.join("\n") ?? "")}</textarea></label>
+        <label>Literal type <select data-field="valueType">${options(["", "string", "number", "boolean"], predicate.valueType ?? "")}</select></label>
+        <label>Case policy (blank inherits) <select data-field="caseSensitive">${options(["", "true", "false"], predicate.caseSensitive === undefined ? "" : String(predicate.caseSensitive))}</select></label>
+        <label>Max decimal places <input type="number" min="0" max="15" data-field="decimalPlaces" value="${escape(predicate.decimalPlaces)}"></label>
+        <label>Relative date anchor <select data-field="dateAnchor">${options(["", "today", "now"], predicate.relativeDate?.anchor ?? "")}</select></label>
+        <label>Relative days <input type="number" data-field="relativeDays" value="${escape(predicate.relativeDate?.days ?? 0)}"></label>
+      </div></details>
     ${controls}</fieldset>`;
 }
 export function editPredicateTree(button: HTMLElement, columns: string[]): void {
