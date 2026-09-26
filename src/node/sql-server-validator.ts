@@ -10,6 +10,9 @@ import { validateCsv } from "../core/contract";
 import type { CountExpectation, CsvContract, SqlServerIntegratedConnection, SqlServerObjectInfo, ValidationIssue, ValidationResult } from "../core/model";
 import { generateSqlServerValidation, sqlIdentifier } from "../core/sql-server-generator";
 import { canonicalSqlServerColumn, physicalSqlServerColumn, type ResolvedSqlServerTarget } from "../core/sql-server-targets";
+import { OrderedRuleEvaluator, orderedColumns, compareOrderedRows } from "../core/ordered-rule";
+import { RowSortStore } from "./row-sort-store";
+import { GroupTestRunner, type GroupSummary } from "./group-runner";
 
 export interface SqlServerValidationOptions {
   preview?: PreviewOptions;
@@ -114,6 +117,9 @@ export class SqlServerValidationSession {
   private async validateResolved(contract: CsvContract, target: ResolvedSqlServerTarget, options: SqlServerValidationOptions): Promise<ValidationResult> {
     if (target.baseline) contract = { ...contract, baseline: target.baseline };
     if (options.preview) validatePreviewOptions(options.preview);
+    if (options.preview && (contract.groupTests?.length || contract.orderedRules?.length)) {
+      throw new Error("SQL preview does not support grouped or ordered rules; run the complete contract.");
+    }
     const handle = await this.getPool(target.connection, target.integratedConnection);
     const metadata = await readMetadata(handle, target, options.signal);
     if (metadata.length === 0) throw new Error(`SQL Server object ${target.schema}.${target.table} does not exist or is not visible to this connection.`);
@@ -128,8 +134,12 @@ export class SqlServerValidationSession {
     const present = new Set(metadata.map((column) => column.name));
     const mustFallback = generated.warnings.length > 0 || declared.some((column) => !present.has(physicalSqlServerColumn(target, column)));
     const scopeValue = resolveScopeValue(target, options.scopeValue);
+    const sequence = contract.orderedRules?.length ? await validateSqlSequences(handle, contract, target, metadata, scopeValue,
+      options.maxIssues ?? 1000, options.signal) : undefined;
+    const grouped = contract.groupTests?.length ? await validateSqlGroups(handle, contract, target, metadata, scopeValue,
+      options.maxIssues ?? 1000, options.signal) : undefined;
     if (mustFallback || options.preview) {
-      const fallback = await validateClientSide(handle, { ...contract, baseline: undefined }, target, metadata, scopeValue, options.signal, options.preview);
+      const fallback = await validateClientSide(handle, { ...contract, baseline: undefined, orderedRules: undefined, groupTests: undefined }, target, metadata, scopeValue, options.signal, options.preview);
       const reason = options.preview ? "Explicit preview uses the shared predicate engine to collect bounded examples." : generated.warnings.length
         ? generated.warnings.join(" ")
         : "One or more declared columns are absent, so rules that reference optional columns must preserve CSV-compatible behavior.";
@@ -145,9 +155,18 @@ export class SqlServerValidationSession {
         warningCount: fallback.warningCount + 1,
         issues: [fallbackNotice, ...fallback.issues]
       };
-      return mergeMetadataIssues(withNotice, metadataIssues, metadata.length, options.maxIssues ?? 1000);
+      return mergeGroups(mergeSequence(mergeMetadataIssues(withNotice, metadataIssues, metadata.length, options.maxIssues ?? 1000), sequence, options.maxIssues ?? 1000), grouped, options.maxIssues ?? 1000);
     }
 
+    if (generated.rules.length === 0) {
+      const rowCount = await readRowCount(handle, target, scopeValue, options.signal);
+      const errors = metadataIssues.filter(issue => issue.severity !== "warning").length;
+      const warnings = metadataIssues.length - errors;
+      return mergeGroups(mergeSequence({ valid: errors === 0, rowCount, columnCount: metadata.length,
+        testCount: contractTestCount(contract), issueCount: metadataIssues.length, errorCount: errors,
+        warningCount: warnings, truncated: metadataIssues.length > (options.maxIssues ?? 1000),
+        issues: metadataIssues.slice(0, options.maxIssues ?? 1000) }, sequence, options.maxIssues ?? 1000), grouped, options.maxIssues ?? 1000);
+    }
     const request = handle.pool.request();
     bindScope(request, handle.api, target, scopeValue);
     const executed = await queryWithCancellation(request, generated.sql, options.signal);
@@ -175,7 +194,7 @@ export class SqlServerValidationSession {
     }
     const rowCount = await readRowCount(handle, target, scopeValue, options.signal);
     const issueCount = errorCount + warningCount;
-    return {
+    return mergeGroups(mergeSequence({
       valid: errorCount === 0,
       ruleOutcomes: summaries.filter(s => s.SelectedCount != null).map(s => {
         const selected = Number(s.SelectedCount), failed = Number(s.FailureCount);
@@ -190,7 +209,7 @@ export class SqlServerValidationSession {
       warningCount,
       truncated: issueCount > issues.length,
       issues
-    };
+    }, sequence, options.maxIssues ?? 1000), grouped, options.maxIssues ?? 1000);
   }
 
   public async listObjects(profile: string): Promise<SqlServerObjectInfo[]> {
@@ -324,6 +343,108 @@ function contractTestCount(contract: CsvContract): number {
   return Object.keys(contract.schema.columns).length + (contract.rowTests?.length ?? 0) +
     (contract.rules?.length ?? 0) + (contract.groupRules?.length ?? 0) +
     (contract.sqlServer?.conditionalRules?.length ?? 0);
+}
+
+interface SequenceSummary { issues: ValidationIssue[]; issueCount: number; ruleOutcomes: NonNullable<ValidationResult["ruleOutcomes"]> }
+
+function mergeSequence(result: ValidationResult, summary: SequenceSummary | undefined, maximum: number): ValidationResult {
+  if (!summary) return result;
+  const issues = [...result.issues, ...summary.issues].slice(0, maximum);
+  return { ...result, valid: result.valid && summary.issueCount === 0,
+    testCount: result.testCount + summary.ruleOutcomes.length,
+    ruleOutcomes: [...(result.ruleOutcomes ?? []), ...summary.ruleOutcomes],
+    issueCount: result.issueCount + summary.issueCount,
+    errorCount: result.errorCount + summary.issueCount,
+    truncated: result.truncated || result.issueCount + summary.issueCount > issues.length, issues };
+}
+
+function mergeGroups(result: ValidationResult, summaries: GroupSummary[] | undefined, maximum: number): ValidationResult {
+  if (!summaries) return result;
+  for (const summary of summaries) {
+    const issues = [...result.issues, ...summary.issues].slice(0, maximum);
+    result = { ...result, valid: result.valid && summary.errorCount === 0,
+      testCount: result.testCount + summary.testCount,
+      ruleOutcomes: [...(result.ruleOutcomes ?? []), ...summary.ruleOutcomes],
+      groupOutcomes: [...(result.groupOutcomes ?? []), { id: summary.groupCounts[0].id,
+        groups: summary.groupCounts[0].count, passed: summary.passedGroups, failed: summary.failedGroups },
+        ...summary.nestedGroupOutcomes],
+      issueCount: result.issueCount + summary.issueCount,
+      errorCount: result.errorCount + summary.errorCount,
+      warningCount: result.warningCount + summary.warningCount,
+      truncated: result.truncated || result.issueCount + summary.issueCount > issues.length, issues };
+  }
+  return result;
+}
+
+async function validateSqlGroups(handle: SqlPoolHandle, contract: CsvContract, target: ResolvedSqlServerTarget,
+  metadata: MetadataRow[], scopeValue: string | undefined, maximum: number, signal?: AbortSignal): Promise<GroupSummary[]> {
+  const headers = [...new Set(metadata.map(m => canonicalSqlServerColumn(target, m.name)))];
+  const projection = headers.map(c => `CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, c))}) AS ${sqlIdentifier(c)}`).join(", ");
+  const scope = target.scope ? `WHERE CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, target.scope.column))}) = CONVERT(nvarchar(max), @${target.scope.parameter})` : "";
+  const runners = (contract.groupTests ?? []).map(group => new GroupTestRunner(group, headers, contract.csv ?? {},
+    group.resolvedSource ?? "<sql-contract>"));
+  try {
+    const batch = 2000;
+    const locator = contract.sqlServer?.rowLocator;
+    if (!locator?.length) throw new Error("Grouped SQL validation requires sqlServer.rowLocator for bounded ordered reads.");
+    const order = [...locator, ...headers.filter(c => !locator.includes(c))]
+      .map(c => `CONVERT(nvarchar(4000), t.${sqlIdentifier(physicalSqlServerColumn(target, c))}) COLLATE Latin1_General_100_BIN2`).join(", ");
+    for (let offset = 0; ; offset += batch) {
+      signal?.throwIfAborted();
+      const request = handle.pool.request();
+      bindScope(request, handle.api, target, scopeValue);
+      const rows = await queryWithCancellation<Record<string, string | null>>(request,
+        `SELECT ${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope} ORDER BY ${order} OFFSET ${offset} ROWS FETCH NEXT ${batch} ROWS ONLY;`, signal);
+      rows.recordset.forEach((record, index) => runners.forEach(runner => runner.add(offset + index + 1,
+        headers.map(h => record[h] == null ? "" : String(record[h])))));
+      if (rows.recordset.length < batch) break;
+    }
+    return await Promise.all(runners.map(runner => runner.finish(maximum)));
+  } finally { runners.forEach(runner => runner.dispose()); }
+}
+
+async function validateSqlSequences(handle: SqlPoolHandle, contract: CsvContract, target: ResolvedSqlServerTarget,
+  metadata: MetadataRow[], scopeValue: string | undefined, maximum: number, signal?: AbortSignal): Promise<SequenceSummary> {
+  const issues: ValidationIssue[] = [];
+  let issueCount = 0;
+  const add = (issue: ValidationIssue): void => { issueCount++; if (issues.length < maximum) issues.push(issue); };
+  const present = new Set(metadata.map(m => m.name));
+  const outcomes: NonNullable<ValidationResult["ruleOutcomes"]> = [];
+  for (const rule of contract.orderedRules ?? []) {
+    const columns = orderedColumns(rule);
+    const missing = columns.filter(c => !present.has(physicalSqlServerColumn(target, c)));
+    if (missing.length) {
+      for (const column of missing) add({ level: "column", code: "SEQUENCE_COLUMN_MISSING", testId: rule.id,
+        column, message: `Sequence ${rule.id} requires SQL column ${physicalSqlServerColumn(target, column)}.` });
+      continue;
+    }
+    const store = new RowSortStore((a, b) => compareOrderedRows(a, b, rule, contract.csv ?? {}));
+    try {
+      const projection = columns.map(c => `CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, c))}) AS ${sqlIdentifier(c)}`).join(", ");
+      const order = [...(rule.partitionBy ?? []).map(c => `t.${sqlIdentifier(physicalSqlServerColumn(target, c))}`),
+        ...rule.orderBy.map(k => k.type === "date" ? `TRY_CONVERT(date, t.${sqlIdentifier(physicalSqlServerColumn(target, k.column))}, 111)` :
+          k.type === "number" ? `TRY_CONVERT(decimal(38, 10), t.${sqlIdentifier(physicalSqlServerColumn(target, k.column))})` :
+            `t.${sqlIdentifier(physicalSqlServerColumn(target, k.column))}`),
+        ...columns.map(c => `CONVERT(nvarchar(4000), t.${sqlIdentifier(physicalSqlServerColumn(target, c))}) COLLATE Latin1_General_100_BIN2`)].join(", ");
+      const scope = target.scope ? `WHERE CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, target.scope.column))}) = CONVERT(nvarchar(max), @${target.scope.parameter})` : "";
+      const batch = 2000;
+      for (let offset = 0; ; offset += batch) {
+        signal?.throwIfAborted();
+        const request = handle.pool.request();
+        bindScope(request, handle.api, target, scopeValue);
+        const result = await queryWithCancellation<Record<string, string | null>>(request,
+          `SELECT ${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope} ORDER BY ${order} OFFSET ${offset} ROWS FETCH NEXT ${batch} ROWS ONLY;`, signal);
+        result.recordset.forEach((record, index) => store.add({ row: offset + index + 1,
+          values: Object.fromEntries(columns.map(c => [c, record[c] == null ? "" : String(record[c])])) }));
+        if (result.recordset.length < batch) break;
+      }
+      const evaluator = new OrderedRuleEvaluator(rule, contract.csv ?? {}, add);
+      for await (const row of store.rows()) evaluator.add(row);
+      evaluator.finish();
+      outcomes.push(...evaluator.ruleOutcomes);
+    } finally { store.dispose(); }
+  }
+  return { issues, issueCount, ruleOutcomes: outcomes };
 }
 
 function resolveScopeValue(target: ResolvedSqlServerTarget, explicit?: string): string | undefined {

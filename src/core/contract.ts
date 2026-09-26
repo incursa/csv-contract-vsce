@@ -15,6 +15,7 @@ import type {
   ValidationResult
 } from "./model";
 import { createPredicateRuntime, evaluatePredicate, predicateColumns, predicateDescription } from "./predicate";
+import { OrderedRuleEvaluator, orderedChecks, orderedColumns, validateOrderedDefinition, compareOrderedRows } from "./ordered-rule";
 
 const defaults: Required<CsvOptions> = {
   delimiter: ",",
@@ -35,7 +36,30 @@ export function parseContract(text: string): CsvContract {
     throw new Error("The contract must declare version: 1 and schema.columns.");
   }
   if (!validateShape(value)) throw new Error(`Invalid contract: ${JSON.stringify(validateShape.errors)}`);
+  validateContractSemantics(value);
   return value;
+}
+
+function validateContractSemantics(contract: CsvContract, depth = 0): void {
+  if (depth > 4) throw new Error("Group contract nesting exceeds four levels.");
+  const declared = new Set(Object.keys(contract.schema.columns));
+  const ids = new Set<string>();
+  for (const rule of contract.orderedRules ?? []) {
+    validateOrderedDefinition(rule, declared);
+    for (const id of [rule.id, ...orderedChecks(rule).map(check => check.id)]) {
+      if (ids.has(id)) throw new Error(`Duplicate ordered rule id ${id}.`);
+      ids.add(id);
+    }
+  }
+  for (const group of contract.groupTests ?? []) {
+    if (ids.has(group.id)) throw new Error(`Duplicate group test id ${group.id}.`);
+    ids.add(group.id);
+    for (const column of group.groupBy) if (!declared.has(column)) throw new Error(`Group test ${group.id} references undeclared column ${column}.`);
+    if (group.contract) {
+      if (group.contract.targets?.length || group.contract.sqlServer) throw new Error(`Child contract ${group.id} must inherit the parent target.`);
+      validateContractSemantics(group.contract, depth + 1);
+    }
+  }
 }
 
 export function serializeContract(contract: CsvContract, schemaPath = "./schemas/csvtest.schema.json"): string {
@@ -111,6 +135,8 @@ export function validateCsv(contract: CsvContract, csvText: string, nativeDates?
 function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates?: Record<string, (string | undefined)[]>, preview?: PreviewOptions): ValidationResult {
   const examples: NonNullable<ValidationResult["examples"]> = [];
   const ruleOutcomes: NonNullable<ValidationResult["ruleOutcomes"]> = [];
+  const groupOutcomes: NonNullable<ValidationResult["groupOutcomes"]> = [];
+  let childTestCount = 0;
   const options = { ...defaults, ...(contract.csv ?? {}) };
   const parsed = parseCsv(csvText, options, preview?.rowLimit);
   const issues: ValidationIssue[] = parsed.parseErrors.map((message) => ({ level: "file", code: "CSV_PARSE", message }));
@@ -342,17 +368,92 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
     }
   }
 
+  for (const rule of contract.orderedRules ?? []) {
+    const missing = orderedColumns(rule).filter(column => !headerIndex.has(column));
+    if (missing.length) {
+      for (const column of missing) issues.push({ level: "column", code: "SEQUENCE_COLUMN_MISSING", testId: rule.id,
+        column, message: `Sequence ${rule.id} requires column ${column}.` });
+      continue;
+    }
+    const evaluator = new OrderedRuleEvaluator(rule, options, issue => issues.push(issue));
+    const rows = parsed.rows.map((fields, index) => ({ row: parsed.sourceRowNumbers[index],
+      values: Object.fromEntries(orderedColumns(rule).map(column => [column, fields[headerIndex.get(column)!] ?? ""])) }));
+    rows.sort((a, b) => compareOrderedRows(a, b, rule, options));
+    for (const row of rows) evaluator.add(row);
+    evaluator.finish();
+    ruleOutcomes.push(...evaluator.ruleOutcomes);
+  }
+
+  for (const groupTest of contract.groupTests ?? []) {
+    if (!groupTest.resolvedContract && !groupTest.contract) {
+      issues.push({ level: "file", code: "GROUP_REF_UNRESOLVED", testId: groupTest.id,
+        message: `Group test ${groupTest.id} needs its referenced child contract resolved before evaluation.` });
+      continue;
+    }
+    const missing = groupTest.groupBy.filter(column => !headerIndex.has(column));
+    if (missing.length) {
+      for (const column of missing) issues.push({ level: "column", code: "GROUP_COLUMN_MISSING", testId: groupTest.id,
+        column, message: `Group test ${groupTest.id} requires column ${column}.` });
+      continue;
+    }
+    const groups = new Map<string, number[]>();
+    parsed.rows.forEach((row, index) => {
+      const key = JSON.stringify(groupTest.groupBy.map(column => normalized(row[headerIndex.get(column)!] ?? "", options)));
+      const entries = groups.get(key) ?? [];
+      entries.push(index);
+      groups.set(key, entries);
+    });
+    if (groupTest.groupBy.length === 0 && groups.size === 0) groups.set("[]", []);
+    const groupOutcome = { id: groupTest.id, groups: groups.size, passed: 0, failed: 0 };
+    groupOutcomes.push(groupOutcome);
+    let groupChildTestCount = 0;
+    for (const [key, indexes] of groups) {
+      const labels = Object.fromEntries(groupTest.groupBy.map((column, index) => [column,
+        indexes.length ? parsed.rows[indexes[0]][headerIndex.get(column)!] ?? "" : JSON.parse(key)[index]]));
+      const definition = (groupTest.resolvedContract ?? groupTest.contract)!;
+      const child = { ...definition, csv: { ...definition.csv, delimiter: ",", quote: "\"" } };
+      const childDates = nativeDates ? Object.fromEntries(Object.entries(nativeDates).map(([column, values]) =>
+        [column, indexes.map(index => values[index])])) : undefined;
+      const childResult = validateCsv(child, Papa.unparse({ fields: parsed.headers,
+        data: indexes.map(index => parsed.rows[index]) }), childDates, undefined, preview);
+      groupChildTestCount = Math.max(groupChildTestCount, childResult.testCount);
+      if (childResult.valid) groupOutcome.passed++;
+      else groupOutcome.failed++;
+      issues.push(...childResult.issues.map(issue => ({ ...issue, group: { ...labels, ...issue.group },
+        row: issue.row === undefined ? undefined : parsed.sourceRowNumbers[indexes[issue.row - 2]] ?? issue.row,
+        relatedRows: issue.relatedRows?.map(row => parsed.sourceRowNumbers[indexes[row - 2]] ?? row),
+        testId: issue.testId ? `${groupTest.id}/${issue.testId}` : groupTest.id,
+        message: `${groupTest.id} ${JSON.stringify(labels)}: ${issue.message}` })));
+      for (const outcome of childResult.ruleOutcomes ?? []) {
+        const id = `${groupTest.id}/${outcome.id}`;
+        const aggregate = ruleOutcomes.find(item => item.id === id);
+        if (aggregate) { aggregate.selected += outcome.selected; aggregate.passed += outcome.passed; aggregate.failed += outcome.failed; }
+        else ruleOutcomes.push({ ...outcome, id });
+      }
+    }
+    childTestCount += groupChildTestCount;
+    const count = groups.size;
+    for (const [kind, expected] of Object.entries(groupTest.groupCount ?? {})) {
+      if (kind === "exact" && count === expected || kind === "min" && count >= expected || kind === "max" && count <= expected) continue;
+      issues.push({ level: "file", code: "GROUP_COUNT", testId: groupTest.id,
+        message: `Group test ${groupTest.id} found ${count} groups; expected ${kind} ${expected}.`, actual: count, expected });
+    }
+  }
+
   const errorCount = issues.filter((issue) => issue.severity !== "warning").length;
   const warningCount = issues.length - errorCount;
 
   return {
     valid: errorCount === 0,
     ruleOutcomes,
+    ...(groupOutcomes.length ? { groupOutcomes } : {}),
     ...(preview ? { examples } : {}),
     rowCount: parsed.rows.length,
     columnCount: parsed.headers.length,
     testCount: Object.keys(contract.schema.columns).length + (contract.rowTests?.length ?? 0) +
-      (contract.rules?.length ?? 0) + (contract.groupRules?.length ?? 0),
+      (contract.rules?.length ?? 0) + (contract.groupRules?.length ?? 0) +
+      (contract.orderedRules ?? []).reduce((count, rule) => count + orderedChecks(rule).length, 0) +
+      (contract.groupTests?.length ?? 0) + childTestCount,
     issueCount: issues.length,
     errorCount,
     warningCount,

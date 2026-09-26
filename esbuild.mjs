@@ -77,6 +77,7 @@ const builds = [
       "test/suite-acceptance.test.ts",
       "test/generator.test.ts",
       "test/streaming.test.ts",
+      "test/grouped-contract.test.ts",
       "test/outline-generator.test.ts",
       "test/targets.test.ts",
       "test/manifest.test.ts",

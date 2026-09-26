@@ -340,11 +340,87 @@
         "$ref": "#/$defs/groupRule"
       }
     },
+    "groupTests": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/groupTest" }
+    },
+    "orderedRules": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/orderedRule" }
+    },
     "sqlServer": {
       "$ref": "#/$defs/sqlServer"
     }
   },
   "$defs": {
+    "groupTest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "groupBy"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "groupBy": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "groupCount": { "$ref": "#/$defs/count" },
+        "ref": { "type": "string", "minLength": 1 },
+        "contract": { "$ref": "#" }
+      },
+      "oneOf": [{ "required": ["ref"] }, { "required": ["contract"] }]
+    },
+    "orderedCheck": {
+      "type": "object",
+      "required": ["id", "message"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    },
+    "orderedRule": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "orderBy", "duplicateOrder", "invalidOrder", "event", "initial", "transitions", "invalidTransition", "finalStates", "invalidFinal"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "partitionBy": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "orderBy": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false,
+          "required": ["column", "type"], "properties": {
+            "column": { "type": "string", "minLength": 1 }, "type": { "enum": ["date", "number", "string"] },
+            "format": { "enum": ["yyyy/MM/dd", "iso"] },
+            "integer": { "type": "boolean" }, "minimum": { "type": "number" }
+          } } },
+        "duplicateOrder": { "$ref": "#/$defs/orderedCheck" },
+        "invalidOrder": { "$ref": "#/$defs/orderedCheck" },
+        "event": { "type": "object", "additionalProperties": false, "required": ["actionColumn", "mappings", "unmapped"],
+          "properties": {
+            "actionColumn": { "type": "string", "minLength": 1 },
+            "reasonColumn": { "type": "string", "minLength": 1 },
+            "reservedReasonCodes": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+            "unmapped": { "$ref": "#/$defs/orderedCheck" },
+            "mappings": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false,
+              "required": ["event", "actionCodes"], "properties": {
+                "event": { "type": "string", "minLength": 1 },
+                "actionCodes": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+                "reasonCodes": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+                "reasonPolicy": { "const": "any" }
+              } } }
+          } },
+        "initial": { "allOf": [{ "$ref": "#/$defs/orderedCheck" }, { "type": "object", "required": ["state", "event"],
+          "properties": { "state": { "type": "string" }, "event": { "type": "string" } } }] },
+        "transitions": { "type": "array", "minItems": 1, "items": { "allOf": [{ "$ref": "#/$defs/orderedCheck" },
+          { "type": "object", "required": ["from", "event", "to"], "properties": {
+            "from": { "type": "string" }, "event": { "type": "string" }, "to": { "type": "string" } } }] } },
+        "invalidTransition": { "$ref": "#/$defs/orderedCheck" },
+        "neutralEvents": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "finalStates": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } },
+        "invalidFinal": { "$ref": "#/$defs/orderedCheck" },
+        "cardinality": { "type": "array", "items": { "allOf": [{ "$ref": "#/$defs/orderedCheck" },
+          { "type": "object", "required": ["event"], "properties": { "event": { "type": "string" },
+            "exact": { "type": "integer", "minimum": 0 }, "min": { "type": "integer", "minimum": 0 },
+            "max": { "type": "integer", "minimum": 0 } } }] } },
+        "adjacency": { "type": "array", "items": { "allOf": [{ "$ref": "#/$defs/orderedCheck" },
+          { "type": "object", "required": ["event"], "properties": {
+            "event": { "type": "string" }, "preceding": { "type": "string" }, "following": { "type": "string" },
+            "allowFinal": { "type": "boolean" },
+            "dateRelation": { "enum": ["nextDay", "later", "sameDay"] } } }] } }
+      }
+    },
     "target": {
       "type": "object",
       "additionalProperties": false,

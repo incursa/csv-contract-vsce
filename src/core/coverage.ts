@@ -5,7 +5,7 @@ import type { CsvContract } from "./model";
 export function coverageDiagnostics(contract: CsvContract): string[] {
   const diagnostics: string[] = [];
   const rules = [...(contract.rules ?? []), ...(contract.sqlServer?.conditionalRules ?? [])];
-  if (!rules.length && !contract.rowTests?.length && !contract.groupRules?.length && !contract.identity && !contract.schema.rowCount && !Object.values(contract.schema.columns).some(c => c.constraints && Object.values(c.constraints).some(Boolean))) diagnostics.push("No substantive data validations; only schema presence is checked.");
+  if (!rules.length && !contract.rowTests?.length && !contract.groupRules?.length && !contract.groupTests?.length && !contract.orderedRules?.length && !contract.identity && !contract.schema.rowCount && !Object.values(contract.schema.columns).some(c => c.constraints && Object.values(c.constraints).some(Boolean))) diagnostics.push("No substantive data validations; only schema presence is checked.");
   if (!contract.targets?.length && !contract.sqlServer?.table && !contract.sqlServer?.targets?.length) diagnostics.push("No execution targets configured.");
   const seen = new Map<string, string>();
   for (const rule of rules) {

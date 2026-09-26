@@ -19,6 +19,10 @@ import { createPredicateRuntime, evaluatePredicate, predicateColumns, predicateD
 import { readCsvRecords, type CsvPhysicalOptions } from "./csv-stream";
 import { PartitionedGroupStore, type GroupValues } from "./group-store";
 import { PartitionedUniquenessStore, type DuplicateValue } from "./uniqueness-store";
+import { OrderedRuleEvaluator, orderedChecks, orderedColumns, compareOrderedRows } from "../core/ordered-rule";
+import { RowSortStore } from "./row-sort-store";
+import { GroupTestRunner } from "./group-runner";
+import { resolveGroupContracts } from "../core/group-contracts";
 
 const csvDefaults: Required<CsvOptions> = {
   delimiter: ",",
@@ -132,6 +136,8 @@ interface ContractState {
   rowTests: PreparedRowTest[];
   rules: PreparedRule[];
   groupRules: PreparedGroupRule[];
+  sequenceStores: Array<{ store: RowSortStore; evaluator: OrderedRuleEvaluator; columns: string[] }>;
+  groupRunners: GroupTestRunner[];
   identity?: UniqueCheck;
   rowCount: number;
   initialized: boolean;
@@ -197,6 +203,8 @@ function createState(input: ContractRunInput, maxIssues: number): ContractState 
     rowTests: [],
     rules: [],
     groupRules: [],
+    sequenceStores: [],
+    groupRunners: [],
     rowCount: 0,
     initialized: false,
     nullValues: new Set(options.nullValues.map((value) => normalize(value, options)))
@@ -379,6 +387,9 @@ function initializeState(
 function processRow(state: ContractState, fields: string[], recordNumber: number,
   uniqueness?: PartitionedUniquenessStore, groups?: PartitionedGroupStore): void {
   state.rowCount += 1;
+  state.groupRunners.forEach(runner => runner.add(recordNumber, fields));
+  for (const sequence of state.sequenceStores) sequence.store.add({ row: recordNumber,
+    values: Object.fromEntries(sequence.columns.map(column => [column, fields[state.headerIndex.get(column)!] ?? ""])) });
   state.observation?.add(fields);
   if (!state.options.allowRaggedRows && fields.length !== state.headers.length) {
     state.collector.add({
@@ -543,7 +554,8 @@ function finalizeState(state: ContractState): ContractRunOutput {
       rowCount: state.rowCount,
       columnCount: state.headers.length,
       testCount: Object.keys(state.input.contract.schema.columns).length + (state.input.contract.rowTests?.length ?? 0) +
-        (state.input.contract.rules?.length ?? 0) + (state.input.contract.groupRules?.length ?? 0),
+        (state.input.contract.rules?.length ?? 0) + (state.input.contract.groupRules?.length ?? 0) +
+        (state.input.contract.orderedRules ?? []).reduce((count, rule) => count + orderedChecks(rule).length, 0),
       issueCount: state.collector.total,
       errorCount: state.collector.errors,
       warningCount: state.collector.warnings,
@@ -591,11 +603,33 @@ async function validateGroup(
         foundHeader = true;
         states.forEach((state) => initializeState(state, record.fields, getNextTarget, uniqueChecks,
           getNextGroup, groupChecks));
+        for (const state of states) for (const rule of state.input.contract.orderedRules ?? []) {
+          const columns = orderedColumns(rule);
+          const missing = columns.filter(column => !state.headerIndex.has(column));
+          if (missing.length) {
+            for (const column of missing) state.collector.add({ level: "column", code: "SEQUENCE_COLUMN_MISSING",
+              testId: rule.id, column, message: `Sequence ${rule.id} requires column ${column}.` });
+            continue;
+          }
+          state.sequenceStores.push({ columns,
+            store: new RowSortStore((a, b) => compareOrderedRows(a, b, rule, state.options), options.tempDirectory),
+            evaluator: new OrderedRuleEvaluator(rule, state.options, issue => state.collector.add(issue)) });
+        }
         if (uniqueChecks.size > 0) {
           uniqueness = new PartitionedUniquenessStore(options.tempDirectory, options.uniquePartitions);
         }
         if (groupChecks.size > 0) {
           groups = new PartitionedGroupStore(options.tempDirectory, options.uniquePartitions);
+        }
+        for (const state of states) for (const groupTest of state.input.contract.groupTests ?? []) {
+          const missing = groupTest.groupBy.filter(column => !state.headerIndex.has(column));
+          if (missing.length) {
+            for (const column of missing) state.collector.add({ level: "column", code: "GROUP_COLUMN_MISSING",
+              testId: groupTest.id, column, message: `Group test ${groupTest.id} requires column ${column}.` });
+            continue;
+          }
+          state.groupRunners.push(new GroupTestRunner(groupTest, state.headers, state.options,
+            state.input.spec, options.tempDirectory));
         }
         continue;
       }
@@ -605,14 +639,47 @@ async function validateGroup(
       states.forEach((state) => {
         initializeState(state, [], getNextTarget, uniqueChecks, getNextGroup, groupChecks);
         state.collector.add({ level: "file", code: "CSV_EMPTY", message: "CSV is empty." });
+        for (const groupTest of state.input.contract.groupTests ?? []) {
+          if (groupTest.groupBy.length) {
+            for (const column of groupTest.groupBy) state.collector.add({ level: "column", code: "GROUP_COLUMN_MISSING",
+              testId: groupTest.id, column, message: `Group test ${groupTest.id} requires column ${column}.` });
+          } else state.groupRunners.push(new GroupTestRunner(groupTest, [], state.options, state.input.spec, options.tempDirectory));
+        }
       });
     }
     await uniqueness?.findDuplicates((duplicate) => addDuplicateIssue(duplicate, uniqueChecks));
     await groups?.readGroups((group) => addGroupIssues(group, groupChecks));
-    return states.map(finalizeState);
+    for (const state of states) for (const sequence of state.sequenceStores) {
+      for await (const row of sequence.store.rows()) sequence.evaluator.add(row);
+      sequence.evaluator.finish();
+    }
+    const outputs = states.map(state => {
+      const output = finalizeState(state);
+      output.result.ruleOutcomes?.push(...state.sequenceStores.flatMap(sequence => sequence.evaluator.ruleOutcomes));
+      return output;
+    });
+    for (let index = 0; index < states.length; index++) for (const runner of states[index].groupRunners) {
+      const summary = await runner.finish(options.maxIssues);
+      const result = outputs[index].result;
+      result.issueCount += summary.issueCount;
+      result.errorCount += summary.errorCount;
+      result.warningCount += summary.warningCount;
+      result.testCount += summary.testCount;
+      result.valid = result.errorCount === 0;
+      result.ruleOutcomes?.push(...summary.ruleOutcomes);
+      result.groupOutcomes ??= [];
+      result.groupOutcomes.push({ id: summary.groupCounts[0].id, groups: summary.groupCounts[0].count,
+        passed: summary.passedGroups, failed: summary.failedGroups });
+      result.groupOutcomes.push(...summary.nestedGroupOutcomes);
+      result.issues.push(...summary.issues.slice(0, Math.max(0, options.maxIssues - result.issues.length)));
+      result.truncated = result.issueCount > result.issues.length;
+    }
+    return outputs;
   } finally {
     uniqueness?.dispose();
     groups?.dispose();
+    states.forEach(state => state.sequenceStores.forEach(sequence => sequence.store.dispose()));
+    states.forEach(state => state.groupRunners.forEach(runner => runner.dispose()));
   }
 }
 
@@ -623,7 +690,8 @@ export async function validateCsvFile(
 ): Promise<StreamingValidationOutput> {
   if (inputs.length === 0) throw new Error("At least one contract is required.");
   const evaluatedAt = options.evaluatedAt ?? new Date().toISOString();
-  inputs = await Promise.all(inputs.map(async input => ({ ...input, contract: resolveEvaluation(await resolveBaseline(input.contract, input.spec, fileSuiteIO), evaluatedAt) })));
+  inputs = await Promise.all(inputs.map(async input => ({ ...input, contract: resolveEvaluation(await resolveBaseline(
+    await resolveGroupContracts(input.contract, input.spec, fileSuiteIO), input.spec, fileSuiteIO), evaluatedAt) })));
   const resolved = {
     ...options,
     maxIssues: options.maxIssues ?? 1000,

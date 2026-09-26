@@ -131,6 +131,34 @@ export interface GroupRule {
   require: GroupValueRequirement;
 }
 
+export interface OrderedCheck {
+  id: string;
+  message: string;
+}
+
+export interface OrderedRule {
+  id: string;
+  partitionBy?: string[];
+  orderBy: Array<{ column: string; type: "date" | "number" | "string"; format?: "yyyy/MM/dd" | "iso"; integer?: boolean; minimum?: number }>;
+  duplicateOrder: OrderedCheck;
+  invalidOrder: OrderedCheck;
+  event: {
+    actionColumn: string;
+    reasonColumn?: string;
+    reservedReasonCodes?: string[];
+    mappings: Array<{ event: string; actionCodes: string[]; reasonCodes?: string[]; reasonPolicy?: "any" }>;
+    unmapped: OrderedCheck;
+  };
+  initial: { state: string; event: string } & OrderedCheck;
+  transitions: Array<{ from: string; event: string; to: string } & OrderedCheck>;
+  invalidTransition: OrderedCheck;
+  neutralEvents?: string[];
+  finalStates: string[];
+  invalidFinal: OrderedCheck;
+  cardinality?: Array<{ event: string; exact?: number; min?: number; max?: number } & OrderedCheck>;
+  adjacency?: Array<{ event: string; preceding?: string; following?: string; allowFinal?: boolean; dateRelation?: "nextDay" | "later" | "sameDay" } & OrderedCheck>;
+}
+
 export interface SqlConditionalRule {
   id: string;
   name?: string;
@@ -242,7 +270,20 @@ export interface CsvContract {
   rowTests?: RowTest[];
   rules?: ConditionalRule[];
   groupRules?: GroupRule[];
+  orderedRules?: OrderedRule[];
+  groupTests?: GroupTest[];
   sqlServer?: SqlServerTarget;
+}
+
+export interface GroupTest {
+  id: string;
+  groupBy: string[];
+  groupCount?: CountExpectation;
+  ref?: string;
+  contract?: CsvContract;
+  /** Runtime resolved child and origin, never serialized. */
+  resolvedContract?: CsvContract;
+  resolvedSource?: string;
 }
 
 export interface ParsedCsv {
@@ -260,7 +301,9 @@ export interface ValidationIssue {
   message: string;
   column?: string;
   row?: number;
+  relatedRows?: number[];
   testId?: string;
+  group?: Record<string, string>;
   actual?: string | number;
   expected?: string | number;
   severity?: RuleSeverity;
@@ -271,6 +314,7 @@ export interface ValidationResult {
   examples?: { id: string; outcome: "passed" | "failed"; row: number; values: Record<string, string> }[];
   evaluatedAt?: string;
   ruleOutcomes?: { id: string; selected: number; passed: number; failed: number }[];
+  groupOutcomes?: { id: string; groups: number; passed: number; failed: number }[];
   valid: boolean;
   rowCount: number;
   columnCount: number;

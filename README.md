@@ -53,6 +53,7 @@ The aggregate result view keeps diagnostics redacted and bounded. Open complete 
 - Exact cell values for selected rows
 - Conditional row rules with nested predicates, cross-column checks, numeric comparisons, and warning severity
 - Cross-row group completeness rules, such as requiring every employee/tax-area group to contain a full balance family
+- Child contracts applied to each group or the whole input, with typed ordered event checks and bounded findings
 - Exact header order when the receiving system requires a fixed layout
 - Raw string values such as identifiers with leading zeroes
 

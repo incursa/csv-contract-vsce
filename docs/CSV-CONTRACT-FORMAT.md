@@ -178,11 +178,29 @@ The streaming validator does not decide a group when it sees its first record be
 groupRules:
   - id: city-tax-family
     when: { column: BalanceName, operator: contains, value: City }
-    groupBy: [PersonNumber, State, County, City]
+    groupBy: [EntityId, State, County, City]
     require:
       column: BalanceName
       contains: [Gross, Reduced Subject Withholdable, Withheld]
 ```
+
+## Child contracts for each group
+
+`groupTests` applies a version-1 child contract to each group selected by `groupBy`. Use `groupBy: []` to validate the entire input as one group, including an empty input. The child can be inline as `contract` or stored in a separate `.csvtest.yaml` file through `ref`. A reference resolves relative to its containing contract. The child inherits the input, SQL connection, scope, and column mapping; it cannot declare independent targets. Nesting is limited to four levels and reference cycles are rejected.
+
+```yaml
+groupTests:
+  - id: events_by_entity
+    groupBy: [EntityId]
+    groupCount: { min: 1 }
+    ref: ./event-group.csvtest.yaml
+```
+
+The child can use `schema.rowCount`, `rowTests`, `rules`, `groupRules`, and `orderedRules`. An ordered rule declares `orderBy` keys with `type: date`, `number`, or `string`; date keys can use `format: yyyy/MM/dd` or `iso`, and numeric keys can require `integer: true` and a `minimum`. Each check has a stable `id` and `message`. `duplicateOrder` reports tied keys; `invalidOrder` reports values that cannot be parsed. Event mappings, transitions, cardinality, final states, and adjacency checks operate within one group. Mappings are reviewed in declaration order; an unmatched action and reason pair is a finding.
+
+When `reasonColumn` is declared, each event mapping must list `reasonCodes` or explicitly set `reasonPolicy: any`. `reservedReasonCodes` prevents a broad mapping from consuming a reason code reserved for a specific event pair. Unknown combinations fail the `unmapped` check.
+
+Group findings carry the group key, child rule ID, source row, related rows when applicable, and actual values in the normal results JSON and Workbench. Failure details obey the usual `maxIssues` limit. CSV groups are sorted in temporary runs, so a large group does not need to fit in memory. SQL validation reads bounded pages from the existing target session and requires `sqlServer.rowLocator` to page predictably. Generated standalone SQL does not represent child or ordered rules; use normal `test` or `dbtest` execution for the complete contract.
 
 ## Exact header order
 

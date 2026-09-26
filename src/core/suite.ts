@@ -3,6 +3,7 @@ import { resolveEvaluation } from "./evaluation";
 import { planCrossCheck, type CrossCheck, type CrossExecutor } from "./cross-checks";
 import { isScalar, parseDocument, stringify, visit } from "yaml";
 import { parseContract } from "./contract";
+import { resolveGroupContracts } from "./group-contracts";
 import type { CsvContract, CsvTarget, SqlServerIntegratedConnection, ValidationResult } from "./model";
 import { resolveSqlServerTargets, type ResolvedSqlServerTarget } from "./sql-server-targets";
 import { generateSqlServerValidation } from "./sql-server-generator";
@@ -122,7 +123,8 @@ export async function loadSuite(source: string, io: SuiteIO, ancestors: string[]
   const canonical = await io.canonical?.(source) ?? source;
   if (ancestors.includes(canonical)) throw new Error(`Reference cycle: ${[...ancestors, canonical].join(" -> ")}`);
   const text = await io.read(source);
-  if (!isSuiteText(text)) return { id: source, source, isSuite: false, members: [{ id: source, source, contract: parseContract(text) }] };
+  if (!isSuiteText(text)) return { id: source, source, isSuite: false, members: [{ id: source, source,
+    contract: await resolveGroupContracts(parseContract(text), source, io) }] };
   const suite = parseSuite(text);
   const members: LoadedMember[] = [];
   for (const member of suite.members) {
@@ -142,7 +144,8 @@ export async function loadSuite(source: string, io: SuiteIO, ancestors: string[]
       const own = (value: SuiteConnection | undefined) => value?.connection !== undefined || value?.integratedConnection !== undefined;
       const connectionOrigins = contract.sqlServer?.targets?.map(target => own(target) ? "table override" : own(contract.sqlServer) ? "contract" : own(suite.defaults) ? "suite default" : "unconfigured")
         ?? (contract.sqlServer ? [own(contract.sqlServer) ? "contract" : own(suite.defaults) ? "suite default" : "unconfigured"] : []);
-      members.push({ id: member.id, source: location, contract: effectiveContract(contract, suite.defaults), connectionOrigins });
+      members.push({ id: member.id, source: location,
+        contract: await resolveGroupContracts(effectiveContract(contract, suite.defaults), location, io), connectionOrigins });
     } catch (error) {
       members.push({ id: member.id, source: location, error: errorDetails(error) });
     }
@@ -245,6 +248,9 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
 }
 
 export function generateSuiteSql(suite: LoadedSuite) {
+  for (const member of suite.members) if (member.contract?.groupTests?.length || member.contract?.orderedRules?.length) {
+    throw new Error(`Standalone SQL generation cannot include grouped or ordered rules in ${member.id}; run dbtest.`);
+  }
   const batches = suite.members.flatMap((member) => {
     if (member.error || !member.contract) throw new Error(`${suite.id}/${member.id}: ${member.error ?? "Missing contract"}`);
     const targets = resolveSqlServerTargets(member.contract, false);

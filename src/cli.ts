@@ -223,6 +223,7 @@ async function generateSql(args: ParsedArgs): Promise<void> {
     return;
   }
   const contract = parseContract(await readFile(spec, "utf8"));
+  if (contract.groupTests?.length || contract.orderedRules?.length) throw new Error("Standalone SQL generation cannot include grouped or ordered rules. Run dbtest to execute the complete contract.");
   const targets = resolveSqlServerTargets(contract, false);
   const target = args.table
     ? targets.find((candidate) =>

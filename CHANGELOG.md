@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.0
+
+- Apply inline or referenced child contracts to groups selected from a CSV file or SQL Server table or view, including a whole-input group.
+- Add typed ordered rules for duplicate and invalid sort keys, event mappings, state transitions, cardinality, final states, adjacency, and date relations.
+- Sort large CSV groups on temporary disk, read SQL targets in bounded pages through the existing session, and report grouped findings with source rows and bounded samples.
+- Show group outcomes and related row positions in normal results JSON and the Workbench. Reject standalone SQL generation when it would omit grouped or ordered rules.
+- Preserve existing version-1 contracts and suites; add generic CSV and mocked SQL regression coverage. Live database validation remains pending.
+
 ## 0.15.3
 
 - Save reusable comparison setups from results and reopen them with CSV Contract: Load Comparison Setup.
