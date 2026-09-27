@@ -262,7 +262,8 @@ test("SQL grouped evaluation uses bounded target reads and matches CSV findings"
     Object.defineProperty(session, "getPool", { value: async () => ({ api: { NVarChar: () => "nvarchar" }, pool: { request: () => {
       const request = Object.assign(new EventEmitter(), { stream: false, input: () => request, cancel: () => {}, query: async (sql: string) => {
         queries.push(sql);
-        if (sql.includes("sys.columns")) return { recordset: columns.map((name, index) => ({ name, ordinal: index + 1, sqlType: "nvarchar" })) };
+        if (sql.includes("sys.columns")) return { recordset: columns.map((name, index) => ({ name, ordinal: index + 1,
+          sqlType: name === "Seq" ? "int" : "nvarchar", maxLength: 100 })) };
         if (request.stream) { streamedQueries.push(sql); data.forEach(row => request.emit("row", row)); return { recordset: data.length ? [] : null }; }
         if (sql.includes("RuleId")) return { recordsets: [generated.rules.map(rule => ({ RuleId: rule.id, RuleName: rule.name,
           Severity: rule.severity, Code: rule.code, ColumnName: "", FailureCount: 0, SelectedCount: null }))] };
@@ -274,6 +275,8 @@ test("SQL grouped evaluation uses bounded target reads and matches CSV findings"
     assert.deepEqual(sqlResult.issues.filter(i => i.testId?.startsWith("events/")).map(i => i.testId),
       comparison.issues.filter(i => i.testId?.startsWith("events/")).map(i => i.testId));
     assert.equal(streamedQueries.length, 1);
+    assert(!streamedQueries[0].includes("nvarchar(max)"));
+    assert(streamedQueries[0].includes("CONVERT(nvarchar(128), t.[Seq])"));
     assert(progress.some(update => update.phase === "reading"));
     assert(progress.some(update => update.phase === "validating" && update.totalRows === data.length));
     assert(progress.some(update => update.groupsValidated === 1));

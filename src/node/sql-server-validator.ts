@@ -422,7 +422,18 @@ async function validateSqlGroups(handle: SqlPoolHandle, contract: CsvContract, t
   metadata: MetadataRow[], scopeValue: string | undefined, maximum: number, signal?: AbortSignal,
   onProgress?: (progress: ValidationProgress) => void): Promise<GroupSummary[]> {
   const headers = [...new Set(metadata.map(m => canonicalSqlServerColumn(target, m.name)))];
-  const projection = headers.map(c => `CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, c))}) AS ${sqlIdentifier(c)}`).join(", ");
+  const projection = headers.map(c => {
+    const physical = physicalSqlServerColumn(target, c);
+    const column = metadata.find(m => m.name === physical);
+    const type = column?.sqlType?.toLowerCase();
+    const length = column?.maxLength;
+    const boundedText = ["nvarchar", "nchar"].includes(type ?? "") && typeof length === "number" && length >= 0 && length <= 8000
+      || ["varchar", "char"].includes(type ?? "") && typeof length === "number" && length >= 0 && length <= 4000;
+    const boundedScalar = ["bit", "tinyint", "smallint", "int", "bigint", "decimal", "numeric", "money", "smallmoney",
+      "real", "float", "date", "datetime", "datetime2", "smalldatetime", "datetimeoffset", "time", "uniqueidentifier"].includes(type ?? "");
+    const size = boundedText ? 4000 : boundedScalar ? 128 : "max";
+    return `CONVERT(nvarchar(${size}), t.${sqlIdentifier(physical)}) AS ${sqlIdentifier(c)}`;
+  }).join(", ");
   const scope = scopeWhere(target);
   const runners = (contract.groupTests ?? []).map(group => new GroupTestRunner(group, headers, contract.csv ?? {},
     group.resolvedSource ?? "<sql-contract>", undefined, progress => onProgress?.({ phase: "validating",

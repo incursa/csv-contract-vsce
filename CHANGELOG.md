@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.18.2
+
+- Transfer ordinary grouped SQL fields as bounded strings instead of treating every column as a large-value field. Keep unbounded and unfamiliar types on the existing projection path.
+
 ## 0.18.1
 
 - Reduce temporary sorting work for moderate grouped targets by retaining more rows in memory within a size limit and caching group sort keys.
