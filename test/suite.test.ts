@@ -105,6 +105,35 @@ test("collect-all and fail-fast distinguish assertion failure, execution error, 
   const missing = await runSuite(suite, runner);
   assert.equal(missing.runs[0].status, "ERROR");
 });
+test("independent targets run concurrently with a limit and keep report order", async () => {
+  const definition: CsvContract = { version: 1, schema: { columns: { Id: { presence: "required" } } },
+    sqlServer: { targets: Array.from({ length: 5 }, (_, index) => ({ connection: "test", schema: "dbo", table: `Entity${index}` })) } };
+  let active = 0;
+  let maximum = 0;
+  const starts: number[] = [];
+  const completions: number[] = [];
+  const report = await runSuite({ id: "parallel", source: "parallel", isSuite: false,
+    members: [{ id: "entity", source: "entity", contract: definition }] }, async (_contract, _target, _source, index) => {
+    active++;
+    maximum = Math.max(maximum, active);
+    await new Promise(resolve => setTimeout(resolve, index === 0 ? 35 : 10));
+    active--;
+    return validateCsv(definition, "Id\nvalue\n");
+  }, false, undefined, { parallelTargets: 3,
+    onTargetStart: (_run, index) => starts.push(index),
+    onProgress: (_run, index) => completions.push(index!) });
+  assert.equal(maximum, 3);
+  assert.deepEqual(starts.slice(0, 3), [0, 1, 2]);
+  assert.deepEqual(report.runs.map(run => run.table), [0, 1, 2, 3, 4].map(index => `dbo.Entity${index}`));
+  assert.equal(completions.length, 5);
+  assert(report.runs.every(run => run.status === "PASS"));
+  const singleStarts: number[] = [];
+  await runSuite({ id: "single", source: "single", isSuite: false,
+    members: [{ id: "entity", source: "entity", contract: { ...definition,
+      sqlServer: { targets: definition.sqlServer!.targets!.slice(0, 1) } } }] }, async () => validateCsv(definition, "Id\nvalue\n"),
+  false, undefined, { parallelTargets: 1, onTargetStart: (_run, index) => singleStarts.push(index) });
+  assert.deepEqual(singleStarts, [0]);
+});
 test("external paths retain meaning after relocation and are reported as nonportable", async (t) => {
   const { root, master } = await fixture(t);
   const c = contract(); c.targets = [{ path: "../data/people.csv" }];

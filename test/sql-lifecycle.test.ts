@@ -17,11 +17,15 @@ test("native worker returns only after process exit and force-cancels an unrespo
       if (message.kind === 'cancel') return;
       fs.writeFileSync(__filename + '.pid', String(process.pid));
       if (message.target.table === 'hang') { setInterval(() => {}, 1000); return; }
+      process.send({kind:'progress',progress:{phase:'reading',rowsRead:7}});
       process.send({ok:true,result:{valid:true,rowCount:process.pid}}, () => setTimeout(() => process.exit(0), 100));
     });`);
   const target = { connection: "mock", schema: "dbo", table: "complete" };
   try {
-    const result = await runSqlWorker<import("../src/core/model").ValidationResult>({ kind: "schema", target }, undefined, worker);
+    const progress: number[] = [];
+    const result = await runSqlWorker<import("../src/core/model").ValidationResult>({ kind: "schema", target }, undefined, worker,
+      5000, update => { if (update.rowsRead !== undefined) progress.push(update.rowsRead); });
+    assert.deepEqual(progress, [7]);
     assert.throws(() => process.kill(result.rowCount, 0), /ESRCH|no such process/i);
     await rm(worker + ".pid");
     const controller = new AbortController();

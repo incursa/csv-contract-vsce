@@ -233,8 +233,13 @@ test("many small groups retain grouped outcomes without per-group file validatio
   for (let index = 1; index <= 3000; index++) rows.push(`entity-${index},CREATED,2026-01-01,1,ref`);
   const csv = rows.join("\n") + "\n";
   await withFiles(csv, async (csvPath, specPath) => {
-    const result = (await validateCsvFile(csvPath, [{ spec: specPath, contract: simpleRelations() }])).runs[0].result;
+    const progress: Array<{ phase: string; rowsRead?: number; totalRows?: number; groupsValidated?: number }> = [];
+    const result = (await validateCsvFile(csvPath, [{ spec: specPath, contract: simpleRelations() }],
+      { progressInterval: 1000, onRunProgress: update => progress.push(update) })).runs[0].result;
     assert.equal(result.valid, true);
+    assert(progress.some(update => update.phase === "reading" && (update.rowsRead ?? 0) >= 999));
+    assert(progress.some(update => update.phase === "validating" && update.totalRows === 3000));
+    assert(progress.some(update => update.groupsValidated === 3000));
     assert.deepEqual(result.groupOutcomes?.find(outcome => outcome.id === "events"),
       { id: "events", groups: 3000, passed: 3000, failed: 0 });
   });
@@ -244,6 +249,7 @@ test("SQL grouped evaluation uses bounded target reads and matches CSV findings"
   const csv = [headers, "alpha,START,2026-01-01,1,x", "alpha,PAUSE,2026-01-02,1,x"].join("\n") + "\n";
   const data = [{ EntityId: "alpha", Event: "START", Day: "2026-01-01", Seq: "1", ExternalRef: "x" },
     { EntityId: "alpha", Event: "PAUSE", Day: "2026-01-02", Seq: "1", ExternalRef: "x" }];
+  const columns = Object.keys(data[0]);
   await withFiles(csv, async (csvPath, specPath) => {
     const comparison = (await validateCsvFile(csvPath, [{ spec: specPath, contract: parent() }])).runs[0].result;
     const target = { connection: "mock", schema: "dbo", table: "Events" };
@@ -256,20 +262,29 @@ test("SQL grouped evaluation uses bounded target reads and matches CSV findings"
     Object.defineProperty(session, "getPool", { value: async () => ({ api: { NVarChar: () => "nvarchar" }, pool: { request: () => {
       const request = Object.assign(new EventEmitter(), { stream: false, input: () => request, cancel: () => {}, query: async (sql: string) => {
         queries.push(sql);
-        if (sql.includes("sys.columns")) return { recordset: Object.keys(data[0]).map((name, index) => ({ name, ordinal: index + 1, sqlType: "nvarchar" })) };
-        if (request.stream) { streamedQueries.push(sql); data.forEach(row => request.emit("row", row)); return { recordset: [] }; }
+        if (sql.includes("sys.columns")) return { recordset: columns.map((name, index) => ({ name, ordinal: index + 1, sqlType: "nvarchar" })) };
+        if (request.stream) { streamedQueries.push(sql); data.forEach(row => request.emit("row", row)); return { recordset: data.length ? [] : null }; }
         if (sql.includes("RuleId")) return { recordsets: [generated.rules.map(rule => ({ RuleId: rule.id, RuleName: rule.name,
           Severity: rule.severity, Code: rule.code, ColumnName: "", FailureCount: 0, SelectedCount: null }))] };
         return { recordset: [{ count: data.length }] };
       } }); return request;
     } } }) });
-    const sqlResult = await session.validate(definition, target);
+    const progress: Array<{ phase: string; rowsRead?: number; totalRows?: number; groupsValidated?: number }> = [];
+    const sqlResult = await session.validate(definition, target, { onProgress: update => progress.push(update) });
     assert.deepEqual(sqlResult.issues.filter(i => i.testId?.startsWith("events/")).map(i => i.testId),
       comparison.issues.filter(i => i.testId?.startsWith("events/")).map(i => i.testId));
     assert.equal(streamedQueries.length, 1);
+    assert(progress.some(update => update.phase === "reading"));
+    assert(progress.some(update => update.phase === "validating" && update.totalRows === data.length));
+    assert(progress.some(update => update.groupsValidated === 1));
     assert(queries.every(q => !q.includes("OFFSET")));
     data.push({ ...data[data.length - 1] });
-    await assert.rejects(session.validate(definition, target), /row locator.*not unique/i);
+    const duplicate = await session.validate(definition, target);
+    assert(duplicate.issues.some(issue => issue.testId === "events/unique_order"));
+    data.length = 0;
+    const empty = await session.validate(definition, target);
+    assert.equal(empty.rowCount, 0);
+    assert.equal(empty.groupOutcomes?.find(outcome => outcome.id === "events")?.groups, 0);
   });
 });
 

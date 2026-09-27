@@ -161,6 +161,7 @@ IDs and truncation. **Jump to rule** opens the owning YAML location. Search work
 over retained diagnostics; it cannot search discarded examples. Filtering suite
 members limits the suite export to visible members and records its scope. Normal
 exports retain the original aggregate counts and do not query the source again.
+Workbench runs keep all available issue details by default. Set `csvContract.maxRetainedIssues` to a positive number to limit retention; `0` keeps all available details. The Workbench table renders the first 500 matching details for responsiveness, while export includes all retained details. SQL aggregate rules summarize failing rows by rule and do not produce one row-level detail per failure.
 
 **Run history** offers save, compare and delete. It is explicit local workspace
 storage of the newest 20 aggregate snapshots, with a definition fingerprint and

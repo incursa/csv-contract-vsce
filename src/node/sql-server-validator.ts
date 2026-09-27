@@ -13,6 +13,7 @@ import { canonicalSqlServerColumn, physicalSqlServerColumn, type ResolvedSqlServ
 import { OrderedRuleEvaluator, orderedColumns, compareOrderedRows } from "../core/ordered-rule";
 import { RowSortStore } from "./row-sort-store";
 import { GroupTestRunner, type GroupSummary } from "./group-runner";
+import type { ValidationProgress } from "../core/run-progress";
 
 export interface SqlServerValidationOptions {
   preview?: PreviewOptions;
@@ -20,6 +21,7 @@ export interface SqlServerValidationOptions {
   signal?: AbortSignal;
   maxIssues?: number;
   scopeValue?: string;
+  onProgress?: (progress: ValidationProgress) => void;
 }
 
 type SqlApi = typeof sql;
@@ -102,7 +104,7 @@ async function queryRows<T>(request: sql.Request, query: string, onRow: (row: T)
     const result = await request.query<T>(`SET IMPLICIT_TRANSACTIONS OFF;\n${query}`);
     if (streamError) throw streamError;
     // A few test and alternate drivers return a recordset without emitting row events.
-    if (!streamed) result.recordset.forEach(onRow);
+    if (!streamed) (result.recordset ?? []).forEach(onRow);
     if (rowFailure) throw rowFailure;
   } catch (error) { throw rowFailure ?? streamError ?? error; }
   finally {
@@ -158,6 +160,7 @@ export class SqlServerValidationSession {
     if (options.preview && (contract.groupTests?.length || contract.orderedRules?.length)) {
       throw new Error("SQL preview does not support grouped or ordered rules; run the complete contract.");
     }
+    options.onProgress?.({ phase: "connecting" });
     const handle = await this.getPool(target.connection, target.integratedConnection);
     const metadata = await readMetadata(handle, target, options.signal);
     if (metadata.length === 0) throw new Error(`SQL Server object ${target.schema}.${target.table} does not exist or is not visible to this connection.`);
@@ -173,9 +176,10 @@ export class SqlServerValidationSession {
     const mustFallback = generated.warnings.length > 0 || declared.some((column) => !present.has(physicalSqlServerColumn(target, column)));
     const scopeValue = resolveScopeValue(target, options.scopeValue);
     const sequence = contract.orderedRules?.length ? await validateSqlSequences(handle, contract, target, metadata, scopeValue,
-      options.maxIssues ?? 1000, options.signal) : undefined;
+      options.maxIssues ?? 1000, options.signal, options.onProgress) : undefined;
     const grouped = contract.groupTests?.length ? await validateSqlGroups(handle, contract, target, metadata, scopeValue,
-      options.maxIssues ?? 1000, options.signal) : undefined;
+      options.maxIssues ?? 1000, options.signal, options.onProgress) : undefined;
+    options.onProgress?.({ phase: "summarizing" });
     if (mustFallback || options.preview) {
       const fallback = await validateClientSide(handle, { ...contract, baseline: undefined, orderedRules: undefined, groupTests: undefined }, target, metadata, scopeValue, options.signal, options.preview);
       const reason = options.preview ? "Explicit preview uses the shared predicate engine to collect bounded examples." : generated.warnings.length
@@ -415,12 +419,15 @@ function mergeGroups(result: ValidationResult, summaries: GroupSummary[] | undef
 }
 
 async function validateSqlGroups(handle: SqlPoolHandle, contract: CsvContract, target: ResolvedSqlServerTarget,
-  metadata: MetadataRow[], scopeValue: string | undefined, maximum: number, signal?: AbortSignal): Promise<GroupSummary[]> {
+  metadata: MetadataRow[], scopeValue: string | undefined, maximum: number, signal?: AbortSignal,
+  onProgress?: (progress: ValidationProgress) => void): Promise<GroupSummary[]> {
   const headers = [...new Set(metadata.map(m => canonicalSqlServerColumn(target, m.name)))];
   const projection = headers.map(c => `CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, c))}) AS ${sqlIdentifier(c)}`).join(", ");
   const scope = scopeWhere(target);
   const runners = (contract.groupTests ?? []).map(group => new GroupTestRunner(group, headers, contract.csv ?? {},
-    group.resolvedSource ?? "<sql-contract>"));
+    group.resolvedSource ?? "<sql-contract>", undefined, progress => onProgress?.({ phase: "validating",
+      totalRows: progress.totalRows, groupId: progress.groupId, groupsValidated: progress.groupsValidated,
+      groupRowsProcessed: progress.rowsProcessed })));
   try {
     const locator = contract.sqlServer?.rowLocator;
     if (!locator?.length) throw new Error("Grouped SQL validation requires sqlServer.rowLocator for bounded ordered reads.");
@@ -428,24 +435,23 @@ async function validateSqlGroups(handle: SqlPoolHandle, contract: CsvContract, t
     const request = handle.pool.request();
     bindScope(request, handle.api, target, scopeValue);
     let sourceRow = 0;
-    let previousLocator: string | undefined;
+    let lastProgress = 0;
+    onProgress?.({ phase: "reading", rowsRead: 0 });
     await queryRows<Record<string, string | null>>(request,
       `SELECT ${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope} ORDER BY ${order};`,
       record => {
-        const locatorValues = locator.map(column => record[column]);
-        if (locatorValues.some(value => value == null)) throw new Error(`SQL row locator for ${target.schema}.${target.table} contains null values.`);
-        const locatorKey = JSON.stringify(locatorValues);
-        if (locatorKey === previousLocator) throw new Error(`SQL row locator for ${target.schema}.${target.table} is not unique.`);
-        previousLocator = locatorKey;
         sourceRow++;
         runners.forEach(runner => runner.add(sourceRow, headers.map(h => record[h] == null ? "" : String(record[h]))));
+        if (Date.now() - lastProgress >= 100) { lastProgress = Date.now(); onProgress?.({ phase: "reading", rowsRead: sourceRow }); }
       }, signal);
-    return await Promise.all(runners.map(runner => runner.finish(maximum)));
+    onProgress?.({ phase: "validating", rowsRead: sourceRow, totalRows: sourceRow });
+    return await Promise.all(runners.map(runner => runner.finish(maximum, signal)));
   } finally { runners.forEach(runner => runner.dispose()); }
 }
 
 async function validateSqlSequences(handle: SqlPoolHandle, contract: CsvContract, target: ResolvedSqlServerTarget,
-  metadata: MetadataRow[], scopeValue: string | undefined, maximum: number, signal?: AbortSignal): Promise<SequenceSummary> {
+  metadata: MetadataRow[], scopeValue: string | undefined, maximum: number, signal?: AbortSignal,
+  onProgress?: (progress: ValidationProgress) => void): Promise<SequenceSummary> {
   const issues: ValidationIssue[] = [];
   let issueCount = 0;
   const add = (issue: ValidationIssue): void => { issueCount++; if (issues.length < maximum) issues.push(issue); };
@@ -471,10 +477,16 @@ async function validateSqlSequences(handle: SqlPoolHandle, contract: CsvContract
       const request = handle.pool.request();
       bindScope(request, handle.api, target, scopeValue);
       let sourceRow = 0;
+      let lastProgress = 0;
+      onProgress?.({ phase: "reading", rowsRead: 0 });
       await queryRows<Record<string, string | null>>(request,
         `SELECT ${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope} ORDER BY ${order};`,
-        record => store.add({ row: ++sourceRow,
-          values: Object.fromEntries(columns.map(c => [c, record[c] == null ? "" : String(record[c])])) }), signal);
+        record => {
+          store.add({ row: ++sourceRow,
+            values: Object.fromEntries(columns.map(c => [c, record[c] == null ? "" : String(record[c])])) });
+          if (Date.now() - lastProgress >= 100) { lastProgress = Date.now(); onProgress?.({ phase: "reading", rowsRead: sourceRow }); }
+        }, signal);
+      onProgress?.({ phase: "validating", rowsRead: sourceRow, totalRows: sourceRow });
       const evaluator = new OrderedRuleEvaluator(rule, contract.csv ?? {}, add);
       for await (const row of store.rows()) evaluator.add(row);
       evaluator.finish();

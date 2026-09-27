@@ -169,9 +169,11 @@ export interface SuiteRun {
   result?: ValidationResult;
   error?: string;
 }
-export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContract, target: ResolvedSqlServerTarget, source: string) => Promise<ValidationResult>, failFast = false,
-  validateFile?: (contract: CsvContract, source: string, target: CsvTarget) => Promise<ValidationResult>,
-  controls: { signal?: AbortSignal; members?: string[]; onProgress?: (run: SuiteRun) => void; crossExecutor?: CrossExecutor } = {}) {
+export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContract, target: ResolvedSqlServerTarget, source: string, index?: number) => Promise<ValidationResult>, failFast = false,
+  validateFile?: (contract: CsvContract, source: string, target: CsvTarget, index?: number) => Promise<ValidationResult>,
+  controls: { signal?: AbortSignal; members?: string[]; onProgress?: (run: SuiteRun, index?: number) => void;
+    onTargetStart?: (target: Pick<SuiteRun, "suite" | "member" | "spec" | "table" | "target">, index: number) => void;
+    parallelTargets?: number; crossExecutor?: CrossExecutor } = {}) {
   const runs: SuiteRun[] = [];
   const runId = globalThis.crypto.randomUUID();
   const startedAt = new Date().toISOString();
@@ -186,6 +188,41 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
       const evaluatedContract = resolveEvaluation(member.contract, startedAt);
       const targets = resolveSqlServerTargets(evaluatedContract);
       if (!targets.length && !(validateFile && member.contract.targets?.length)) throw new Error("No SQL Server targets configured; dbtest requires a database target for every member.");
+      if (!failFast && controls.parallelTargets !== undefined && controls.parallelTargets >= 1) {
+        const jobs = [
+          ...targets.map((target) => ({ identity: { ...base, table: `${target.schema}.${target.table}`, target: target.name ?? `${target.schema}.${target.table}` },
+            execute: (index: number) => validate(evaluatedContract, target, member.source, index) })),
+          ...(validateFile ? member.contract.targets ?? [] : []).map((target) => ({ identity: { ...base, target: target.path ?? target.url },
+            execute: (index: number) => validateFile!(evaluatedContract, member.source, target, index) }))
+        ];
+        const outcomes: SuiteRun[] = new Array(jobs.length);
+        let next = 0;
+        await Promise.all(Array.from({ length: Math.min(jobs.length, Math.floor(controls.parallelTargets!)) }, async () => {
+          while (next < jobs.length) {
+            const index = next++;
+            const job = jobs[index];
+            if (controls.signal?.aborted) {
+              outcomes[index] = { ...job.identity, status: "CANCELED", error: "Canceled before target execution." };
+              controls.onProgress?.(outcomes[index], index);
+              continue;
+            }
+            controls.onTargetStart?.(job.identity, index);
+            const started = Date.now();
+            try {
+              const result = await job.execute(index);
+              result.evaluatedAt = startedAt;
+              outcomes[index] = controls.signal?.aborted
+                ? { ...job.identity, status: "CANCELED", error: "Canceled during execution; result discarded." }
+                : { ...job.identity, status: result.valid ? "PASS" : "FAIL", result, durationMs: Date.now() - started };
+            } catch (error) {
+              outcomes[index] = { ...job.identity, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) };
+            }
+            controls.onProgress?.(outcomes[index], index);
+          }
+        }));
+        runs.push(...outcomes);
+        continue;
+      }
       for (const target of targets) {
         const identity = { ...base, table: `${target.schema}.${target.table}`, target: target.name ?? `${target.schema}.${target.table}` };
         if (controls.signal?.aborted) { runs.push({ ...identity, status: "CANCELED", error: "Canceled before target execution." }); continue; }

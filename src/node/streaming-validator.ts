@@ -59,6 +59,9 @@ export interface StreamingValidationOptions {
   tempDirectory?: string;
   uniquePartitions?: number;
   onProgress?: (progress: { pass: number; passes: number; rows: number; bytesRead: number }) => void;
+  onRunProgress?: (progress: import("../core/run-progress").ValidationProgress) => void;
+  signal?: AbortSignal;
+  totalBytes?: number;
 }
 
 class IssueCollector {
@@ -588,17 +591,19 @@ async function validateGroup(
   let uniqueness: PartitionedUniquenessStore | undefined;
   let groups: PartitionedGroupStore | undefined;
   let foundHeader = false;
+  let rowsRead = 0;
   const physical = physicalOptions(states[0].options);
   try {
     for await (const record of readCsvRecords(csvPath, physical, {
       progressInterval: options.progressInterval,
-      onProgress: ({ bytesRead, recordsRead }) => options.onProgress?.({
-        pass: groupPass,
-        passes: totalPasses,
-        rows: Math.max(0, recordsRead - 1),
-        bytesRead
-      })
+      onProgress: ({ bytesRead, recordsRead }) => {
+        options.onProgress?.({ pass: groupPass, passes: totalPasses,
+          rows: Math.max(0, recordsRead - 1), bytesRead });
+        options.onRunProgress?.({ phase: "reading", rowsRead: Math.max(0, recordsRead - 1),
+          bytesRead, totalBytes: options.totalBytes });
+      }
     })) {
+      options.signal?.throwIfAborted();
       if (!foundHeader) {
         foundHeader = true;
         states.forEach((state) => initializeState(state, record.fields, getNextTarget, uniqueChecks,
@@ -629,12 +634,17 @@ async function validateGroup(
             continue;
           }
           state.groupRunners.push(new GroupTestRunner(groupTest, state.headers, state.options,
-            state.input.spec, options.tempDirectory));
+            state.input.spec, options.tempDirectory, progress => options.onRunProgress?.({ phase: "validating",
+              totalRows: progress.totalRows, groupId: progress.groupId, groupsValidated: progress.groupsValidated,
+              groupRowsProcessed: progress.rowsProcessed })));
         }
         continue;
       }
       states.forEach((state) => processRow(state, record.fields, record.recordNumber, uniqueness, groups));
+      rowsRead++;
     }
+    options.onRunProgress?.({ phase: "validating", rowsRead, totalRows: rowsRead,
+      bytesRead: options.totalBytes, totalBytes: options.totalBytes });
     if (!foundHeader) {
       states.forEach((state) => {
         initializeState(state, [], getNextTarget, uniqueChecks, getNextGroup, groupChecks);
@@ -643,7 +653,10 @@ async function validateGroup(
           if (groupTest.groupBy.length) {
             for (const column of groupTest.groupBy) state.collector.add({ level: "column", code: "GROUP_COLUMN_MISSING",
               testId: groupTest.id, column, message: `Group test ${groupTest.id} requires column ${column}.` });
-          } else state.groupRunners.push(new GroupTestRunner(groupTest, [], state.options, state.input.spec, options.tempDirectory));
+          } else state.groupRunners.push(new GroupTestRunner(groupTest, [], state.options, state.input.spec, options.tempDirectory,
+            progress => options.onRunProgress?.({ phase: "validating", totalRows: progress.totalRows,
+              groupId: progress.groupId, groupsValidated: progress.groupsValidated,
+              groupRowsProcessed: progress.rowsProcessed })));
         }
       });
     }
@@ -659,7 +672,8 @@ async function validateGroup(
       return output;
     });
     for (let index = 0; index < states.length; index++) for (const runner of states[index].groupRunners) {
-      const summary = await runner.finish(options.maxIssues);
+      options.signal?.throwIfAborted();
+      const summary = await runner.finish(options.maxIssues, options.signal);
       const result = outputs[index].result;
       result.issueCount += summary.issueCount;
       result.errorCount += summary.errorCount;
@@ -700,6 +714,8 @@ export async function validateCsvFile(
   };
   if (!Number.isInteger(resolved.maxIssues) || resolved.maxIssues < 1) throw new Error("maxIssues must be a positive integer.");
   const file = await stat(csvPath);
+  resolved.totalBytes = file.size;
+  options.onRunProgress?.({ phase: "reading", rowsRead: 0, bytesRead: 0, totalBytes: file.size });
   const started = performance.now();
   const groups = new Map<string, ContractRunInput[]>();
   inputs.forEach((input) => {

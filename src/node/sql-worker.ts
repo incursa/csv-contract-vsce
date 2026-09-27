@@ -17,6 +17,7 @@ process.on("message", (message: SqlWorkerOperation | { kind: "cancel" }) => {
   void withSqlSession(() => new SqlServerValidationSession(() => { throw new Error("The isolated SQL worker accepts integrated connections only."); }), async session => {
     if (message.kind === "schema") return session.captureSchema(message.target);
     if (message.kind === "cross") return session.validateCross(message.plan, controller.signal);
-    return session.validate(message.contract, message.target, { ...message.options, signal: controller.signal });
+    return session.validate(message.contract, message.target, { ...message.options, signal: controller.signal,
+      onProgress: progress => { if (process.connected) process.send?.({ kind: "progress", progress }); } });
   }).then(result => finish({ ok: true, result }), error => finish({ ok: false, error: errorDetails(error) }));
 });

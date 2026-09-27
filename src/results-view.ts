@@ -18,7 +18,12 @@ export function renderResults(runs: DisplayRun[], filter = "", stale = false): s
   return runs.map(run => {
     const result = run.result;
     const status = stale ? "STALE" : result?.preview?.scope === "sample" ? "SAMPLED — incomplete validation" : run.status ?? (result?.valid ? "PASS" : result ? "FAIL" : "ERROR");
-    const issues = result?.issues.filter(i => matches(run, i, filter)) ?? [];
+    const visibleIssues: Array<{ issue: NonNullable<typeof result>["issues"][number]; index: number }> = [];
+    let matchingIssues = 0;
+    for (const [index, issue] of (result?.issues ?? []).entries()) if (matches(run, issue, filter)) {
+      matchingIssues++;
+      if (visibleIssues.length < 500) visibleIssues.push({ issue, index });
+    }
     const select = (index: number) => `<input type="checkbox" data-issue-selection="${escape(issueSelectionKey(run, index))}" aria-label="Select ${escape(index < 0 ? "execution diagnostic" : result?.issues[index].testId ?? result?.issues[index].code)} for export">`;
     return `<section class="target-result run"><div class="target-result__heading"><strong>${escape(status)}</strong> <code>${escape(run.table ?? run.target ?? run.member)}</code></div>
       ${run.error && matches(run, run.error, filter) ? `<div data-result-search="${escape(JSON.stringify([run.status, run.error]))}">${select(-1)}<pre class="error" role="alert">${escape(run.error)}</pre></div>` : ""}
@@ -27,7 +32,8 @@ export function renderResults(runs: DisplayRun[], filter = "", stale = false): s
       ${result.examples?.length ? `<details><summary>Preview examples (${result.examples.length})</summary>${result.examples.map(e => `<p>${escape(e.id)} · ${escape(e.outcome)} · row ${e.row}</p><pre>${escape(JSON.stringify(e.values, null, 2))}</pre>`).join("")}</details>` : ""}
       ${result.ruleOutcomes?.map(r => `<p><button data-action="jump-rule" data-rule="${escape(r.id)}">${escape(r.id)}</button>: ${r.selected} selected · ${r.passed} passed · ${r.failed} failed${r.selected === 0 ? " · No rows matched the condition" : ""}</p>`).join("") ?? ""}
       ${result.groupOutcomes?.map(g => `<p>${escape(g.id)}: ${g.groups} groups · ${g.passed} passed · ${g.failed} failed</p>`).join("") ?? ""}
-      ${result.truncated ? `<p>Details limited: ${result.issues.length} retained of ${result.issueCount} issues.</p>` : ""}
-      <div class="table-scroll"><table><thead><tr><th>Select</th><th>Rule / code</th><th>Severity</th><th>Group / row</th><th>Expected</th><th>Actual</th><th>Diagnostic</th></tr></thead><tbody>${issues.map(i => `<tr data-result-search="${escape(JSON.stringify([run.member, run.target, run.table, run.status, i]))}"><td>${select(result.issues.indexOf(i))}</td><td><button data-action="jump-rule" data-rule="${escape(i.testId ?? i.code)}">${escape(i.testId ?? i.code)}</button></td><td>${escape(i.severity ?? "error")}</td><td>${escape(i.group ? JSON.stringify(i.group) : i.column)} ${escape(i.row)} ${i.relatedRows?.length ? `↔ ${escape(i.relatedRows.join(", "))}` : ""}</td><td>${escape(i.expected)}</td><td>${escape(i.actual)}</td><td>${escape(i.message)}</td></tr>`).join("")}</tbody></table></div>` : ""}</section>`;
+      ${result.truncated ? `<p>${result.issues.length.toLocaleString()} details retained for ${result.issueCount.toLocaleString()} reported issue events. SQL aggregate rules can summarize multiple rows in one detail.</p>` : ""}
+      ${matchingIssues > visibleIssues.length ? `<p>Showing the first ${visibleIssues.length.toLocaleString()} matching details here. Export includes all retained details.</p>` : ""}
+      <div class="table-scroll"><table><thead><tr><th>Select</th><th>Rule / code</th><th>Severity</th><th>Group / row</th><th>Expected</th><th>Actual</th><th>Diagnostic</th></tr></thead><tbody>${visibleIssues.map(({ issue: i, index }) => `<tr data-result-search="${escape(JSON.stringify([run.member, run.target, run.table, run.status, i]))}"><td>${select(index)}</td><td><button data-action="jump-rule" data-rule="${escape(i.testId ?? i.code)}">${escape(i.testId ?? i.code)}</button></td><td>${escape(i.severity ?? "error")}</td><td>${escape(i.group ? JSON.stringify(i.group) : i.column)} ${escape(i.row)} ${i.relatedRows?.length ? `↔ ${escape(i.relatedRows.join(", "))}` : ""}</td><td>${escape(i.expected)}</td><td>${escape(i.actual)}</td><td>${escape(i.message)}</td></tr>`).join("")}</tbody></table></div>` : ""}</section>`;
   }).join("");
 }

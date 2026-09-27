@@ -150,6 +150,8 @@ Omit `--spec` to create a new contract. For a multi-table source, add `--table s
 4. Use the saved target, add more file paths or URLs, or choose temporary targets with **Select test CSV**.
 5. Select **Run tests** to validate every active target.
 
+The Workbench opens a run view while targets execute in parallel. It shows rows read and groups validated for each target; once a target has been read, grouped checks show progress against its known row count. Workbench runs retain all available issue details for export by default. Set `csvContract.maxRetainedIssues` in VS Code settings to a positive number if you want a retention cap. The results table shows the first 500 matching details while export includes every retained detail. SQL aggregate checks report failure counts rather than one detail for every matching row.
+
 Generated contracts are deliberately conservative: they capture the observed columns and include sample row and cell assertions without guessing business rules. You decide which columns are required, unique, nullable, length-limited, or restricted to known values.
 
 ## Reuse the same contract

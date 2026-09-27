@@ -3,6 +3,7 @@ import { coverageDiagnostics } from "../core/coverage";
 import "@incursa/ui-kit/dist/inc-design-language.css";
 import "./workbench.css";
 import type { CsvContract, SqlServerIntegratedConnection } from "../core/model";
+import type { ValidationProgress } from "../core/run-progress";
 import { predicateDescription } from "../core/predicate";
 import { renderPredicate, readPredicate, editPredicateTree } from "./rule-editor";
 import { insertPreset, presetCatalog, type PresetInput } from "../core/presets";
@@ -42,6 +43,11 @@ let running = false;
 let runningTarget = "";
 let runningTargetIndex = 0;
 let runningTargetCount = 0;
+type RunTargetState = { label: string; status: "queued" | "running" | "PASS" | "FAIL" | "ERROR" | "CANCELED" | "SKIPPED" | "SAMPLED";
+  progress?: ValidationProgress; rows?: number; groups?: Array<{ id: string; groups: number; passed: number; failed: number }>; error?: string;
+  groupProgress: Record<string, { validated: number; rowsProcessed: number; totalRows: number }> };
+let runView = false;
+let runTargets: RunTargetState[] = [];
 let selectedColumn = "";
 let selectedRowTestIndex = -1;
 let columnsScrollTop = 0;
@@ -50,6 +56,47 @@ function escape(value: unknown): string {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
   })[character]!);
+}
+
+function renderRunView(): void {
+  const scrollPosition = window.scrollY;
+  const complete = runTargets.filter(target => target.status !== "queued" && target.status !== "running").length;
+  app.innerHTML = `<main class="run-view">
+    <header class="run-view__header"><div><span class="run-view__eyebrow">CONTRACT RUN</span>
+      <h1>${running ? "Running tests" : "Run complete"}</h1>
+      <p>${complete} of ${runTargets.length} targets complete${running ? " · Independent targets run concurrently" : ""}</p></div>
+      <div class="run-view__actions">${running ? `<button class="inc-btn inc-btn--outline-secondary" data-action="cancel-run">Cancel run</button>` : ""}
+        <button class="inc-btn inc-btn--primary" data-action="return-workbench">${running ? "Back to Workbench" : "View results"}</button></div>
+    </header>
+    <section class="run-view__targets" aria-label="Target progress">${runTargets.map((target, index) => {
+      const done = target.status !== "queued" && target.status !== "running";
+      const progress = target.progress;
+      const phase = done ? target.status : target.status === "queued" ? "Waiting" : progress?.phase === "connecting" ? "Connecting" :
+        progress?.phase === "reading" ? "Reading target" : progress?.phase === "validating" ? "Validating" :
+          progress?.phase === "summarizing" ? "Finishing results" : "Preparing";
+      const activeGroup = progress?.groupId ? target.groupProgress[progress.groupId] : undefined;
+      const fraction = done ? 1 : progress?.phase === "reading" && progress.totalBytes && progress.bytesRead !== undefined
+        ? progress.bytesRead / progress.totalBytes : progress?.phase === "validating" && activeGroup?.totalRows
+          ? activeGroup.rowsProcessed / activeGroup.totalRows : undefined;
+      const percent = fraction === undefined ? undefined : Math.min(done ? 100 : 99, Math.max(0, Math.round(fraction * 100)));
+      const groups = Object.entries(target.groupProgress);
+      return `<article class="run-target run-target--${target.status.toLowerCase()}">
+        <div class="run-target__heading"><div><span class="run-target__number">TARGET ${index + 1}</span>
+          <h2 title="${escape(target.label)}">${escape(target.label)}</h2></div><span class="run-target__status">${escape(phase)}</span></div>
+        <progress class="run-target__bar ${percent === undefined && target.status === "running" ? "run-target__bar--indeterminate" : ""}"
+          role="progressbar" aria-label="${escape(target.label)} progress" max="100" ${percent === undefined ? "" : `value="${percent}" aria-valuenow="${percent}"`}></progress>
+        <div class="run-target__details">${progress?.rowsRead !== undefined || target.rows !== undefined
+          ? `<span>${(progress?.rowsRead ?? target.rows ?? 0).toLocaleString()} rows read${progress?.totalRows !== undefined ? ` of ${progress.totalRows.toLocaleString()}` : ""}</span>` : ""}
+          ${progress?.phase === "reading" && progress.bytesRead !== undefined ? `<span>${(progress.bytesRead / 1048576).toFixed(1)} MB read${progress.totalBytes ? ` of ${(progress.totalBytes / 1048576).toFixed(1)} MB` : ""}</span>` : ""}
+          ${groups.map(([id, count]) => `<span>${escape(id)}: ${count.validated.toLocaleString()} groups validated${count.totalRows ? ` · ${count.rowsProcessed.toLocaleString()} / ${count.totalRows.toLocaleString()} rows grouped` : ""}</span>`).join("")}
+          ${target.groups?.map(group => `<span>${escape(group.id)}: ${group.groups.toLocaleString()} groups · ${group.passed.toLocaleString()} passed · ${group.failed.toLocaleString()} failed</span>`).join("") ?? ""}
+          ${target.error ? `<span class="run-target__error">${escape(target.error)}</span>` : ""}</div>
+      </article>`;
+    }).join("")}</section>
+  </main>`;
+  app.querySelector('[data-action="cancel-run"]')?.addEventListener("click", () => vscode.postMessage({ type: "cancel" }));
+  app.querySelector('[data-action="return-workbench"]')?.addEventListener("click", () => { runView = false; render(); });
+  window.scrollTo(0, scrollPosition);
 }
 
 function configuredSqlTargets(value: CsvContract): Array<{
@@ -167,6 +214,7 @@ function renderRowTestEditor(names: string[]): string {
 }
 
 function render(): void {
+  if (runView) { renderRunView(); return; }
   const toolsOpen = app.querySelector(".workbench-tools")?.hasAttribute("open") ?? false;
   if (!contract) {
     app.innerHTML = parseError ? `<div role="alert">${escape(parseError)}</div>` : `<div class="workbench-loading">Loading contract…</div>`;
@@ -188,7 +236,7 @@ function render(): void {
   const groupRules = contract.groupRules ?? [];
   const errorCount = runs.reduce((total, run) => total + (run.result?.errorCount ?? 0), 0);
   const warningCount = runs.reduce((total, run) => total + (run.result?.warningCount ?? 0), 0);
-  const issueCount = runs.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
+  const retainedIssueCount = runs.reduce((total, run) => total + (run.result?.issues.length ?? 0), 0);
   const rowCount = runs.length > 0
     ? runs.reduce((total, run) => total + (run.result?.rowCount ?? 0), 0)
     : "—";
@@ -255,6 +303,7 @@ function render(): void {
       ${running ? `<div class="workbench-run-status" role="status" aria-live="polite">
         <span class="run-spinner" aria-hidden="true"></span>
         <div><strong>Running contract tests</strong><span title="${escape(runningTarget)}">${escape(runningDetail)}</span></div>
+        <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="show-run">View run</button>
       </div>` : ""}
       <div class="configured-targets">
         <div class="configured-targets__heading">
@@ -319,7 +368,7 @@ function render(): void {
       <label>Search failures<input id="result-filter" type="search" class="form-control" value="${escape(resultFilter)}"></label>
       <div class="pane-heading">
         <div><h2>Latest results</h2><p>${runs.length > 0 ? `${runs.filter((run) => run.result?.valid && run.result.preview?.scope !== "sample").length} of ${runs.length} targets passed` : "Run the contract to see results."}</p></div>
-        ${runs.length > 0 ? `<button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="export-issues">Export results${issueCount > 0 ? ` (${issueCount.toLocaleString()} issues)` : ""}</button>` : ""}
+        ${runs.length > 0 ? `<button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="export-issues">Export results${retainedIssueCount > 0 ? ` (${retainedIssueCount.toLocaleString()} details)` : ""}</button>` : ""}
       </div>
       <div class="results">
         ${renderResults(runs, resultFilter, stale) || `<p>No test results yet.</p>`}
@@ -511,6 +560,7 @@ function bind(): void {
   app.querySelector('[data-action="preflight"]')?.addEventListener("click", () => vscode.postMessage({ type: "preflight" }));
   app.querySelector('[data-action="live"]')?.addEventListener("click", () => vscode.postMessage({ type: "live" }));
   app.querySelector('[data-action="cancel"]')?.addEventListener("click", () => vscode.postMessage({ type: "cancel" }));
+  app.querySelector('[data-action="show-run"]')?.addEventListener("click", () => { runView = true; render(); });
   app.querySelectorAll<HTMLElement>('[data-action="preview-rule"]').forEach(button => button.addEventListener("click", () => vscode.postMessage({ type: "preview", ruleId: button.dataset.rule })));
   app.querySelector<HTMLInputElement>("#result-filter")?.addEventListener("input", event => {
     resultFilter = (event.target as HTMLInputElement).value;
@@ -611,6 +661,8 @@ function bind(): void {
     runningTarget = "";
     runningTargetIndex = 0;
     runningTargetCount = targetNames.length;
+    runTargets = targetNames.map(label => ({ label, status: "queued", groupProgress: {} }));
+    runView = true;
     render();
     vscode.postMessage({ type: "run" });
   });
@@ -693,6 +745,38 @@ window.addEventListener("message", (event) => {
     runningTargetIndex = running ? message.index ?? 0 : 0;
     runningTargetCount = running ? message.total ?? targetNames.length : 0;
     render();
+  } else if (message.type === "runTargets") {
+    runTargets = (message.targets as string[]).map(label => ({ label, status: "queued", groupProgress: {} }));
+    if (runView) render();
+  } else if (message.type === "runTargetStart") {
+    const target = runTargets[message.index];
+    if (target) {
+      target.status = "running";
+      runningTarget = target.label;
+      runningTargetIndex = message.index + 1;
+      render();
+    }
+  } else if (message.type === "runTargetProgress") {
+    const target = runTargets[message.index];
+    if (target && target.status === "running") {
+      const progress = message.progress as ValidationProgress;
+      target.progress = progress.phase === "reading" && target.progress?.phase !== "reading"
+        ? progress : { ...target.progress, ...progress };
+      if (progress.groupId && progress.groupsValidated !== undefined) {
+        target.groupProgress[progress.groupId] = { validated: progress.groupsValidated,
+          rowsProcessed: progress.groupRowsProcessed ?? 0, totalRows: progress.totalRows ?? 0 };
+      }
+      if (runView) render();
+    }
+  } else if (message.type === "runTargetComplete") {
+    const target = runTargets[message.index];
+    if (target) {
+      target.status = message.status;
+      target.rows = message.rows;
+      target.groups = message.groups;
+      target.error = message.error;
+      if (runView) render();
+    }
   } else if (message.type === "error") {
     parseError = message.message; stale = true; running = false; render();
   }

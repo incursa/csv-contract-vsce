@@ -50,9 +50,11 @@ async function sourceRows(path: string, wanted: Set<number>): Promise<Map<number
 export class GroupTestRunner {
   private readonly store: RowSortStore;
   private readonly options: CsvOptions;
+  private rowsAdded = 0;
 
   public constructor(private readonly group: GroupTest, private readonly headers: string[],
-    options: CsvOptions, private readonly source: string, private readonly tempRoot?: string) {
+    options: CsvOptions, private readonly source: string, private readonly tempRoot?: string,
+    private readonly onProgress?: (progress: { groupId: string; groupsValidated: number; rowsProcessed: number; totalRows: number }) => void) {
     if (!group.resolvedContract && !group.contract) throw new Error(`Group test ${group.id} has an unresolved child contract.`);
     for (const column of group.groupBy) if (!headers.includes(column)) throw new Error(`Group test ${group.id} requires missing column ${column}.`);
     this.options = options;
@@ -60,10 +62,11 @@ export class GroupTestRunner {
   }
 
   public add(row: number, fields: string[]): void {
+    this.rowsAdded++;
     this.store.add({ row, values: Object.fromEntries(this.headers.map((header, index) => [header, fields[index] ?? ""])) });
   }
 
-  public async finish(maxIssues: number): Promise<GroupSummary> {
+  public async finish(maxIssues: number, signal?: AbortSignal): Promise<GroupSummary> {
     const directory = mkdtempSync(join(resolve(this.tempRoot ?? tmpdir()), "csv-contract-group-"));
     const summary: GroupSummary = { issues: [], issueCount: 0, errorCount: 0, warningCount: 0,
       testCount: 1, ruleOutcomes: [], nestedGroupOutcomes: [], groupCounts: [{ id: this.group.id, count: 0 }], passedGroups: 0, failedGroups: 0 };
@@ -83,6 +86,15 @@ export class GroupTestRunner {
     let currentKey: string | undefined;
     let currentGroup: Record<string, string> = {};
     let hasRows = false;
+    let rowsProcessed = 0;
+    let lastProgress = 0;
+    const report = (force = false): void => {
+      const now = Date.now();
+      if (!force && now - lastProgress < 100) return;
+      lastProgress = now;
+      this.onProgress?.({ groupId: this.group.id, groupsValidated: summary.passedGroups + summary.failedGroups,
+        rowsProcessed, totalRows: this.rowsAdded });
+    };
     const openGroup = (row?: OrderedRow): void => {
       groupOpen = true;
       memoryRows = [];
@@ -102,6 +114,7 @@ export class GroupTestRunner {
       memoryBytes = 0;
     };
     const closeGroup = async (): Promise<void> => {
+      signal?.throwIfAborted();
       if (!groupOpen) return;
       groupOpen = false;
       const child = (this.group.resolvedContract ?? this.group.contract)!;
@@ -123,6 +136,7 @@ export class GroupTestRunner {
       }
       if (result.valid) summary.passedGroups++;
       else summary.failedGroups++;
+      report();
       summary.testCount = Math.max(summary.testCount, 1 + result.testCount);
       for (const outcome of result.ruleOutcomes ?? []) {
         const id = `${this.group.id}/${outcome.id}`;
@@ -147,6 +161,9 @@ export class GroupTestRunner {
     };
     try {
       for await (const row of this.store.rows()) {
+        signal?.throwIfAborted();
+        rowsProcessed++;
+        report();
         hasRows = true;
         const nextKey = key(row, this.group.groupBy, this.options);
         if (nextKey !== currentKey) { await closeGroup(); openGroup(row); currentKey = nextKey; }
@@ -159,6 +176,7 @@ export class GroupTestRunner {
       }
       if (!hasRows && this.group.groupBy.length === 0) openGroup();
       await closeGroup();
+      report(true);
       const count = summary.groupCounts[0].count;
       for (const [kind, expected] of Object.entries(this.group.groupCount ?? {})) {
         if (kind === "exact" && count === expected || kind === "min" && count >= expected || kind === "max" && count <= expected) continue;

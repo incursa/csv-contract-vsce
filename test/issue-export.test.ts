@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createValidationRunExport, issueRunsToCsv, validationRunExportJson } from "../src/issue-export";
+import { validateCsvFile } from "../src/node/streaming-validator";
+import { renderResults } from "../src/results-view";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const runs = [{
   target: "exports/customers.csv",
@@ -69,4 +74,23 @@ test("JSON export discloses when validation retained fewer issue details than it
   assert.equal(output.totals.retainedIssueDetails, 2);
   assert.equal(output.totals.issueDetailsComplete, false);
   assert.equal(output.runs[0].result!.truncated, true);
+});
+
+test("a Workbench-sized retention setting exports more than one thousand CSV findings", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "csv-contract-export-"));
+  try {
+    const csvPath = join(directory, "entities.csv");
+    await writeFile(csvPath, ["State", ...Array.from({ length: 1205 }, () => "invalid")].join("\n") + "\n");
+    const result = (await validateCsvFile(csvPath, [{ spec: join(directory, "entities.csvtest.yaml"), contract: {
+      version: 1, schema: { columns: { State: { presence: "required", constraints: { allowedValues: ["valid"] } } } }
+    } }], { maxIssues: Number.MAX_SAFE_INTEGER })).runs[0].result;
+    assert.equal(result.issueCount, 1205);
+    assert.equal(result.issues.length, 1205);
+    assert.equal(result.truncated, false);
+    const csv = issueRunsToCsv([{ target: "entities.csv", result }]);
+    assert.equal(csv.trim().split("\n").length, 1206);
+    const html = renderResults([{ target: "entities.csv", result }]);
+    assert.match(html, /Showing the first 500 matching details/);
+    assert.equal((html.match(/data-result-search=/g) ?? []).length, 500);
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

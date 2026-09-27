@@ -5,16 +5,19 @@ import type { SchemaBaseline } from "../core/baseline";
 import type { ResolvedSqlServerTarget } from "../core/sql-server-targets";
 import type { CrossPlan } from "../core/cross-checks";
 import type { SqlServerValidationOptions } from "./sql-server-validator";
+import type { ValidationProgress } from "../core/run-progress";
 
 export type SqlWorkerOperation =
-  | { kind: "validate"; contract: CsvContract; target: ResolvedSqlServerTarget; options: Omit<SqlServerValidationOptions, "signal"> }
+  | { kind: "validate"; contract: CsvContract; target: ResolvedSqlServerTarget; options: Omit<SqlServerValidationOptions, "signal" | "onProgress"> }
   | { kind: "schema"; target: ResolvedSqlServerTarget }
   | { kind: "cross"; plan: CrossPlan };
 export interface SqlWorkerReply { ok: boolean; result?: ValidationResult | SchemaBaseline; error?: string }
+export interface SqlWorkerProgress { kind: "progress"; progress: ValidationProgress }
 
 /** Native ODBC pooling is process-global. Wait for process exit, not just pool.close(). */
 export function runSqlWorker<T extends ValidationResult | SchemaBaseline>(operation: SqlWorkerOperation, signal?: AbortSignal,
-  workerPath = join(__dirname, "sql-worker.cjs"), cancelGraceMs = 5000): Promise<T> {
+  workerPath = join(__dirname, "sql-worker.cjs"), cancelGraceMs = 5000,
+  onProgress?: (progress: ValidationProgress) => void): Promise<T> {
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const options: ForkOptions & { windowsHide: boolean } = { windowsHide: true, execArgv: [],
@@ -27,7 +30,10 @@ export function runSqlWorker<T extends ValidationResult | SchemaBaseline>(operat
       if (child.connected) child.send({ kind: "cancel" }, () => {});
       cancelTimer ??= setTimeout(() => { child.kill(); }, cancelGraceMs);
     };
-    child.on("message", message => { reply = message as SqlWorkerReply; });
+    child.on("message", message => {
+      if ((message as SqlWorkerProgress).kind === "progress") { onProgress?.((message as SqlWorkerProgress).progress); return; }
+      reply = message as SqlWorkerReply;
+    });
     child.on("error", error => { processError = error; });
     child.on("close", code => {
       if (cancelTimer) clearTimeout(cancelTimer);

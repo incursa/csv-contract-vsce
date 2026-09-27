@@ -2,7 +2,7 @@
   "name": "csv-contract-vsce",
   "displayName": "CSV Contract Workbench",
   "description": "Design and run reusable YAML contracts for CSV files and SQL Server tables.",
-  "version": "0.17.1",
+  "version": "0.18.0",
   "publisher": "incursa",
   "license": "Apache-2.0",
   "engines": {
@@ -223,6 +223,12 @@
             ""
           ],
           "description": "Null markers added to contracts created from CSV files."
+        },
+        "csvContract.maxRetainedIssues": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Maximum issue details retained for Workbench runs and exports. Use 0 to retain all details. SQL aggregate rules report counts rather than one detail per matching row."
         }
       }
     }

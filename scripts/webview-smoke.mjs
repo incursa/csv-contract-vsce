@@ -179,7 +179,7 @@ if (removeSqlMessage?.type !== "updateContract" || removeSqlMessage.contract.sql
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), failedState);
 if ((await page.locator(".results tbody tr").count()) !== 12) throw new Error("Failure grid must include all retained issues.");
 const exportIssuesButton = page.locator('[data-action="export-issues"]');
-if (!await exportIssuesButton.isVisible() || (await exportIssuesButton.textContent())?.trim() !== "Export results (12 issues)") {
+if (!await exportIssuesButton.isVisible() || (await exportIssuesButton.textContent())?.trim() !== "Export results (12 details)") {
   throw new Error("Failed results did not expose the complete issue export action.");
 }
 await exportIssuesButton.click();
@@ -241,24 +241,21 @@ await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message"
 await page.locator('[data-action="run"]').click();
 const lastMessage = await page.evaluate(() => window.__messages.at(-1));
 if (lastMessage?.type !== "run") throw new Error("Run tests did not send the expected host message.");
-if (!await page.locator('[data-action="run"]').isDisabled() || await page.locator(".run-spinner").count() < 2) {
-  throw new Error("Run tests did not immediately show a disabled spinner state.");
+if (!(await page.locator(".run-view").isVisible()) || !(await page.locator('[data-action="cancel-run"]').isVisible())) {
+  throw new Error("Run tests did not immediately open a cancellable run view.");
 }
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), {
   type: "runState",
-  running: true,
-  target: "../exports/customers-east.csv",
-  index: 1,
-  total: 3
+  running: true, total: 4
 });
-if (!await page.locator(".workbench-run-status").getByText("Testing 1 of 3").isVisible()) {
-  throw new Error("Run progress did not identify the active target.");
-}
+await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), { type: "runTargetStart", index: 0 });
+if (!(await page.locator(".run-target").first().getByText("Preparing").isVisible())) throw new Error("Run progress did not identify the active target.");
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), {
   type: "runState",
   running: false
 });
-if (await page.locator(".workbench-run-status").count() !== 0 || await page.locator('[data-action="run"]').isDisabled()) {
+await page.locator('[data-action="return-workbench"]').click();
+if (await page.locator(".run-view").count() !== 0 || await page.locator('[data-action="run"]').isDisabled()) {
   throw new Error("Run progress did not clear when validation finished.");
 }
 await page.locator('[data-action="add-target-url"]').click();
@@ -403,6 +400,33 @@ if (selectedExport.type !== "exportIssues" || selectedExport.selectedIssues.leng
 await page.locator('.results tbody [data-action="jump-rule"]').first().click();
 if ((await page.evaluate(() => window.__messages.at(-1))).type !== "jumpRule") throw new Error("Filtered results lost jump-to-rule navigation.");
 await page.locator(".results-pane").screenshot({ path: join(qaScreenshotDir, "filtered-stale-results.png") });
+await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), state);
+await page.locator('[data-action="run"]').click();
+if (!(await page.locator(".run-view").isVisible())) throw new Error("Run action did not open the run view.");
+const runTargets = ["reporting.Customers", "../exports/customers-east.csv"];
+const runMessage = async (message) => page.evaluate((value) => window.dispatchEvent(new MessageEvent("message", { data: value })), message);
+await runMessage({ type: "runTargets", targets: runTargets });
+await runMessage({ type: "runState", running: true, total: 2 });
+await runMessage({ type: "runTargetStart", index: 0 });
+await runMessage({ type: "runTargetStart", index: 1 });
+await runMessage({ type: "runTargetProgress", index: 0, progress: { phase: "reading", rowsRead: 10 } });
+if (await page.locator('.run-target').count() !== 2 || await page.locator('.run-target__bar--indeterminate').count() !== 2) {
+  throw new Error("Parallel target cards or indeterminate read progress did not render.");
+}
+await runMessage({ type: "runTargetProgress", index: 0, progress: { phase: "validating", totalRows: 10, groupId: "by-account", groupsValidated: 3, groupRowsProcessed: 4 } });
+if (await page.locator('.run-target').first().locator('[role="progressbar"]').getAttribute("aria-valuenow") !== "40"
+  || !(await page.locator('.run-target').first().textContent()).includes("3 groups validated")) {
+  throw new Error("Measured group progress did not render after the target read.");
+}
+await page.screenshot({ path: join(qaScreenshotDir, "run-progress.png"), fullPage: true });
+await page.setViewportSize({ width: 600, height: 900 });
+if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)) throw new Error("Run view has mobile page overflow.");
+await page.screenshot({ path: join(qaScreenshotDir, "run-progress-narrow.png"), fullPage: true });
+await runMessage({ type: "runTargetComplete", index: 0, status: "PASS", rows: 10, groups: [{ id: "by-account", groups: 3, passed: 3, failed: 0 }] });
+await runMessage({ type: "runTargetComplete", index: 1, status: "FAIL", rows: 2 });
+await runMessage({ type: "runState", running: false });
+await page.locator('[data-action="return-workbench"]').click();
+if (!(await page.locator(".workbench-target").isVisible())) throw new Error("Run view did not return to the Workbench.");
 await page.goto(`http://127.0.0.1:${address.port}/suite`);
 if (await page.title() !== "CSV Contract Suite Workbench") throw new Error("Suite page identity failed.");
 if ((await page.evaluate(() => window.__messages)).length !== 0) throw new Error("Opening the suite initiated an action.");

@@ -16,6 +16,7 @@ import { editSuiteConnection, vscodeSuiteIO, registerSuiteDiagnostics, resolveSu
 import * as vscode from "vscode";
 import { createContractFromCsv, parseContract, serializeContract, validateCsv } from "./core/contract";
 import type { CsvContract, SqlServerObjectInfo, SqlServerTableTarget, ValidationResult } from "./core/model";
+import type { ValidationProgress } from "./core/run-progress";
 import {
   configuredTargets,
   openTargetExternally,
@@ -43,7 +44,10 @@ interface TargetRun {
   error?: string;
 }
 
-export type DesktopSqlServerRunner = (contract: CsvContract, target: ResolvedSqlServerTarget, signal?: AbortSignal, preview?: PreviewOptions) => Promise<ValidationResult>;
+export type DesktopSqlServerRunner = (contract: CsvContract, target: ResolvedSqlServerTarget, signal?: AbortSignal,
+  preview?: PreviewOptions, onProgress?: (progress: ValidationProgress) => void, maxIssues?: number) => Promise<ValidationResult>;
+export type DesktopCsvRunner = (contract: CsvContract, source: string, target: ResolvedTarget,
+  signal?: AbortSignal, onProgress?: (progress: ValidationProgress) => void, maxIssues?: number) => Promise<ValidationResult | undefined>;
 export type DesktopSqlServerBrowser = (profile: string) => Promise<SqlServerObjectInfo[]>;
 
 const sqlConnectionProfilesKey = "csvContract.sqlServer.connectionProfiles";
@@ -56,10 +60,11 @@ export function activate(
   sqlServerRunner?: DesktopSqlServerRunner,
   sqlServerBrowser?: DesktopSqlServerBrowser,
   sqlSchemaReader?: SqlSchemaReader,
-  crossExecutor?: CrossExecutor
+  crossExecutor?: CrossExecutor,
+  csvRunner?: DesktopCsvRunner
 ): { testHooks?: ContractEditorProvider } {
   const output = vscode.window.createOutputChannel("CSV Contract");
-  const provider = new ContractEditorProvider(context, sqlServerRunner, sqlServerBrowser, sqlSchemaReader, crossExecutor);
+  const provider = new ContractEditorProvider(context, sqlServerRunner, sqlServerBrowser, sqlSchemaReader, crossExecutor, csvRunner);
   registerTargetContentProvider(context);
   registerSuiteDiagnostics(context);
   context.subscriptions.push(
@@ -466,7 +471,8 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
     private readonly sqlServerRunner?: DesktopSqlServerRunner,
     private readonly sqlServerBrowser?: DesktopSqlServerBrowser,
     private readonly sqlSchemaReader?: SqlSchemaReader,
-    private readonly crossExecutor?: CrossExecutor
+    private readonly crossExecutor?: CrossExecutor,
+    private readonly csvRunner?: DesktopCsvRunner
   ) {}
 
   public async resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
@@ -526,16 +532,41 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
       if (!files.length && !sqlTargets.length) throw new Error("No targets configured. Choose a CSV or configure a SQL target.");
       contract = { ...contract, targets: files.map((_, index) => ({ path: String(index) })),
         sqlServer: sqlTargets.length ? { ...contract.sqlServer, table: undefined, targets: sqlTargets } : undefined };
-      let completed = 0;
+      const labels = [...sqlTargets.map(sqlServerTargetLabel), ...files.map(file => file.label)];
+      const retainedLimit = vscode.workspace.getConfiguration("csvContract").get<number>("maxRetainedIssues", 0);
+      if (!Number.isSafeInteger(retainedLimit) || retainedLimit < 0) throw new Error("csvContract.maxRetainedIssues must be zero or a positive integer.");
+      const maxIssues = retainedLimit === 0 ? Number.MAX_SAFE_INTEGER : retainedLimit;
+      const lastProgress = new Map<number, number>();
+      const reportProgress = (index: number | undefined, progress: ValidationProgress): void => {
+        if (index === undefined) return;
+        const now = Date.now();
+        if (progress.phase === "reading" && now - (lastProgress.get(index) ?? 0) < 100) return;
+        lastProgress.set(index, now);
+        void panel.webview.postMessage({ type: "runTargetProgress", index, progress });
+      };
       runNotice = `${draft.preview ? `${preview?.rowLimit ? "Sampled" : "Complete-scope"} preview: ${draft.preview}` : "Full validation"} · ${new Date().toISOString()}`;
+      await panel.webview.postMessage({ type: "runTargets", targets: labels });
       await panel.webview.postMessage({ type: "runState", running: true, total: files.length + sqlTargets.length });
       try {
         const report = await runSuite({ id: document.uri.toString(), source: document.uri.toString(), isSuite: false,
-          members: [{ id: memberId ?? "contract", source: document.uri.toString(), contract }] }, async (c, target) => {
+          members: [{ id: memberId ?? "contract", source: document.uri.toString(), contract }] }, async (c, target, _source, index) => {
           if (!this.sqlServerRunner) throw new Error("SQL execution requires the desktop extension host.");
-          return this.sqlServerRunner(c, target, signal, preview);
-        }, false, async (c, _source, target) => validateCsv(c, await readTargetText(files[Number(target.path)]), undefined, undefined, preview), {
-          signal, onProgress: run => { completed++; void panel.webview.postMessage({ type: "runState", running: true, target: run.table ?? files[Number(run.target)]?.label, index: completed, total: files.length + sqlTargets.length }); }
+          return this.sqlServerRunner(c, target, signal, preview, progress => reportProgress(index, progress), maxIssues);
+        }, false, async (c, source, target, index) => {
+          const file = files[Number(target.path)];
+          if (!preview && this.csvRunner) {
+            const result = await this.csvRunner(c, source, file, signal, progress => reportProgress(index, progress), maxIssues);
+            if (result) return result;
+          }
+          reportProgress(index, { phase: "reading" });
+          const csv = await readTargetText(file);
+          reportProgress(index, { phase: "validating", bytesRead: csv.length, totalBytes: csv.length });
+          return validateCsv(c, csv, undefined, undefined, preview);
+        }, {
+          signal, parallelTargets: labels.length,
+          onTargetStart: (_run, index) => { void panel.webview.postMessage({ type: "runTargetStart", index }); },
+          onProgress: (run, index) => { void panel.webview.postMessage({ type: "runTargetComplete", index,
+            status: run.status, rows: run.result?.rowCount, groups: run.result?.groupOutcomes, error: run.error }); }
         });
         return report.runs.map(run => ({ ...run, target: run.table ?? files[Number(run.target)]?.label ?? run.target }));
       } finally { await panel.webview.postMessage({ type: "runState", running: false }); }
@@ -688,7 +719,7 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         const totalIssueCount = latestRuns.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
         if (totalIssueCount > retainedIssueCount) {
           void vscode.window.showWarningMessage(
-            `Exported the run results with ${retainedIssueCount.toLocaleString()} of ${totalIssueCount.toLocaleString()} issue details because the validation issue limit was reached.`
+            `Exported ${retainedIssueCount.toLocaleString()} details for ${totalIssueCount.toLocaleString()} reported issue events. SQL aggregate rules summarize matching rows; a configured issue retention limit may also reduce details.`
           );
         } else {
           void vscode.window.showInformationMessage(`Exported results for ${latestRuns.length.toLocaleString()} validation target${latestRuns.length === 1 ? "" : "s"}.`);

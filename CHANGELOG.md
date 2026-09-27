@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.18.0
+
+- Add a run-focused Workbench view with live per-target reading, row and grouped-validation progress. Show determinate progress after a target's row count is known.
+- Execute independent Workbench targets concurrently while preserving report order, cancellation and cross-check timing. Forward SQL progress through isolated Windows workers.
+- Keep all available Workbench issue details for export by default, with a configurable retention cap. Limit the on-screen results table to 500 matching details.
+- Accept empty SQL streams and report duplicate or invalid ordered keys through child rules instead of rejecting the entire target read.
+
 ## 0.17.1
 
 - Stream grouped and ordered SQL rows without repeated offset queries. Keep small child groups in memory and spill larger groups to disk.
