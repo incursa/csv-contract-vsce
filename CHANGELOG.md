@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.18.1
+
+- Reduce temporary sorting work for moderate grouped targets by retaining more rows in memory within a size limit and caching group sort keys.
+- Show SQL time to first row and streaming throughput in the run view to distinguish server startup from row transfer and local processing.
+
 ## 0.18.0
 
 - Add a run-focused Workbench view with live per-target reading, row and grouped-validation progress. Show determinate progress after a target's row count is known.

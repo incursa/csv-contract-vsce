@@ -58,7 +58,13 @@ export class GroupTestRunner {
     if (!group.resolvedContract && !group.contract) throw new Error(`Group test ${group.id} has an unresolved child contract.`);
     for (const column of group.groupBy) if (!headers.includes(column)) throw new Error(`Group test ${group.id} requires missing column ${column}.`);
     this.options = options;
-    this.store = new RowSortStore((a, b) => key(a, group.groupBy, options).localeCompare(key(b, group.groupBy, options)) || a.row - b.row, tempRoot);
+    const keys = new WeakMap<OrderedRow, string>();
+    const cachedKey = (row: OrderedRow): string => {
+      let value = keys.get(row);
+      if (value === undefined) { value = key(row, group.groupBy, options); keys.set(row, value); }
+      return value;
+    };
+    this.store = new RowSortStore((a, b) => cachedKey(a).localeCompare(cachedKey(b)) || a.row - b.row, tempRoot);
   }
 
   public add(row: number, fields: string[]): void {

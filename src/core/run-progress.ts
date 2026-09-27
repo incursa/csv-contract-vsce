@@ -2,6 +2,9 @@
 export interface ValidationProgress {
   phase: "connecting" | "reading" | "validating" | "summarizing";
   rowsRead?: number;
+  /** SQL read diagnostics, measured from query submission. */
+  readElapsedMs?: number;
+  firstRowMs?: number;
   totalRows?: number;
   bytesRead?: number;
   totalBytes?: number;

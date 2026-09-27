@@ -409,9 +409,16 @@ await runMessage({ type: "runTargets", targets: runTargets });
 await runMessage({ type: "runState", running: true, total: 2 });
 await runMessage({ type: "runTargetStart", index: 0 });
 await runMessage({ type: "runTargetStart", index: 1 });
-await runMessage({ type: "runTargetProgress", index: 0, progress: { phase: "reading", rowsRead: 10 } });
+await runMessage({ type: "runTargetProgress", index: 0, progress: { phase: "reading", rowsRead: 0, readElapsedMs: 2400 } });
+if (!(await page.locator('.run-target').first().textContent()).includes("Waiting for SQL first row · 2.4s")) {
+  throw new Error("SQL first-row wait did not render.");
+}
+await runMessage({ type: "runTargetProgress", index: 0, progress: { phase: "reading", rowsRead: 10, readElapsedMs: 3400, firstRowMs: 2400 } });
 if (await page.locator('.run-target').count() !== 2 || await page.locator('.run-target__bar--indeterminate').count() !== 2) {
   throw new Error("Parallel target cards or indeterminate read progress did not render.");
+}
+if (!(await page.locator('.run-target').first().textContent()).includes("10 rows/s")) {
+  throw new Error("SQL streaming rate did not render.");
 }
 await runMessage({ type: "runTargetProgress", index: 0, progress: { phase: "validating", totalRows: 10, groupId: "by-account", groupsValidated: 3, groupRowsProcessed: 4 } });
 if (await page.locator('.run-target').first().locator('[role="progressbar"]').getAttribute("aria-valuenow") !== "40"

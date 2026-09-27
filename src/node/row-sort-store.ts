@@ -9,10 +9,11 @@ export class RowSortStore {
   private readonly directory: string;
   private readonly paths: string[] = [];
   private buffer: OrderedRow[] = [];
+  private bufferedCharacters = 0;
   private mergeId = 0;
 
   public constructor(private readonly compare: (a: OrderedRow, b: OrderedRow) => number,
-    tempRoot?: string, private readonly chunkRows = 10000) {
+    tempRoot?: string, private readonly chunkRows = 100000, private readonly chunkCharacters = 32 * 1024 * 1024) {
     const root = resolve(tempRoot ?? tmpdir());
     if (!existsSync(root)) mkdirSync(root, { recursive: true });
     this.directory = mkdtempSync(join(root, "csv-contract-sequence-"));
@@ -20,7 +21,8 @@ export class RowSortStore {
 
   public add(row: OrderedRow): void {
     this.buffer.push(row);
-    if (this.buffer.length >= this.chunkRows) this.spill();
+    this.bufferedCharacters += Object.values(row.values).reduce((size, value) => size + value.length, 0);
+    if (this.buffer.length >= this.chunkRows || this.bufferedCharacters >= this.chunkCharacters) this.spill();
   }
 
   private spill(): void {
@@ -30,6 +32,7 @@ export class RowSortStore {
     writeFileSync(path, this.buffer.map(row => JSON.stringify(row)).join("\n") + "\n");
     this.paths.push(path);
     this.buffer = [];
+    this.bufferedCharacters = 0;
   }
 
   public async *rows(): AsyncGenerator<OrderedRow> {

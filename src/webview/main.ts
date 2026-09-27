@@ -88,6 +88,10 @@ function renderRunView(): void {
         <div class="run-target__details">${progress?.rowsRead !== undefined || target.rows !== undefined
           ? `<span>${(progress?.rowsRead ?? target.rows ?? 0).toLocaleString()} rows read${progress?.totalRows !== undefined ? ` of ${progress.totalRows.toLocaleString()}` : ""}</span>` : ""}
           ${progress?.phase === "reading" && progress.bytesRead !== undefined ? `<span>${(progress.bytesRead / 1048576).toFixed(1)} MB read${progress.totalBytes ? ` of ${(progress.totalBytes / 1048576).toFixed(1)} MB` : ""}</span>` : ""}
+          ${progress?.phase === "reading" && progress.readElapsedMs !== undefined && progress.firstRowMs === undefined
+            ? `<span>Waiting for SQL first row · ${(progress.readElapsedMs / 1000).toFixed(1)}s</span>` : ""}
+          ${progress?.phase === "reading" && progress.readElapsedMs !== undefined && progress.rowsRead
+            ? `<span>SQL first row ${((progress.firstRowMs ?? 0) / 1000).toFixed(1)}s · ${Math.round(progress.rowsRead / Math.max(1, (progress.readElapsedMs - (progress.firstRowMs ?? 0)) / 1000)).toLocaleString()} rows/s</span>` : ""}
           ${groups.map(([id, count]) => `<span>${escape(id)}: ${count.validated.toLocaleString()} groups validated${count.totalRows ? ` · ${count.rowsProcessed.toLocaleString()} / ${count.totalRows.toLocaleString()} rows grouped` : ""}</span>`).join("")}
           ${target.groups?.map(group => `<span>${escape(group.id)}: ${group.groups.toLocaleString()} groups · ${group.passed.toLocaleString()} passed · ${group.failed.toLocaleString()} failed</span>`).join("") ?? ""}
           ${target.error ? `<span class="run-target__error">${escape(target.error)}</span>` : ""}</div>

@@ -436,15 +436,25 @@ async function validateSqlGroups(handle: SqlPoolHandle, contract: CsvContract, t
     bindScope(request, handle.api, target, scopeValue);
     let sourceRow = 0;
     let lastProgress = 0;
+    const readStarted = Date.now();
+    let firstRowMs: number | undefined;
     onProgress?.({ phase: "reading", rowsRead: 0 });
-    await queryRows<Record<string, string | null>>(request,
-      `SELECT ${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope} ORDER BY ${order};`,
-      record => {
-        sourceRow++;
-        runners.forEach(runner => runner.add(sourceRow, headers.map(h => record[h] == null ? "" : String(record[h]))));
-        if (Date.now() - lastProgress >= 100) { lastProgress = Date.now(); onProgress?.({ phase: "reading", rowsRead: sourceRow }); }
-      }, signal);
-    onProgress?.({ phase: "validating", rowsRead: sourceRow, totalRows: sourceRow });
+    const heartbeat = onProgress ? setInterval(() => onProgress({ phase: "reading", rowsRead: sourceRow,
+      readElapsedMs: Date.now() - readStarted, firstRowMs }), 1000) : undefined;
+    try {
+      await queryRows<Record<string, string | null>>(request,
+        `SELECT ${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scope} ORDER BY ${order};`,
+        record => {
+          sourceRow++;
+          firstRowMs ??= Date.now() - readStarted;
+          const fields = headers.map(h => record[h] == null ? "" : String(record[h]));
+          runners.forEach(runner => runner.add(sourceRow, fields));
+          if (Date.now() - lastProgress >= 100) { lastProgress = Date.now(); onProgress?.({ phase: "reading", rowsRead: sourceRow,
+            readElapsedMs: lastProgress - readStarted, firstRowMs }); }
+        }, signal);
+    } finally { if (heartbeat) clearInterval(heartbeat); }
+    onProgress?.({ phase: "validating", rowsRead: sourceRow, totalRows: sourceRow,
+      readElapsedMs: Date.now() - readStarted, firstRowMs });
     return await Promise.all(runners.map(runner => runner.finish(maximum, signal)));
   } finally { runners.forEach(runner => runner.dispose()); }
 }
