@@ -264,7 +264,9 @@ test("SQL grouped evaluation uses bounded target reads and matches CSV findings"
         queries.push(sql);
         if (sql.includes("sys.columns")) return { recordset: columns.map((name, index) => ({ name, ordinal: index + 1,
           sqlType: name === "Seq" ? "int" : "nvarchar", maxLength: 100 })) };
-        if (request.stream) { streamedQueries.push(sql); data.forEach(row => request.emit("row", row)); return { recordset: data.length ? [] : null }; }
+        if (request.stream) { streamedQueries.push(sql); data.forEach(row => request.emit("row",
+          Object.fromEntries(Object.entries(row).filter(([name]) => name !== "ExternalRef"))));
+          return { recordset: data.length ? [] : null }; }
         if (sql.includes("RuleId")) return { recordsets: [generated.rules.map(rule => ({ RuleId: rule.id, RuleName: rule.name,
           Severity: rule.severity, Code: rule.code, ColumnName: "", FailureCount: 0, SelectedCount: null }))] };
         return { recordset: [{ count: data.length }] };
@@ -277,6 +279,7 @@ test("SQL grouped evaluation uses bounded target reads and matches CSV findings"
     assert.equal(streamedQueries.length, 1);
     assert(!streamedQueries[0].includes("nvarchar(max)"));
     assert(streamedQueries[0].includes("CONVERT(nvarchar(128), t.[Seq])"));
+    assert(!streamedQueries[0].includes("t.[ExternalRef]"));
     assert(progress.some(update => update.phase === "reading"));
     assert(progress.some(update => update.phase === "validating" && update.totalRows === data.length));
     assert(progress.some(update => update.groupsValidated === 1));
@@ -288,6 +291,18 @@ test("SQL grouped evaluation uses bounded target reads and matches CSV findings"
     const empty = await session.validate(definition, target);
     assert.equal(empty.rowCount, 0);
     assert.equal(empty.groupOutcomes?.find(outcome => outcome.id === "events")?.groups, 0);
+    const whole: CsvContract = { ...definition, groupTests: [{ id: "all", groupBy: [],
+      contract: { version: 1, schema: { rowCount: { exact: 0 }, columns: {}, allowAdditionalColumns: false } } }] };
+    const countOnly = await session.validate(whole, target);
+    assert.equal(countOnly.groupOutcomes?.find(outcome => outcome.id === "all")?.groups, 1);
+    assert.equal(countOnly.issues.filter(issue => issue.testId === "all" && issue.code === "ADDITIONAL_COLUMN").length, columns.length);
+    assert(streamedQueries.at(-1)?.includes("SELECT 1 AS [__csv_contract_row]"));
+    const withBaseline: CsvContract = { ...whole, groupTests: [{ ...whole.groupTests![0], contract: {
+      ...whole.groupTests![0].contract!, baseline: { baselineVersion: 1, revision: 1,
+        capturedAt: "2026-01-01T00:00:00Z", sourceKind: "manual", captureMethod: "manual", columns: [] }
+    } }] };
+    await session.validate(withBaseline, target);
+    assert(streamedQueries.at(-1)?.includes("t.[ExternalRef]"));
   });
 });
 

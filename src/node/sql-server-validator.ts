@@ -422,7 +422,27 @@ async function validateSqlGroups(handle: SqlPoolHandle, contract: CsvContract, t
   metadata: MetadataRow[], scopeValue: string | undefined, maximum: number, signal?: AbortSignal,
   onProgress?: (progress: ValidationProgress) => void): Promise<GroupSummary[]> {
   const headers = [...new Set(metadata.map(m => canonicalSqlServerColumn(target, m.name)))];
-  const projection = headers.map(c => {
+  const required = new Set<string>();
+  const available = new Set(headers);
+  const seen = new WeakSet<object>();
+  let observeAllValues = false;
+  const visit = (value: unknown): void => {
+    if (typeof value === "string") { if (available.has(value)) required.add(value); return; }
+    if (!value || typeof value !== "object" || seen.has(value)) return;
+    seen.add(value);
+    for (const [name, nested] of Object.entries(value)) {
+      if (name === "baseline" && nested) observeAllValues = true;
+      if (available.has(name)) required.add(name);
+      visit(nested);
+    }
+  };
+  visit(contract.groupTests);
+  if (observeAllValues) headers.forEach(header => required.add(header));
+  let sentinel = "__csv_contract_row";
+  while (available.has(sentinel)) sentinel += "_";
+  // Keep every header for child schema/count checks, but fetch values only for
+  // columns the grouped contracts name. ORDER BY can use a non-projected locator.
+  const projection = headers.filter(c => required.has(c)).map(c => {
     const physical = physicalSqlServerColumn(target, c);
     const column = metadata.find(m => m.name === physical);
     const type = column?.sqlType?.toLowerCase();
@@ -433,7 +453,7 @@ async function validateSqlGroups(handle: SqlPoolHandle, contract: CsvContract, t
       "real", "float", "date", "datetime", "datetime2", "smalldatetime", "datetimeoffset", "time", "uniqueidentifier"].includes(type ?? "");
     const size = boundedText ? 4000 : boundedScalar ? 128 : "max";
     return `CONVERT(nvarchar(${size}), t.${sqlIdentifier(physical)}) AS ${sqlIdentifier(c)}`;
-  }).join(", ");
+  }).join(", ") || `1 AS ${sqlIdentifier(sentinel)}`;
   const scope = scopeWhere(target);
   const runners = (contract.groupTests ?? []).map(group => new GroupTestRunner(group, headers, contract.csv ?? {},
     group.resolvedSource ?? "<sql-contract>", undefined, progress => onProgress?.({ phase: "validating",

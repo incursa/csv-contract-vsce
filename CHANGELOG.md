@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.18.3
+
+- Read values only for columns named by grouped child contracts while retaining the full target header list for schema and column-count checks. Continue ordering by the configured locator.
+
 ## 0.18.2
 
 - Transfer ordinary grouped SQL fields as bounded strings instead of treating every column as a large-value field. Keep unbounded and unfamiliar types on the existing projection path.

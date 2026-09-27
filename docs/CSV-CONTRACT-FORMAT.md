@@ -240,6 +240,8 @@ When `reasonColumn` is declared, each event mapping must list `reasonCodes` or e
 
 Group findings carry the group key, child rule ID, source row, related rows when applicable, and actual values in the normal results JSON and Workbench. Failure details obey the usual `maxIssues` limit. CSV groups are sorted in temporary runs; small groups are checked in memory and large groups spill to temporary disk. SQL validation streams the ordered target once through the existing read-only session and requires `sqlServer.rowLocator` to order the rows. Locator values may repeat or be null. Use an ordered child rule with `duplicateOrder` and `invalidOrder` to report bad event keys as validation findings. Source row positions among tied locator values may vary between runs. Generated standalone SQL does not represent child or ordered rules; use normal `test` or `dbtest` execution for the complete contract.
 
+Grouped SQL reads fetch values only for columns named by child contracts. The child still sees the complete SQL header list for column-count, order, and additional-column checks. Unreferenced large fields need not cross the connection just to evaluate a group.
+
 For large SQL targets, an index that supports the scope filter (when present) and `rowLocator` order can avoid a server-side sort before the first row arrives. The run view shows time to first row and rows per second during grouped reads; a long first-row wait points to SQL execution or sorting, while a low streaming rate points to transfer or local row processing.
 
 ## Exact header order
