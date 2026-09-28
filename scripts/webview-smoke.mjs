@@ -54,7 +54,7 @@ const state = {
     },
     rowTests: [
       { id: "expected-customer-exists", select: { CustomerId: "C000123" }, expect: { count: { exact: 1 } } },
-      { id: "expected-customer-status", select: { CustomerId: "C000123" }, expect: { cells: { Status: { equals: "Active" } } } }
+      { id: "expected-customer-status", name: "Customer status must be active", message: "Review the customer status before continuing.", select: { CustomerId: "C000123" }, expect: { cells: { Status: { equals: "Active" } } } }
     ]
   },
   result: undefined
@@ -73,13 +73,16 @@ const failedState = {
       errorCount: 12,
       warningCount: 0,
       truncated: false,
+      ruleOutcomes: [{ id: "expected-customer-status", name: "Customer status must be active", selected: 12, passed: 0, failed: 12 }],
       issues: Array.from({ length: 12 }, (_, index) => ({
         level: "cell",
         code: "CELL_NOT_EQUAL",
         testId: "expected-customer-status",
         column: "Status",
         row: index + 2,
-        message: `Expected Active; found Inactive at row ${index + 2}.`,
+        title: "Customer status must be active",
+        message: "Review the customer status before continuing.",
+        diagnostic: `Expected Active; found Inactive at row ${index + 2}.`,
         expected: "Active",
         actual: "Inactive"
       }))
@@ -181,7 +184,9 @@ if (removeSqlMessage?.type !== "updateContract" || removeSqlMessage.contract.sql
 
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), failedState);
 if ((await page.locator(".results .finding-card").count()) !== 12) throw new Error("Finding list must include all retained issues.");
-if (!(await page.locator(".finding-card").first().textContent()).includes("Expected Customer Status")
+if (!(await page.locator(".finding-card").first().textContent()).includes("Customer status must be active")
+  || !(await page.locator(".finding-card").first().textContent()).includes("Review the customer status before continuing")
+  || !(await page.locator(".finding-card").first().textContent()).includes("Why it failed")
   || !(await page.locator(".finding-card").first().textContent()).includes("Row 2")) {
   throw new Error("Finding cards did not explain the rule and location in readable language.");
 }
@@ -206,6 +211,9 @@ if ((await page.locator("#allowedValues").inputValue()) !== "Active\nInactive") 
 await page.locator('[data-row-test-index="1"]').click();
 if ((await page.locator("#rowTestId").inputValue()) !== "expected-customer-status") {
   throw new Error("Row test selection did not open the expected editor.");
+}
+if ((await page.locator("#rowTestMessage").inputValue()) !== "Review the customer status before continuing.") {
+  throw new Error("Row test failure wording did not render in the editor.");
 }
 const expectedCell = page.locator("[data-cell-value]");
 if ((await expectedCell.inputValue()) !== "Active") throw new Error("Cell expectation did not render for editing.");
@@ -283,7 +291,7 @@ if ((await page.locator(".rule-card").count()) !== 2) throw new Error("Condition
 if ((await page.locator(".advanced-rules-pane .configured-target-row").count()) !== 0) throw new Error("Rules still use the cramped target row layout.");
 await page.locator('.rule-card [data-action="preview-rule"]').first().click();
 if ((await page.evaluate(() => window.__messages.at(-1))).type !== "preview") throw new Error("Rule card preview did not respond.");
-await page.locator(".visual-rule > summary").click();
+await page.locator(".visual-rule > summary").first().click();
 if ((await page.locator(".visual-rule .predicate-fields").count()) < 2) throw new Error("Rule editor did not show structured condition fields.");
 await page.locator(".advanced-rules-pane").screenshot({ path: join(qaScreenshotDir, "conditional-group-rules.png") });
 await page.locator(".workbench-target").screenshot({ path: join(qaScreenshotDir, "workbench-target-actions.png") });
@@ -404,7 +412,7 @@ await page.locator('.results [data-issue-selection]').check();
 await page.locator('[data-action="export-issues"]').click();
 const selectedExport = await page.evaluate(() => window.__messages.at(-1));
 if (selectedExport.type !== "exportIssues" || selectedExport.selectedIssues.length !== 1 || selectedExport.filter !== "row 2.") throw new Error("Rendered issue selection export failed.");
-await page.locator('.results [data-action="jump-rule"]').first().click();
+await page.locator('.results .finding-rule-action').first().click();
 if ((await page.evaluate(() => window.__messages.at(-1))).type !== "jumpRule") throw new Error("Filtered results lost jump-to-rule navigation.");
 await page.locator(".results-pane").screenshot({ path: join(qaScreenshotDir, "filtered-stale-results.png") });
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), {

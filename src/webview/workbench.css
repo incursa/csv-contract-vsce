@@ -113,9 +113,14 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .rule-card { min-width: 0; padding: .8rem .9rem; border: 1px solid var(--inc-border-default); border-radius: 4px; background: #fafafa; }
 .rule-card__heading, .rule-card__identity { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; min-width: 0; }
 .rule-card__heading { justify-content: space-between; }
-.rule-card__identity code { margin: 0; overflow-wrap: anywhere; font-size: .82rem; font-weight: 600; }
+.rule-card__identity > div { display: grid; gap: .05rem; }
+.rule-card__identity h3 { margin: 0; font-size: .86rem; }
+.rule-card__identity code { margin: 0; overflow-wrap: anywhere; color: var(--inc-text-secondary); font-size: .7rem; }
 .rule-card__type { padding: .2rem .4rem; border-radius: 3px; color: #344bbd; background: #e9edff; font-size: .66rem; font-weight: 700; letter-spacing: .035em; }
 .rule-card__summary { margin: .55rem 0 0; color: var(--inc-text-secondary); font-size: .8rem; line-height: 1.5; overflow-wrap: anywhere; }
+.rule-card__message { margin: .55rem 0 0; font-size: .8rem; line-height: 1.5; overflow-wrap: anywhere; }
+.rule-presentation-fields { display: grid; grid-template-columns: minmax(12rem, .8fr) minmax(18rem, 1.2fr); gap: .75rem; }
+.rule-presentation-fields label { display: grid; gap: .3rem; }
 .rule-card__footer { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; }
 .rule-card__footer p { margin: 0; color: #b01524; font-size: .78rem; }
 .pane-heading p, .pane > p { margin: .25rem 0 0; color: #656668; font-size: .8rem; }
@@ -152,6 +157,8 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .row-test-editor h3 { margin: .15rem 0 0; font-size: .95rem; }
 .editor-eyebrow { color: #656668; font-size: .68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
 .row-test-basics { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+.row-test-message { grid-column: 1 / -1; }
+.row-test-message textarea { min-height: 4.5rem; resize: vertical; }
 .row-test-editor label { display: flex; flex-direction: column; gap: .35rem; color: #656668; font-size: .75rem; }
 .test-editor-section { min-width: 0; margin: 1rem 0 0; padding: 1rem; border: 1px solid #dbdcdc; border-radius: 4px; background: #fff; }
 .test-editor-section legend { padding: 0 .25rem; font-size: .82rem; font-weight: 600; }
@@ -230,9 +237,12 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .report-outcome--fail { color: #a01120; border-color: #eea8af; background: #fff4f5; }
 .report-issues { display: grid; gap: .5rem; margin: .75rem 0 0; padding: 0; list-style: none; }
 .report-issues li { display: grid; grid-template-columns: minmax(8rem, auto) minmax(10rem, 1fr); gap: .15rem .75rem; padding-top: .55rem; border-top: 1px solid #eea8af; }
+.report-issues li > div { display: grid; gap: .1rem; }
+.report-issues li > div > strong { font-size: .8rem; }
 .report-issues code { font-size: .75rem; font-weight: 600; }
 .report-issues span { color: #8b2631; font-size: .72rem; }
 .report-issues p { grid-column: 1 / -1; }
+.report-issues .report-issue-diagnostic { margin-top: -.3rem; color: var(--inc-text-secondary); font-size: .75rem; }
 .report-jump { display: inline-block; margin-top: .8rem; color: #344bbd; font-size: .78rem; font-weight: 600; text-decoration: none; }
 .report-jump:hover { text-decoration: underline; }
 
@@ -291,6 +301,17 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .results-provenance strong { display: block; overflow-wrap: anywhere; font-size: .84rem; }
 .results-provenance p { margin: .2rem 0 0; color: #52545a; font-size: .76rem; }
 .target-result__summary { margin: 0; color: var(--inc-text-secondary); font-size: .78rem; }
+.rule-execution-summary { margin: .7rem 0; border: 1px solid var(--inc-border-default); border-radius: 4px; background: #fafafa; }
+.rule-execution-summary > summary { padding: .6rem .7rem; font-size: .78rem; font-weight: 600; cursor: pointer; }
+.rule-execution-list { display: grid; border-top: 1px solid var(--inc-border-default); }
+.rule-execution-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .6rem .7rem; }
+.rule-execution-row + .rule-execution-row { border-top: 1px solid var(--inc-border-default); }
+.rule-execution-row div { display: grid; gap: .1rem; min-width: 0; }
+.rule-execution-row strong { overflow-wrap: anywhere; font-size: .78rem; }
+.rule-execution-row span { color: var(--inc-text-secondary); font-size: .72rem; }
+.finding-list-heading { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; margin: .8rem 0 .45rem; }
+.finding-list-heading h3 { margin: 0; font-size: .9rem; }
+.finding-list-heading span { color: var(--inc-text-secondary); font-size: .72rem; }
 .finding-list { display: grid; gap: .65rem; }
 .finding-card { display: grid; grid-template-columns: 1.5rem minmax(0, 1fr); gap: .7rem; padding: .85rem; border: 1px solid var(--inc-border-default); border-left-width: 4px; border-radius: 4px; background: #fff; }
 .finding-card--error { border-left-color: #d11a2a; }
@@ -301,9 +322,11 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .finding-severity { display: inline-flex; padding: .16rem .42rem; border-radius: 999px; font-size: .65rem; font-weight: 700; letter-spacing: .035em; text-transform: uppercase; }
 .finding-severity--error { color: #a01120; background: #fff0f1; }
 .finding-severity--warning { color: #725200; background: #fff4ce; }
+.finding-card__heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .35rem .75rem; }
 .finding-card h3 { margin: 0; font-size: .9rem; }
-.finding-card h3 button { padding: 0; border: 0; color: #344bbd; background: transparent; font: inherit; text-align: left; text-decoration: underline; cursor: pointer; }
+.finding-rule-action { padding: 0; border: 0; color: #344bbd; background: transparent; font-size: .72rem; font-weight: 600; text-decoration: underline; cursor: pointer; }
 .finding-message { margin: 0; font-size: .84rem; line-height: 1.48; overflow-wrap: anywhere; }
+.finding-diagnostic { margin: 0; color: var(--inc-text-secondary); font-size: .76rem; line-height: 1.45; overflow-wrap: anywhere; }
 .finding-groups { display: flex; flex-wrap: wrap; gap: .35rem; }
 .finding-chip { padding: .22rem .45rem; border: 1px solid #cbd1ea; border-radius: 3px; background: #f6f7ff; font-size: .72rem; overflow-wrap: anywhere; }
 .finding-chip span { color: var(--inc-text-secondary); }
@@ -334,4 +357,7 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .predicate-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
 .predicate-actions button, .visual-rule [data-predicate-action="add"] { padding: .35rem .55rem; border: 1px solid #c4c4c5; border-radius: 4px; color: var(--inc-text-primary); background: #fff; font-size: .72rem; cursor: pointer; }
 .predicate-actions button:hover, .visual-rule [data-predicate-action="add"]:hover { border-color: #98a5e8; background: #f4f6ff; }
-@media (max-width: 560px) { .predicate-fields { grid-template-columns: 1fr; } }
+@media (max-width: 560px) {
+  .predicate-fields, .rule-presentation-fields { grid-template-columns: 1fr; }
+  .rule-execution-row { align-items: flex-start; flex-direction: column; }
+}

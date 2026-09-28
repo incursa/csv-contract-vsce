@@ -23,6 +23,7 @@ import { OrderedRuleEvaluator, orderedChecks, orderedColumns, compareOrderedRows
 import { RowSortStore } from "./row-sort-store";
 import { GroupTestRunner } from "./group-runner";
 import { resolveGroupContracts } from "../core/group-contracts";
+import { rulePresentation } from "../core/rule-presentation";
 
 const csvDefaults: Required<CsvOptions> = {
   delimiter: ",",
@@ -104,7 +105,7 @@ interface PreparedRowTest {
 interface PreparedRule {
   rule: ConditionalRule;
   valid: boolean;
-  outcome?: { id: string; selected: number; passed: number; failed: number };
+  outcome?: { id: string; name?: string; selected: number; passed: number; failed: number };
 }
 
 interface PreparedGroupRule {
@@ -177,18 +178,22 @@ function countIssues(
   actual: number,
   expectation: CountExpectation | undefined,
   level: "file" | "row",
-  testId?: string
+  testId?: string,
+  presentation?: { id: string; name?: string; message?: string }
 ): ValidationIssue[] {
   if (!expectation) return [];
   const issues: ValidationIssue[] = [];
   if (expectation.exact !== undefined && actual !== expectation.exact) {
-    issues.push({ level, code: `${name.toUpperCase()}_EXACT`, message: `${name} is ${actual}; expected exactly ${expectation.exact}.`, actual, expected: expectation.exact, testId });
+    const diagnostic = `${name} is ${actual}; expected exactly ${expectation.exact}.`;
+    issues.push({ level, code: `${name.toUpperCase()}_EXACT`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.exact, testId });
   }
   if (expectation.min !== undefined && actual < expectation.min) {
-    issues.push({ level, code: `${name.toUpperCase()}_MIN`, message: `${name} is ${actual}; expected at least ${expectation.min}.`, actual, expected: expectation.min, testId });
+    const diagnostic = `${name} is ${actual}; expected at least ${expectation.min}.`;
+    issues.push({ level, code: `${name.toUpperCase()}_MIN`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.min, testId });
   }
   if (expectation.max !== undefined && actual > expectation.max) {
-    issues.push({ level, code: `${name.toUpperCase()}_MAX`, message: `${name} is ${actual}; expected at most ${expectation.max}.`, actual, expected: expectation.max, testId });
+    const diagnostic = `${name} is ${actual}; expected at most ${expectation.max}.`;
+    issues.push({ level, code: `${name.toUpperCase()}_MAX`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.max, testId });
   }
   return issues;
 }
@@ -446,10 +451,11 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
       const actual = state.options.trimValues ? (fields[cell.index] ?? "").trim() : (fields[cell.index] ?? "");
       if (normalize(actual, state.options) !== cell.expected) {
         const expected = prepared.test.expect.cells![cell.column].equals;
+        const diagnostic = `Test "${prepared.test.name ?? prepared.test.id}" expected "${cell.column}" to equal "${displayValue(expected)}", found "${displayValue(actual)}".`;
         state.collector.add({
           level: "cell",
           code: "CELL_NOT_EQUAL",
-          message: `Test "${prepared.test.id}" expected "${cell.column}" to equal "${displayValue(expected)}", found "${displayValue(actual)}".`,
+          ...rulePresentation(prepared.test, diagnostic),
           column: cell.column,
           row: recordNumber,
           testId: prepared.test.id,
@@ -468,14 +474,15 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
   for (const prepared of state.rules) {
     if (!prepared.valid) continue;
     if (prepared.rule.when && !evaluatePredicate(prepared.rule.when, runtime)) continue;
-    const outcome = prepared.outcome ??= { id: prepared.rule.id, selected: 0, passed: 0, failed: 0 };
+    const outcome = prepared.outcome ??= { id: prepared.rule.id, ...(prepared.rule.name ? { name: prepared.rule.name } : {}), selected: 0, passed: 0, failed: 0 };
     outcome.selected++;
     if (evaluatePredicate(prepared.rule.expect, runtime)) { outcome.passed++; continue; }
     outcome.failed++;
+    const diagnostic = `Rule "${prepared.rule.name ?? prepared.rule.id}" expected ${predicateDescription(prepared.rule.expect)}.`;
     state.collector.add({
       level: "row",
       code: "RULE_FAILED",
-      message: `Rule "${prepared.rule.name ?? prepared.rule.id}" expected ${predicateDescription(prepared.rule.expect)}.`,
+      ...rulePresentation(prepared.rule, diagnostic),
       row: recordNumber,
       testId: prepared.rule.id,
       severity: prepared.rule.severity ?? "error"
@@ -488,7 +495,7 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
     const labels = prepared.rule.groupBy.map((column) => fields[state.headerIndex.get(column)!] ?? "");
     const normalizedLabels = labels.map((value) => normalize(value, state.options));
     const key = normalizedLabels.map((value) => `${value.length}:${value}`).join("");
-    const display = prepared.rule.groupBy.map((column, index) => `${column}=${displayValue(labels[index])}`).join(", ");
+    const display = JSON.stringify(Object.fromEntries(prepared.rule.groupBy.map((column, index) => [column, displayValue(labels[index])])));
     const observed = normalize(fields[state.headerIndex.get(prepared.rule.require.column)!] ?? "", state.options);
     groups?.add(prepared.targetId, key, display, observed, recordNumber);
   }
@@ -527,13 +534,16 @@ function addGroupIssues(group: GroupValues, checks: Map<number, GroupCheck>): vo
     const fragment = normalize(required, check.state.options);
     return ![...group.values].some((value) => value.includes(fragment));
   });
+  const groupValues = JSON.parse(group.display) as Record<string, string>;
+  const groupLabel = Object.entries(groupValues).map(([column, value]) => `${column}=${value}`).join(", ");
   for (const missing of [...missingValues, ...missingFragments]) {
     check.state.collector.add({
       level: "row",
       code: "GROUP_REQUIRED_VALUE_MISSING",
-      message: `Group rule "${rule.name ?? rule.id}" is missing "${missing}" in ${rule.require.column} for ${group.display}.`,
+      ...rulePresentation(rule, `Group rule "${rule.name ?? rule.id}" is missing "${missing}" in ${rule.require.column} for ${groupLabel}.`),
       row: group.firstRow,
       column: rule.require.column,
+      group: groupValues,
       testId: rule.id,
       expected: missing,
       severity: rule.severity ?? "error"
@@ -546,14 +556,14 @@ function finalizeState(state: ContractState): ContractRunOutput {
   state.collector.addAll(countIssues("row_count", state.rowCount, state.input.contract.schema.rowCount, "file"));
   for (const prepared of state.rowTests) {
     if (prepared.valid) {
-      state.collector.addAll(countIssues("match_count", prepared.matchCount, prepared.test.expect.count ?? { exact: 1 }, "row", prepared.test.id));
+      state.collector.addAll(countIssues("match_count", prepared.matchCount, prepared.test.expect.count ?? { exact: 1 }, "row", prepared.test.id, prepared.test));
     }
   }
   return {
     spec: state.input.spec,
     result: {
       valid: state.collector.errors === 0,
-      ruleOutcomes: state.rules.filter(r => r.valid).map(r => r.outcome ?? { id: r.rule.id, selected: 0, passed: 0, failed: 0 }),
+      ruleOutcomes: state.rules.filter(r => r.valid).map(r => r.outcome ?? { id: r.rule.id, ...(r.rule.name ? { name: r.rule.name } : {}), selected: 0, passed: 0, failed: 0 }),
       rowCount: state.rowCount,
       columnCount: state.headers.length,
       testCount: Object.keys(state.input.contract.schema.columns).length + (state.input.contract.rowTests?.length ?? 0) +
@@ -682,7 +692,7 @@ async function validateGroup(
       result.valid = result.errorCount === 0;
       result.ruleOutcomes?.push(...summary.ruleOutcomes);
       result.groupOutcomes ??= [];
-      result.groupOutcomes.push({ id: summary.groupCounts[0].id, groups: summary.groupCounts[0].count,
+      result.groupOutcomes.push({ id: summary.groupCounts[0].id, ...(runner.groupName ? { name: runner.groupName } : {}), groups: summary.groupCounts[0].count,
         passed: summary.passedGroups, failed: summary.failedGroups });
       result.groupOutcomes.push(...summary.nestedGroupOutcomes);
       result.issues.push(...summary.issues.slice(0, Math.max(0, options.maxIssues - result.issues.length)));

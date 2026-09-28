@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.19.1
+
+- Let row, conditional, grouped, and SQL conditional rules declare a user-facing result title and failure message while retaining the generated validator diagnostic.
+- Make result navigation explicit with **View YAML definition**, move execution counts into a collapsible summary, and give the findings list a clear heading.
+
 ## 0.19.0
 
 - Load a `incursa.csv-contract-results/v1` JSON export into its matching contract Workbench for historical, read-only review.

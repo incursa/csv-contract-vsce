@@ -165,15 +165,17 @@ function renderOutcome(entry: WorkspaceReportEntryView): string {
 }
 
 function renderIssue(issue: ValidationIssue): string {
+  const humanize = (value: string) => value.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[._/-]+/g, " ").replace(/\b\w/g, letter => letter.toUpperCase());
   const location = [
     issue.column,
     issue.row ? `record ${issue.row}` : undefined,
     issue.testId
   ].filter(Boolean).join(" · ");
   return `<li>
-    <code>${escapeHtml(`${(issue.severity ?? "error").toUpperCase()} ${issue.code}`)}</code>
+    <div><strong>${escapeHtml(issue.title ?? humanize(issue.testId ?? issue.code))}</strong><code>${escapeHtml(`${(issue.severity ?? "error").toUpperCase()} · ${issue.code}`)}</code></div>
     ${location ? `<span>${escapeHtml(location)}</span>` : ""}
     <p>${escapeHtml(issue.message)}</p>
+    ${issue.diagnostic ? `<p class="report-issue-diagnostic"><strong>Why it failed:</strong> ${escapeHtml(issue.diagnostic)}</p>` : ""}
   </li>`;
 }
 

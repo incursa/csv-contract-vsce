@@ -67,6 +67,9 @@ function validationResult(value: unknown, run: number): ValidationResult {
     if (!["file", "column", "row", "cell"].includes(String(issue.level)) || typeof issue.code !== "string" || typeof issue.message !== "string") {
       throw new Error(`Results JSON run ${run}, issue ${index + 1} is missing its level, code, or message.`);
     }
+    if (issue.title !== undefined && typeof issue.title !== "string" || issue.diagnostic !== undefined && typeof issue.diagnostic !== "string") {
+      throw new Error(`Results JSON run ${run}, issue ${index + 1} has an invalid title or diagnostic.`);
+    }
     return value as ValidationResult["issues"][number];
   });
   return {

@@ -13,6 +13,7 @@ import { resolveEvaluation } from "./evaluation";
 export interface SqlGeneratedRule {
   id: string;
   name: string;
+  message?: string;
   severity: RuleSeverity;
   code: string;
   column?: string;
@@ -155,6 +156,7 @@ function addConditionalRule(
   }
   output.push({
     id: rule.id, name: rule.name ?? rule.id, severity: rule.severity ?? "error",
+    ...(rule.message?.trim() ? { message: rule.message.trim() } : {}),
     code: "RULE_EXPECTATION_FAILED", violation: `(${when} AND NOT ${expected})`, selected: when
   });
 }
@@ -167,14 +169,14 @@ export function safeSqlType(value: string): string {
   return type;
 }
 
-function countRule(id: string, name: string, comparison: string): GeneratedRule {
-  return { id, name, severity: "error", code: id.toUpperCase().replaceAll("-", "_"), failureCountSql: `CASE WHEN ${comparison} THEN CONVERT(bigint, 1) ELSE CONVERT(bigint, 0) END` };
+function countRule(id: string, name: string, comparison: string, message?: string): GeneratedRule {
+  return { id, name, ...(message?.trim() ? { message: message.trim() } : {}), severity: "error", code: id.toUpperCase().replaceAll("-", "_"), failureCountSql: `CASE WHEN ${comparison} THEN CONVERT(bigint, 1) ELSE CONVERT(bigint, 0) END` };
 }
 
-function addCountExpectations(rules: GeneratedRule[], prefix: string, name: string, countSql: string, expectation: { exact?: number; min?: number; max?: number } | undefined): void {
-  if (expectation?.exact !== undefined) rules.push(countRule(`${prefix}-exact`, `${name} is exactly ${expectation.exact}`, `${countSql} <> ${expectation.exact}`));
-  if (expectation?.min !== undefined) rules.push(countRule(`${prefix}-min`, `${name} is at least ${expectation.min}`, `${countSql} < ${expectation.min}`));
-  if (expectation?.max !== undefined) rules.push(countRule(`${prefix}-max`, `${name} is at most ${expectation.max}`, `${countSql} > ${expectation.max}`));
+function addCountExpectations(rules: GeneratedRule[], prefix: string, name: string, countSql: string, expectation: { exact?: number; min?: number; max?: number } | undefined, message?: string): void {
+  if (expectation?.exact !== undefined) rules.push(countRule(`${prefix}-exact`, `${name} is exactly ${expectation.exact}`, `${countSql} <> ${expectation.exact}`, message));
+  if (expectation?.min !== undefined) rules.push(countRule(`${prefix}-min`, `${name} is at least ${expectation.min}`, `${countSql} < ${expectation.min}`, message));
+  if (expectation?.max !== undefined) rules.push(countRule(`${prefix}-max`, `${name} is at most ${expectation.max}`, `${countSql} > ${expectation.max}`, message));
 }
 
 export function generateSqlServerValidation(contract: CsvContract, options: SqlGenerationOptions = {}): SqlGenerationResult {
@@ -262,9 +264,9 @@ function generatePhysicalSqlServerValidation(contract: CsvContract, options: Sql
   for (const test of contract.rowTests ?? []) {
     const selector = Object.entries(test.select).map(([column, value]) => `COALESCE(${normalizedText(column, caseSensitive, trimValues)}, ${normalizedLiteral("", caseSensitive, trimValues)}) = ${normalizedLiteral(value, caseSensitive, trimValues)}`).join(" AND ");
     const selectedCount = `(SELECT COUNT_BIG(*) FROM ${table} AS t WHERE (${scopeSql}) AND (${selector}))`;
-    addCountExpectations(rules, `${test.id}-count`, `${test.name ?? test.id} selected row count`, selectedCount, test.expect.count ?? { exact: 1 });
+    addCountExpectations(rules, `${test.id}-count`, `${test.name ?? test.id} selected row count`, selectedCount, test.expect.count ?? { exact: 1 }, test.message);
     for (const [column, expectation] of Object.entries(test.expect.cells ?? {})) {
-      rules.push({ id: `${test.id}-${column}`, name: `${test.name ?? test.id}: ${column} equals ${expectation.equals}`, severity: "error", code: "CELL_MISMATCH", column, violation: `((${selector}) AND COALESCE(${normalizedText(column, caseSensitive, trimValues)}, ${normalizedLiteral("", caseSensitive, trimValues)}) <> ${normalizedLiteral(expectation.equals, caseSensitive, trimValues)})` });
+      rules.push({ id: `${test.id}-${column}`, name: test.name ?? test.id, ...(test.message?.trim() ? { message: test.message.trim() } : {}), severity: "error", code: "CELL_MISMATCH", column, violation: `((${selector}) AND COALESCE(${normalizedText(column, caseSensitive, trimValues)}, ${normalizedLiteral("", caseSensitive, trimValues)}) <> ${normalizedLiteral(expectation.equals, caseSensitive, trimValues)})` });
     }
   }
 
@@ -280,7 +282,7 @@ function generatePhysicalSqlServerValidation(contract: CsvContract, options: Sql
         ? `CHARINDEX(${normalizedLiteral(required, caseSensitive, trimValues)}, COALESCE(${normalizedText(rule.require.column, caseSensitive, trimValues)}, ${normalizedLiteral("", caseSensitive, trimValues)})) > 0`
         : `COALESCE(${normalizedText(rule.require.column, caseSensitive, trimValues)}, ${normalizedLiteral("", caseSensitive, trimValues)}) = ${normalizedLiteral(required, caseSensitive, trimValues)}`;
       const inner = `SELECT ${groupColumns} FROM ${table} AS t WHERE (${scopeSql}) AND (${when}) GROUP BY ${groupColumns} HAVING SUM(CASE WHEN ${observed} THEN 1 ELSE 0 END) = 0`;
-      rules.push({ id: `${rule.id}-${contains ? "contains" : "value"}-${rules.length}`, name: `${rule.name ?? rule.id} requires ${required}`, severity: rule.severity ?? "error", code: "GROUP_REQUIRED_VALUE_MISSING", column: rule.require.column, failureCountSql: `(SELECT COUNT_BIG(*) FROM (${inner}) AS missing_groups)` });
+      rules.push({ id: `${rule.id}-${contains ? "contains" : "value"}-${rules.length}`, name: rule.name ?? rule.id, ...(rule.message?.trim() ? { message: rule.message.trim() } : {}), severity: rule.severity ?? "error", code: "GROUP_REQUIRED_VALUE_MISSING", column: rule.require.column, failureCountSql: `(SELECT COUNT_BIG(*) FROM (${inner}) AS missing_groups)` });
     };
     for (const required of rule.require.values ?? []) addGroupRequirement(required, false);
     for (const required of rule.require.contains ?? []) addGroupRequirement(required, true);
@@ -298,7 +300,7 @@ function generatePhysicalSqlServerValidation(contract: CsvContract, options: Sql
       "-- One row per validation rule. FailureCount = 0 means the rule passed.",
       ...rules.flatMap((rule, index) => [
         index === 0 ? "SELECT" : "UNION ALL SELECT",
-        `  ${options.suite ? `${sqlString(options.suite.id)} AS SuiteId, ${sqlString(options.suite.member)} AS MemberId, ${sqlString(`${target.schema}.${target.table}`)} AS TableName, ` : ""}${sqlString(rule.id)} AS RuleId, ${sqlString(rule.name)} AS RuleName, ${sqlString(rule.severity)} AS Severity, ${sqlString(rule.code)} AS Code,`,
+        `  ${options.suite ? `${sqlString(options.suite.id)} AS SuiteId, ${sqlString(options.suite.member)} AS MemberId, ${sqlString(`${target.schema}.${target.table}`)} AS TableName, ` : ""}${sqlString(rule.id)} AS RuleId, ${sqlString(rule.name)} AS RuleName, ${sqlString(rule.message ?? "")} AS FailureMessage, ${sqlString(rule.severity)} AS Severity, ${sqlString(rule.code)} AS Code,`,
         `  ${sqlString(rule.column ?? "")} AS ColumnName, ${rule.failureCountSql ?? `(SELECT COUNT_BIG(*) FROM ${table} AS t WHERE (${scopeSql}) AND (${rule.violation}))`} AS FailureCount, ${rule.selected ? `(SELECT COUNT_BIG(*) FROM ${table} AS t WHERE (${scopeSql}) AND (${rule.selected}))` : "CAST(NULL AS bigint)"} AS SelectedCount`
       ]),
       "ORDER BY Severity, RuleId;"
@@ -316,6 +318,6 @@ function generatePhysicalSqlServerValidation(contract: CsvContract, options: Sql
     sql: `${lines.join("\n")}\n`,
     ruleCount: rules.length,
     warnings,
-    rules: rules.map((rule) => ({ id: rule.id, name: rule.name, severity: rule.severity, code: rule.code, column: rule.column }))
+    rules: rules.map((rule) => ({ id: rule.id, name: rule.name, ...(rule.message ? { message: rule.message } : {}), severity: rule.severity, code: rule.code, column: rule.column }))
   };
 }

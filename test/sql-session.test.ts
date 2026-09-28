@@ -41,15 +41,19 @@ test("SQL target baseline overrides contract baseline without changing either", 
 
 test("SQL session preserves actual aggregate outcomes without retrieving example rows", async () => {
   const queries: string[] = [];
+  const friendly: CsvContract = { ...contract, rules: [{ ...contract.rules![0], name: "Identifier must be recognized", message: "Review this identifier before continuing." }] };
   const session = sessionWithQuery(async text => {
     queries.push(text);
     if (text.includes("sys.columns")) return { recordset: [{ name: "Id", ordinal: 1, sqlType: "nvarchar", nullable: false }] };
-    if (text.includes("AS RuleId")) return { recordsets: [[{ RuleId: "constant", RuleName: "constant", Code: "RULE_EXPECTATION_FAILED", ColumnName: "", Severity: "error", FailureCount: 1, SelectedCount: 3 }]] };
+    if (text.includes("AS RuleId")) return { recordsets: [[{ RuleId: "constant", RuleName: "Identifier must be recognized", FailureMessage: "Review this identifier before continuing.", Code: "RULE_EXPECTATION_FAILED", ColumnName: "", Severity: "error", FailureCount: 1, SelectedCount: 3 }]] };
     return { recordset: [{ count: 3 }] };
   });
-  const result = await session.validate(contract, target);
+  const result = await session.validate(friendly, target);
   assert.equal(result.valid, false);
-  assert.deepEqual(result.ruleOutcomes, [{ id: "constant", selected: 3, passed: 2, failed: 1 }]);
+  assert.deepEqual(result.ruleOutcomes, [{ id: "constant", name: "Identifier must be recognized", selected: 3, passed: 2, failed: 1 }]);
+  assert.equal(result.issues[0].title, "Identifier must be recognized");
+  assert.equal(result.issues[0].message, "Review this identifier before continuing.");
+  assert.match(result.issues[0].diagnostic!, /failed for 1 row or group/);
   assert(queries.every(q => !q.includes("t.*")));
 });
 

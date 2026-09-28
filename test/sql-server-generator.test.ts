@@ -47,6 +47,7 @@ function contract(): CsvContract {
         {
           id: "completed-requires-date",
           name: "Completed rows have a completion date",
+          message: "Add a completion date before this record can continue.",
           when: { column: "Status", operator: "equals", value: "Complete" },
           expect: { column: "CompletionDate", operator: "notNull" }
         },
@@ -74,6 +75,7 @@ test("generates read-only scoped SQL for column and conditional rules", () => {
   assert.doesNotMatch(result.sql, /CONVERT\(nvarchar\(max\), t\.\[LoadId\]\) =/);
   assert.match(result.sql, /FROM \[staging\]\.\[Daytime Load\] AS t/);
   assert.match(result.sql, /N'completed-requires-date' AS RuleId/);
+  assert.match(result.sql, /N'Add a completion date before this record can continue\.' AS FailureMessage/);
   assert.match(result.sql, /TOP \(25\).*t\.\[LoadId\], t\.\[SourceRow\], t\.\*/);
   assert.match(result.sql, /LOWER\(LTRIM\(RTRIM\(CONVERT\(nvarchar\(max\), t\.\[Status\]\)\)\)\)/);
   assert.doesNotMatch(result.sql, /\b(?:INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|CREATE)\b/i);

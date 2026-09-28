@@ -34,6 +34,13 @@ export function renderResults(runs: DisplayRun[], filter = "", stale = false): s
       matchingIssues++;
       if (visibleIssues.length < 500) visibleIssues.push({ issue, index });
     }
+    const ruleOutcomes = result?.ruleOutcomes ?? [];
+    const groupOutcomes = result?.groupOutcomes ?? [];
+    const outcomeSummary = ruleOutcomes.length + groupOutcomes.length ? `<details class="rule-execution-summary"><summary>Rule execution summary (${ruleOutcomes.length + groupOutcomes.length})</summary>
+      <div class="rule-execution-list">
+        ${ruleOutcomes.map(r => `<div class="rule-execution-row"><div><strong>${escape(r.name ?? humanize(r.id))}</strong><span>${r.selected} selected · ${r.passed} passed · ${r.failed} failed${r.selected === 0 ? " · No rows matched the condition" : ""}</span></div><button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="jump-rule" data-rule="${escape(r.id)}">View YAML definition</button></div>`).join("")}
+        ${groupOutcomes.map(g => `<div class="rule-execution-row"><div><strong>${escape(g.name ?? humanize(g.id))}</strong><span>${g.groups} groups · ${g.passed} passed · ${g.failed} failed</span></div><button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="jump-rule" data-rule="${escape(g.id)}">View YAML definition</button></div>`).join("")}
+      </div></details>` : "";
     const select = (index: number) => `<input type="checkbox" data-issue-selection="${escape(issueSelectionKey(run, index))}" aria-label="Select ${escape(index < 0 ? "execution diagnostic" : result?.issues[index].testId ?? result?.issues[index].code)} for export">`;
     return `<section class="target-result run"><div class="target-result__heading"><strong>${escape(status)}</strong> <code>${escape(run.table ?? run.target ?? run.member)}</code></div>
       ${run.error && matches(run, run.error, filter) ? `<article class="finding-card finding-card--error" data-result-search="${escape(JSON.stringify([run.status, run.error]))}">
@@ -42,10 +49,10 @@ export function renderResults(runs: DisplayRun[], filter = "", stale = false): s
       ${result ? `<p class="target-result__summary">${result.rowCount.toLocaleString()} rows examined · ${result.errorCount.toLocaleString()} errors · ${result.warningCount.toLocaleString()} warnings</p>
       ${result.preview ? `<p>${result.preview.scope === "sample" ? `Sample of up to ${result.preview.rowLimit} rows; remaining rows were not validated.` : "Complete configured scope."} Examples limited to ${result.preview.exampleLimit} per outcome and conditional rule; aggregate rules have no row examples.</p>` : ""}
       ${result.examples?.length ? `<details><summary>Preview examples (${result.examples.length})</summary>${result.examples.map(e => `<p>${escape(e.id)} · ${escape(e.outcome)} · row ${e.row}</p><pre>${escape(JSON.stringify(e.values, null, 2))}</pre>`).join("")}</details>` : ""}
-      ${result.ruleOutcomes?.map(r => `<p><button data-action="jump-rule" data-rule="${escape(r.id)}">${escape(r.id)}</button>: ${r.selected} selected · ${r.passed} passed · ${r.failed} failed${r.selected === 0 ? " · No rows matched the condition" : ""}</p>`).join("") ?? ""}
-      ${result.groupOutcomes?.map(g => `<p>${escape(g.id)}: ${g.groups} groups · ${g.passed} passed · ${g.failed} failed</p>`).join("") ?? ""}
+      ${outcomeSummary}
       ${result.truncated ? `<p>${result.issues.length.toLocaleString()} details retained for ${result.issueCount.toLocaleString()} reported issue events. SQL aggregate rules can summarize multiple rows in one detail.</p>` : ""}
       ${matchingIssues > visibleIssues.length ? `<p>Showing the first ${visibleIssues.length.toLocaleString()} matching details here. Export includes all retained details.</p>` : ""}
+      ${visibleIssues.length ? `<div class="finding-list-heading"><h3>Findings</h3><span>${matchingIssues.toLocaleString()} matching</span></div>` : ""}
       <div class="finding-list">${visibleIssues.map(({ issue: i, index }) => {
         const severity = i.severity ?? "error";
         const identity = i.testId ?? i.code;
@@ -54,8 +61,9 @@ export function renderResults(runs: DisplayRun[], filter = "", stale = false): s
         return `<article class="finding-card finding-card--${escape(severity)}" data-result-search="${escape(JSON.stringify([run.member, run.target, run.table, run.status, i]))}">
           <div class="finding-card__select">${select(index)}</div><div class="finding-card__body">
             <div class="finding-card__topline"><span class="finding-severity finding-severity--${escape(severity)}">${escape(severity)}</span><span>${escape(issueLocation(i))}</span></div>
-            <h3>${i.testId ? `<button data-action="jump-rule" data-rule="${escape(i.testId)}">${escape(humanize(i.testId))}</button>` : escape(humanize(i.code))}</h3>
+            <div class="finding-card__heading"><h3>${escape(i.title ?? (i.testId ? humanize(i.testId) : humanize(i.code)))}</h3>${i.testId ? `<button class="finding-rule-action" data-action="jump-rule" data-rule="${escape(i.testId)}">View YAML definition</button>` : ""}</div>
             <p class="finding-message">${escape(i.message)}</p>
+            ${i.diagnostic ? `<p class="finding-diagnostic"><strong>Why it failed:</strong> ${escape(i.diagnostic)}</p>` : ""}
             ${i.group ? `<div class="finding-groups" aria-label="Group values">${groupTags(i.group)}</div>` : ""}
             ${i.relatedRows?.length ? `<p class="finding-related">Related ${i.relatedRows.length === 1 ? "row" : "rows"}: ${escape(i.relatedRows.join(", "))}</p>` : ""}
             ${comparison}

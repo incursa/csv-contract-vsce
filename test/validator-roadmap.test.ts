@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acceptBaselineChanges, compareBaseline, CsvSchemaObservation, parseBaseline, type SchemaBaseline } from "../src/core/baseline";
 import { readEditorContract, updateEditorContract } from "../src/core/editor-document";
-import { validateCsv } from "../src/core/contract";
+import { parseContract, validateCsv } from "../src/core/contract";
 import { validateCsvFile } from "../src/node/streaming-validator";
 import type { CsvContract } from "../src/core/model";
 import { LiveTests } from "../src/core/live-tests";
@@ -29,6 +29,48 @@ test("preview samples count actual outcomes, bound examples, and never pass a co
   const report = await runSuite({ id: "s", source: "s", isSuite: false, members: [{ id: "m", source: "m", contract }] }, async () => result, false, async () => result);
   assert.equal(report.status, "SAMPLED"); assert.equal(report.valid, false);
   assert.throws(() => validateCsv(contract, "Id\n", undefined, undefined, { rowLimit: 0, exampleLimit: 1 }), /row limit/);
+});
+
+test("rule names and failure messages remain readable while preserving diagnostics", async () => {
+  const contract: CsvContract = {
+    version: 1,
+    schema: { columns: { Status: { presence: "required" }, Category: { presence: "required" } } },
+    rowTests: [{ id: "one-ready", name: "One ready record", message: "Add exactly one ready record.", select: { Status: "Ready" }, expect: { count: { exact: 1 } } }],
+    rules: [{
+      id: "status-ready",
+      name: "Record must be ready",
+      message: "Review this record before it can continue.",
+      expect: { column: "Status", operator: "equals", value: "Ready" }
+    }],
+    groupRules: [{ id: "status-category", name: "Status category coverage", message: "Add every required category to this status.", groupBy: ["Status"], require: { column: "Category", values: ["Primary"] } }]
+  };
+  const memory = validateCsv(contract, "Status,Category\nWaiting,Secondary\n");
+  const parsed = parseContract(`version: 1\nschema:\n  columns:\n    Status: { presence: required }\nrules:\n  - id: status-ready\n    name: Record must be ready\n    message: Review this record before it can continue.\n    expect: { column: Status, operator: equals, value: Ready }\n`);
+  assert.equal(parsed.rules?.[0].message, contract.rules?.[0].message);
+  const issue = memory.issues.find(item => item.testId === "status-ready")!;
+  assert.equal(issue.title, "Record must be ready");
+  assert.equal(issue.message, "Review this record before it can continue.");
+  assert.match(issue.diagnostic!, /expected Status equals Ready/);
+  assert.deepEqual(memory.ruleOutcomes, [{ id: "status-ready", name: "Record must be ready", selected: 1, passed: 0, failed: 1 }]);
+  assert.equal(memory.issues.find(item => item.testId === "one-ready")?.message, "Add exactly one ready record.");
+  const groupIssue = memory.issues.find(item => item.testId === "status-category");
+  assert.equal(groupIssue?.message, "Add every required category to this status.");
+  assert.deepEqual(groupIssue?.group, { Status: "Waiting" });
+  const html = renderResults([{ target: "records.csv", result: memory }]);
+  assert.match(html, /<h3>Record must be ready<\/h3>/);
+  assert.match(html, /View YAML definition/);
+  assert.match(html, /Why it failed:/);
+  assert.doesNotMatch(html, /<h3><button/);
+
+  const directory = await mkdtemp(join(tmpdir(), "csv-contract-message-"));
+  try {
+    const csv = join(directory, "records.csv");
+    await writeFile(csv, "Status,Category\nWaiting,Secondary\n");
+    const streamed = (await validateCsvFile(csv, [{ spec: join(directory, "records.csvtest.yaml"), contract }])).runs[0].result;
+    const byIdentity = (items: typeof memory.issues) => [...items].sort((a, b) => `${a.testId}:${a.code}`.localeCompare(`${b.testId}:${b.code}`));
+    assert.deepEqual(byIdentity(streamed.issues), byIdentity(memory.issues));
+    assert.deepEqual(streamed.ruleOutcomes, memory.ruleOutcomes);
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
 test("history compares stable rules without retaining literals or inventing missing outcomes", () => {

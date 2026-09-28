@@ -41,6 +41,8 @@ export interface RowExpectation {
 export interface RowTest {
   id: string;
   name?: string;
+  /** User-facing explanation shown when this test fails. */
+  message?: string;
   select: Record<string, string>;
   expect: RowExpectation;
 }
@@ -111,6 +113,8 @@ export type SqlPredicate = SqlPredicateLeaf | { all: SqlPredicate[] } | { any: S
 export interface ConditionalRule {
   id: string;
   name?: string;
+  /** User-facing explanation shown when this rule fails. */
+  message?: string;
   severity?: RuleSeverity;
   when?: Predicate;
   expect: Predicate;
@@ -125,6 +129,8 @@ export interface GroupValueRequirement {
 export interface GroupRule {
   id: string;
   name?: string;
+  /** User-facing explanation shown when this rule fails. */
+  message?: string;
   severity?: RuleSeverity;
   when?: Predicate;
   groupBy: string[];
@@ -176,6 +182,8 @@ export interface OrderedRule {
 export interface SqlConditionalRule {
   id: string;
   name?: string;
+  /** User-facing explanation shown when this rule fails. */
+  message?: string;
   severity?: RuleSeverity;
   when?: SqlPredicate;
   expect: SqlPredicate;
@@ -291,6 +299,9 @@ export interface CsvContract {
 
 export interface GroupTest {
   id: string;
+  name?: string;
+  /** User-facing explanation shown when the group count fails. */
+  message?: string;
   groupBy: string[];
   groupCount?: CountExpectation;
   ref?: string;
@@ -313,6 +324,10 @@ export interface ValidationIssue {
   level: IssueLevel;
   code: string;
   message: string;
+  /** Human-readable rule or test title captured at evaluation time. */
+  title?: string;
+  /** Generated validator explanation retained when message is customized. */
+  diagnostic?: string;
   column?: string;
   row?: number;
   relatedRows?: number[];
@@ -327,8 +342,8 @@ export interface ValidationResult {
   preview?: { scope: "sample" | "complete"; rowLimit?: number; exampleLimit: number };
   examples?: { id: string; outcome: "passed" | "failed"; row: number; values: Record<string, string> }[];
   evaluatedAt?: string;
-  ruleOutcomes?: { id: string; selected: number; passed: number; failed: number }[];
-  groupOutcomes?: { id: string; groups: number; passed: number; failed: number }[];
+  ruleOutcomes?: { id: string; name?: string; selected: number; passed: number; failed: number }[];
+  groupOutcomes?: { id: string; name?: string; groups: number; passed: number; failed: number }[];
   valid: boolean;
   rowCount: number;
   columnCount: number;

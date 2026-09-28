@@ -597,9 +597,10 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
   }
 
   private createIssueNode(issue: ValidationIssue): CsvContractTreeItem {
-    const item = new CsvContractTreeItem(issue.code, vscode.TreeItemCollapsibleState.None, { kind: "issue", issue });
+    const humanize = (value: string) => value.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[._/-]+/g, " ").replace(/\b\w/g, letter => letter.toUpperCase());
+    const item = new CsvContractTreeItem(issue.title ?? humanize(issue.testId ?? issue.code), vscode.TreeItemCollapsibleState.None, { kind: "issue", issue });
     item.description = issue.message;
-    item.tooltip = issue.message;
+    item.tooltip = issue.diagnostic ? `${issue.message}\n\nWhy it failed: ${issue.diagnostic}` : issue.message;
     item.iconPath = issue.severity === "warning"
       ? new vscode.ThemeIcon("warning", new vscode.ThemeColor("notificationsWarningIcon.foreground"))
       : new vscode.ThemeIcon("error", new vscode.ThemeColor("testing.iconFailed"));

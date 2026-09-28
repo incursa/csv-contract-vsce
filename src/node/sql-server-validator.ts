@@ -49,6 +49,7 @@ interface SummaryRow {
   SelectedCount?: number | string | null;
   RuleId: string;
   RuleName: string;
+  FailureMessage?: string | null;
   Severity: "error" | "warning";
   Code: string;
   ColumnName: string;
@@ -220,10 +221,14 @@ export class SqlServerValidationSession {
     for (const summary of summaries) {
       const failures = Number(summary.FailureCount);
       if (!Number.isFinite(failures) || failures <= 0) continue;
+      const diagnostic = `${summary.RuleName} failed for ${failures.toLocaleString()} ${failures === 1 ? "row or group" : "rows or groups"}.`;
+      const customMessage = summary.FailureMessage?.trim();
       const issue: ValidationIssue = {
         level: summary.ColumnName ? "cell" : "row",
         code: summary.Code,
-        message: `${summary.RuleName} failed for ${failures.toLocaleString()} ${failures === 1 ? "row or group" : "rows or groups"}.`,
+        ...(summary.RuleName !== summary.RuleId ? { title: summary.RuleName } : {}),
+        message: customMessage || diagnostic,
+        ...(customMessage ? { diagnostic } : {}),
         column: summary.ColumnName ? canonicalSqlServerColumn(target, summary.ColumnName) : undefined,
         testId: summary.RuleId,
         actual: failures,
@@ -241,7 +246,7 @@ export class SqlServerValidationSession {
       ruleOutcomes: summaries.filter(s => s.SelectedCount != null).map(s => {
         const selected = Number(s.SelectedCount), failed = Number(s.FailureCount);
         if (!Number.isSafeInteger(selected) || selected < failed) throw new Error(`Invalid selected-row count for ${s.RuleId}.`);
-        return { id: s.RuleId, selected, failed, passed: selected - failed };
+        return { id: s.RuleId, ...(s.RuleName !== s.RuleId ? { name: s.RuleName } : {}), selected, failed, passed: selected - failed };
       }),
       rowCount,
       columnCount: metadata.length,

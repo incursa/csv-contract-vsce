@@ -14,6 +14,7 @@ import type {
   ValidationIssue,
   ValidationResult
 } from "./model";
+import { rulePresentation } from "./rule-presentation";
 import { createPredicateRuntime, evaluatePredicate, predicateColumns, predicateDescription } from "./predicate";
 import { OrderedRuleEvaluator, orderedChecks, orderedColumns, validateOrderedDefinition, compareOrderedRows } from "./ordered-rule";
 
@@ -106,18 +107,22 @@ function countIssues(
   actual: number,
   expectation: CountExpectation | undefined,
   level: "file" | "row",
-  testId?: string
+  testId?: string,
+  presentation?: { id: string; name?: string; message?: string }
 ): ValidationIssue[] {
   if (!expectation) return [];
   const issues: ValidationIssue[] = [];
   if (expectation.exact !== undefined && actual !== expectation.exact) {
-    issues.push({ level, code: `${name.toUpperCase()}_EXACT`, message: `${name} is ${actual}; expected exactly ${expectation.exact}.`, actual, expected: expectation.exact, testId });
+    const diagnostic = `${name} is ${actual}; expected exactly ${expectation.exact}.`;
+    issues.push({ level, code: `${name.toUpperCase()}_EXACT`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.exact, testId });
   }
   if (expectation.min !== undefined && actual < expectation.min) {
-    issues.push({ level, code: `${name.toUpperCase()}_MIN`, message: `${name} is ${actual}; expected at least ${expectation.min}.`, actual, expected: expectation.min, testId });
+    const diagnostic = `${name} is ${actual}; expected at least ${expectation.min}.`;
+    issues.push({ level, code: `${name.toUpperCase()}_MIN`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.min, testId });
   }
   if (expectation.max !== undefined && actual > expectation.max) {
-    issues.push({ level, code: `${name.toUpperCase()}_MAX`, message: `${name} is ${actual}; expected at most ${expectation.max}.`, actual, expected: expectation.max, testId });
+    const diagnostic = `${name} is ${actual}; expected at most ${expectation.max}.`;
+    issues.push({ level, code: `${name.toUpperCase()}_MAX`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.max, testId });
   }
   return issues;
 }
@@ -262,12 +267,13 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
     const matches = parsed.rows.map((row, index) => ({ row, index })).filter(({ row }) =>
       Object.entries(test.select).every(([column, expected]) => normalized(row[headerIndex.get(column)!] ?? "", options) === normalized(expected, options))
     );
-    issues.push(...countIssues("match_count", matches.length, test.expect.count ?? { exact: 1 }, "row", test.id));
+    issues.push(...countIssues("match_count", matches.length, test.expect.count ?? { exact: 1 }, "row", test.id, test));
     for (const [column, expectation] of Object.entries(test.expect.cells ?? {})) {
       for (const match of matches) {
         const actual = match.row[headerIndex.get(column)!] ?? "";
         if (normalized(actual, options) !== normalized(expectation.equals, options)) {
-          issues.push({ level: "cell", code: "CELL_NOT_EQUAL", message: `Test "${test.id}" expected "${column}" to equal "${expectation.equals}", found "${actual}".`, column, row: parsed.sourceRowNumbers[match.index], testId: test.id, actual, expected: expectation.equals });
+          const diagnostic = `Test "${test.name ?? test.id}" expected "${column}" to equal "${expectation.equals}", found "${actual}".`;
+          issues.push({ level: "cell", code: "CELL_NOT_EQUAL", ...rulePresentation(test, diagnostic), column, row: parsed.sourceRowNumbers[match.index], testId: test.id, actual, expected: expectation.equals });
         }
       }
     }
@@ -293,7 +299,7 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       }
     }
     if (!validRule) continue;
-    const outcome = { id: rule.id, selected: 0, passed: 0, failed: 0 };
+    const outcome = { id: rule.id, ...(rule.name ? { name: rule.name } : {}), selected: 0, passed: 0, failed: 0 };
     ruleOutcomes.push(outcome);
     parsed.rows.forEach((row, rowIndex) => {
       const runtime = createPredicateRuntime((column) => row[headerIndex.get(column)!] ?? "", options, nullValues);
@@ -306,10 +312,11 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       }
       if (passed) { outcome.passed++; return; }
       outcome.failed++;
+      const diagnostic = `Rule "${rule.name ?? rule.id}" expected ${predicateDescription(rule.expect)}.`;
       issues.push({
         level: "row",
         code: "RULE_FAILED",
-        message: `Rule "${rule.name ?? rule.id}" expected ${predicateDescription(rule.expect)}.`,
+        ...rulePresentation(rule, diagnostic),
         row: parsed.sourceRowNumbers[rowIndex],
         testId: rule.id,
         severity: rule.severity ?? "error"
@@ -354,12 +361,14 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       });
       for (const missing of [...missingValues, ...missingFragments]) {
         const groupLabel = rule.groupBy.map((column, index) => `${column}=${group.labels[index]}`).join(", ");
+        const groupValues = Object.fromEntries(rule.groupBy.map((column, index) => [column, group.labels[index]]));
         issues.push({
           level: "row",
           code: "GROUP_REQUIRED_VALUE_MISSING",
-          message: `Group rule "${rule.name ?? rule.id}" is missing "${missing}" in ${rule.require.column} for ${groupLabel}.`,
+          ...rulePresentation(rule, `Group rule "${rule.name ?? rule.id}" is missing "${missing}" in ${rule.require.column} for ${groupLabel}.`),
           row: group.row,
           column: rule.require.column,
+          group: groupValues,
           testId: rule.id,
           expected: missing,
           severity: rule.severity ?? "error"
@@ -404,7 +413,7 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       groups.set(key, entries);
     });
     if (groupTest.groupBy.length === 0 && groups.size === 0) groups.set("[]", []);
-    const groupOutcome = { id: groupTest.id, groups: groups.size, passed: 0, failed: 0 };
+    const groupOutcome = { id: groupTest.id, ...(groupTest.name ? { name: groupTest.name } : {}), groups: groups.size, passed: 0, failed: 0 };
     groupOutcomes.push(groupOutcome);
     let groupChildTestCount = 0;
     for (const [key, indexes] of groups) {
@@ -422,8 +431,7 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       issues.push(...childResult.issues.map(issue => ({ ...issue, group: { ...labels, ...issue.group },
         row: issue.row === undefined ? undefined : parsed.sourceRowNumbers[indexes[issue.row - 2]] ?? issue.row,
         relatedRows: issue.relatedRows?.map(row => parsed.sourceRowNumbers[indexes[row - 2]] ?? row),
-        testId: issue.testId ? `${groupTest.id}/${issue.testId}` : groupTest.id,
-        message: `${groupTest.id} ${JSON.stringify(labels)}: ${issue.message}` })));
+        testId: issue.testId ? `${groupTest.id}/${issue.testId}` : groupTest.id })));
       for (const outcome of childResult.ruleOutcomes ?? []) {
         const id = `${groupTest.id}/${outcome.id}`;
         const aggregate = ruleOutcomes.find(item => item.id === id);
@@ -435,8 +443,9 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
     const count = groups.size;
     for (const [kind, expected] of Object.entries(groupTest.groupCount ?? {})) {
       if (kind === "exact" && count === expected || kind === "min" && count >= expected || kind === "max" && count <= expected) continue;
+      const diagnostic = `Group test ${groupTest.name ?? groupTest.id} found ${count} groups; expected ${kind} ${expected}.`;
       issues.push({ level: "file", code: "GROUP_COUNT", testId: groupTest.id,
-        message: `Group test ${groupTest.id} found ${count} groups; expected ${kind} ${expected}.`, actual: count, expected });
+        ...rulePresentation(groupTest, diagnostic), actual: count, expected });
     }
   }
 

@@ -168,6 +168,19 @@ Supported string predicates are `equals`, `notEquals`, `in`, `notIn`, `isNull`, 
 
 Rules default to `severity: error`. A failed warning is reported and counted but does not fail the contract.
 
+`rowTests`, `rules`, and `groupRules` can declare two optional result fields. `name` is the short title shown on the finding card. `message` is the plain-language explanation shown when the check fails. When `message` is present, the Workbench still keeps the generated validator explanation under **Why it failed**, along with expected, actual, group, row, and technical details.
+
+```yaml
+rules:
+  - id: ready-record-has-date
+    name: Ready records need a completion date
+    message: Add a completion date before this record can continue.
+    when: { column: Status, operator: equals, value: Ready }
+    expect: { column: CompletedAt, operator: notBlank }
+```
+
+Keep `id` stable for automation and history. Write `name` and `message` for the person reviewing the result. Ordered checks already require their own `message` because each transition or relationship can explain a different failure.
+
 ## Group completeness rules
 
 `groupRules` select records with an optional `when`, partition them by the exact `groupBy` columns, and inspect one `require.column`. Use `require.values` for exact required values and/or `require.contains` when balance names contain qualifiers such as `Resident` or `Nonresident`.

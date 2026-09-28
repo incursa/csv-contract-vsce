@@ -358,6 +358,8 @@
       "required": ["id", "groupBy"],
       "properties": {
         "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "name": { "type": "string", "minLength": 1, "description": "Human-readable title used in results." },
+        "message": { "type": "string", "minLength": 1, "description": "User-facing explanation shown when the group count fails." },
         "groupBy": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
         "groupCount": { "$ref": "#/$defs/count" },
         "ref": { "type": "string", "minLength": 1 },
@@ -952,7 +954,14 @@
           "pattern": "^[a-z0-9][a-z0-9._-]*$"
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable title used in results."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "description": "User-facing explanation shown when this rule fails. The generated validator diagnostic is retained separately."
         },
         "severity": {
           "enum": [
@@ -1248,7 +1257,14 @@
           "pattern": "^[a-z0-9][a-z0-9._-]*$"
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable title used in results."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "description": "User-facing explanation shown when this rule fails. The generated validator diagnostic is retained separately."
         },
         "severity": {
           "enum": [
@@ -1321,7 +1337,14 @@
           "pattern": "^[a-z0-9][a-z0-9._-]*$"
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable title used in results."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "description": "User-facing explanation shown when this group rule fails. The missing value and group remain available as finding context."
         },
         "severity": {
           "enum": [
@@ -1362,7 +1385,14 @@
           "description": "Stable machine-readable test identifier."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable title used in results."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "description": "User-facing explanation shown when this row test fails. The expected and actual values remain available as finding context."
         },
         "select": {
           "type": "object",

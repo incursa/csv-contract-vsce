@@ -7,6 +7,7 @@ import type { CsvOptions, GroupTest, ValidationIssue, ValidationResult } from ".
 import type { OrderedRow } from "../core/ordered-rule";
 import { validateCsv } from "../core/contract";
 import { RowSortStore } from "./row-sort-store";
+import { rulePresentation } from "../core/rule-presentation";
 
 const inMemoryGroupRows = 5000;
 const inMemoryGroupBytes = 4 * 1024 * 1024;
@@ -66,6 +67,8 @@ export class GroupTestRunner {
     };
     this.store = new RowSortStore((a, b) => cachedKey(a).localeCompare(cachedKey(b)) || a.row - b.row, tempRoot);
   }
+
+  public get groupName(): string | undefined { return this.group.name; }
 
   public add(row: number, fields: string[]): void {
     this.rowsAdded++;
@@ -162,8 +165,7 @@ export class GroupTestRunner {
       for (const issue of result.issues) if (summary.issues.length < maxIssues) summary.issues.push({ ...issue,
         testId: issue.testId ? `${this.group.id}/${issue.testId}` : this.group.id,
         group: { ...currentGroup, ...issue.group }, row: issue.row === undefined ? undefined : rowMap.get(issue.row) ?? issue.row,
-        relatedRows: issue.relatedRows?.map(row => rowMap.get(row) ?? row),
-        message: `${this.group.id} ${JSON.stringify(currentGroup)}: ${issue.message}` });
+        relatedRows: issue.relatedRows?.map(row => rowMap.get(row) ?? row) });
     };
     try {
       for await (const row of this.store.rows()) {
@@ -186,8 +188,9 @@ export class GroupTestRunner {
       const count = summary.groupCounts[0].count;
       for (const [kind, expected] of Object.entries(this.group.groupCount ?? {})) {
         if (kind === "exact" && count === expected || kind === "min" && count >= expected || kind === "max" && count <= expected) continue;
+        const diagnostic = `Group test ${this.group.name ?? this.group.id} found ${count} groups; expected ${kind} ${expected}.`;
         add({ level: "file", code: "GROUP_COUNT", testId: this.group.id,
-          message: `Group test ${this.group.id} found ${count} groups; expected ${kind} ${expected}.`, actual: count, expected });
+          ...rulePresentation(this.group, diagnostic), actual: count, expected });
       }
       return summary;
     } finally {

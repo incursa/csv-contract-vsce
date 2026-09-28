@@ -177,10 +177,13 @@ function renderRowTestEditor(names: string[]): string {
     </div>
     <div class="row-test-basics">
       <label>Test ID
-        <input id="rowTestId" class="form-control" required pattern="[a-z0-9][a-z0-9._-]*" value="${escape(test.id)}">
+        <input id="rowTestId" class="form-control" required pattern="[a-z0-9][a-z0-9._\\x2d]*" value="${escape(test.id)}">
       </label>
       <label>Display name
         <input id="rowTestName" class="form-control" value="${escape(test.name ?? "")}" placeholder="Optional description">
+      </label>
+      <label class="row-test-message">Failure message
+        <textarea id="rowTestMessage" class="form-control" placeholder="Explain what the user should understand or fix">${escape(test.message ?? "")}</textarea>
       </label>
     </div>
     <fieldset class="test-editor-section">
@@ -416,10 +419,13 @@ function render(): void {
       <div class="rule-list">
         ${conditionalRules.map((rule) => `<article class="rule-card">
           <div class="rule-card__heading"><div class="rule-card__identity">
-            <span class="rule-card__type">${escape((rule.severity ?? "error").toUpperCase())}</span><code>${escape(rule.id)}</code>
+            <span class="rule-card__type">${escape((rule.severity ?? "error").toUpperCase())}</span><div><h3>${escape(rule.name ?? rule.id)}</h3><code>${escape(rule.id)}</code></div>
           </div><button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="preview-rule" data-rule="${escape(rule.id)}">Run preview</button></div>
+          ${rule.message ? `<p class="rule-card__message"><strong>Failure message:</strong> ${escape(rule.message)}</p>` : ""}
           <p class="rule-card__summary">${escape(`${rule.when ? `When ${predicateDescription(rule.when)}, ` : "For every row, "}expect ${predicateDescription(rule.expect)}.`)}</p>
           <details class="visual-rule"><summary>Edit conditions</summary><form data-rule-editor="${escape(rule.id)}">
+            <div class="rule-presentation-fields"><label>Result title<input class="form-control" data-rule-name value="${escape(rule.name ?? "")}" placeholder="Readable rule name"></label>
+            <label>Failure message<textarea class="form-control" data-rule-message placeholder="Explain what the user should understand or fix">${escape(rule.message ?? "")}</textarea></label></div>
             <button type="button" class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-toggle-when>${rule.when ? "Remove condition selector" : "Add condition selector"}</button>
             <div data-rule-when>${rule.when ? `<h3>When</h3>${renderPredicate(rule.when, names)}` : ""}</div>
             <div data-rule-expect><h3>Expect</h3>${renderPredicate(rule.expect, names)}</div>
@@ -428,9 +434,15 @@ function render(): void {
           </form></details>
         </article>`).join("")}
         ${groupRules.map((rule) => `<article class="rule-card">
-          <div class="rule-card__heading"><div class="rule-card__identity"><span class="rule-card__type">GROUP</span><code>${escape(rule.id)}</code></div>
+          <div class="rule-card__heading"><div class="rule-card__identity"><span class="rule-card__type">GROUP</span><div><h3>${escape(rule.name ?? rule.id)}</h3><code>${escape(rule.id)}</code></div></div>
             <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="preview-rule" data-rule="${escape(rule.id)}">Run preview</button></div>
+          ${rule.message ? `<p class="rule-card__message"><strong>Failure message:</strong> ${escape(rule.message)}</p>` : ""}
           <p class="rule-card__summary">${escape(`Group by ${rule.groupBy.join(", ")}; require ${[...(rule.require.values ?? []), ...(rule.require.contains ?? []).map((value) => `contains ${value}`)].join(", ")} in ${rule.require.column}.`)}</p>
+          <details class="visual-rule"><summary>Edit result wording</summary><form data-group-rule-editor="${escape(rule.id)}">
+            <div class="rule-presentation-fields"><label>Result title<input class="form-control" data-rule-name value="${escape(rule.name ?? "")}" placeholder="Readable rule name"></label>
+            <label>Failure message<textarea class="form-control" data-rule-message placeholder="Explain what the user should understand or fix">${escape(rule.message ?? "")}</textarea></label></div>
+            <div class="rule-card__footer"><button type="submit" class="inc-btn inc-btn--primary inc-btn--sm">Apply wording</button><p role="alert" data-rule-error></p></div>
+          </form></details>
         </article>`).join("")}
         ${conditionalRules.length + groupRules.length === 0 ? `<p class="empty compact-empty">No conditional or grouped rules configured.</p>` : ""}
       </div>
@@ -518,6 +530,8 @@ function saveSelectedRowTest(post = true): void {
   test.id = document.querySelector<HTMLInputElement>("#rowTestId")?.value.trim() || test.id;
   const name = document.querySelector<HTMLInputElement>("#rowTestName")?.value.trim();
   test.name = name || undefined;
+  const message = document.querySelector<HTMLTextAreaElement>("#rowTestMessage")?.value.trim();
+  test.message = message || undefined;
   test.select = Object.fromEntries(
     Array.from(document.querySelectorAll<HTMLElement>("[data-selector-row]")).map((row) => [
       row.querySelector<HTMLSelectElement>("[data-selector-column]")!.value,
@@ -558,7 +572,21 @@ function bind(): void {
       if (!rule) throw new Error("Rule no longer exists.");
       const expect = readPredicate(form.querySelector('[data-rule-expect] > fieldset')!);
       const whenNode = form.querySelector('[data-rule-when] > fieldset');
-      Object.assign(rule, { expect, when: whenNode ? readPredicate(whenNode) : undefined });
+      const name = form.querySelector<HTMLInputElement>("[data-rule-name]")?.value.trim();
+      const message = form.querySelector<HTMLTextAreaElement>("[data-rule-message]")?.value.trim();
+      Object.assign(rule, { expect, when: whenNode ? readPredicate(whenNode) : undefined, name: name || undefined, message: message || undefined });
+      vscode.postMessage({ type: "updateContract", contract });
+    } catch (error) { form.querySelector('[data-rule-error]')!.textContent = String(error); }
+  }));
+  app.querySelectorAll<HTMLFormElement>("[data-group-rule-editor]").forEach(form => form.addEventListener("submit", event => {
+    event.preventDefault();
+    try {
+      if (!contract) return;
+      const rule = contract.groupRules?.find(r => r.id === form.dataset.groupRuleEditor);
+      if (!rule) throw new Error("Group rule no longer exists.");
+      const name = form.querySelector<HTMLInputElement>("[data-rule-name]")?.value.trim();
+      const message = form.querySelector<HTMLTextAreaElement>("[data-rule-message]")?.value.trim();
+      Object.assign(rule, { name: name || undefined, message: message || undefined });
       vscode.postMessage({ type: "updateContract", contract });
     } catch (error) { form.querySelector('[data-rule-error]')!.textContent = String(error); }
   }));
@@ -612,7 +640,7 @@ function bind(): void {
     selectedRowTestIndex = Number(row.dataset.rowTestIndex);
     render();
   }));
-  ["rowTestId", "rowTestName", "countExact", "countMin", "countMax"].forEach((id) =>
+  ["rowTestId", "rowTestName", "rowTestMessage", "countExact", "countMin", "countMax"].forEach((id) =>
     document.querySelector(`#${id}`)?.addEventListener("change", () => saveSelectedRowTest())
   );
   app.querySelectorAll("[data-selector-column], [data-selector-value], [data-cell-column], [data-cell-value]").forEach((field) =>
