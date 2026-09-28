@@ -15,6 +15,7 @@ export interface IssueExportRun {
 export interface ValidationRunExport {
   schema: "incursa.csv-contract-results/v1";
   contract: string;
+  exportedAt?: string;
   totals: {
     targets: number;
     passed: number;
@@ -34,6 +35,7 @@ export function createValidationRunExport(contract: string, runs: IssueExportRun
   return {
     schema: "incursa.csv-contract-results/v1",
     contract,
+    exportedAt: new Date().toISOString(),
     totals: {
       targets: runs.length,
       passed: runs.filter((run) => (run.result?.valid && run.result.preview?.scope !== "sample" && (!run.status || run.status === "PASS"))).length,
@@ -46,6 +48,60 @@ export function createValidationRunExport(contract: string, runs: IssueExportRun
     },
     runs
   };
+}
+
+function requiredInteger(value: unknown, name: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) throw new Error(`Results JSON has an invalid ${name}.`);
+  return Number(value);
+}
+
+function validationResult(value: unknown, run: number): ValidationResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Results JSON run ${run} has no validation result.`);
+  const result = value as Record<string, unknown>;
+  if (typeof result.valid !== "boolean" || typeof result.truncated !== "boolean" || !Array.isArray(result.issues)) {
+    throw new Error(`Results JSON run ${run} has an invalid validation result.`);
+  }
+  const issues = result.issues.map((value, index) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Results JSON run ${run}, issue ${index + 1} is invalid.`);
+    const issue = value as Record<string, unknown>;
+    if (!["file", "column", "row", "cell"].includes(String(issue.level)) || typeof issue.code !== "string" || typeof issue.message !== "string") {
+      throw new Error(`Results JSON run ${run}, issue ${index + 1} is missing its level, code, or message.`);
+    }
+    return value as ValidationResult["issues"][number];
+  });
+  return {
+    ...(result as unknown as ValidationResult),
+    rowCount: requiredInteger(result.rowCount, `run ${run} row count`),
+    columnCount: requiredInteger(result.columnCount, `run ${run} column count`),
+    testCount: requiredInteger(result.testCount, `run ${run} test count`),
+    issueCount: requiredInteger(result.issueCount, `run ${run} issue count`),
+    errorCount: requiredInteger(result.errorCount, `run ${run} error count`),
+    warningCount: requiredInteger(result.warningCount, `run ${run} warning count`),
+    issues
+  };
+}
+
+/** Parse a Workbench JSON result export without trusting its runtime shape. */
+export function parseValidationRunExport(text: string): ValidationRunExport {
+  let value: unknown;
+  try { value = JSON.parse(text); }
+  catch { throw new Error("The selected file is not valid JSON."); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("The selected file is not a validation results export.");
+  const exportValue = value as Record<string, unknown>;
+  if (exportValue.schema !== "incursa.csv-contract-results/v1") throw new Error("Unsupported results JSON. Expected incursa.csv-contract-results/v1.");
+  if (typeof exportValue.contract !== "string" || !exportValue.contract.trim() || !Array.isArray(exportValue.runs)) {
+    throw new Error("Results JSON is missing its contract or target runs.");
+  }
+  const runs = exportValue.runs.map((value, index) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Results JSON run ${index + 1} is invalid.`);
+    const run = value as Record<string, unknown>;
+    if (typeof run.target !== "string" || !run.target.trim()) throw new Error(`Results JSON run ${index + 1} has no target.`);
+    if (run.error !== undefined && typeof run.error !== "string") throw new Error(`Results JSON run ${index + 1} has an invalid execution error.`);
+    return { ...(run as unknown as IssueExportRun), result: run.result === undefined ? undefined : validationResult(run.result, index + 1) };
+  });
+  if (!runs.length) throw new Error("Results JSON contains no target runs to review.");
+  const parsed = createValidationRunExport(exportValue.contract, runs);
+  return { ...parsed, exportedAt: typeof exportValue.exportedAt === "string" ? exportValue.exportedAt : undefined };
 }
 
 export function validationRunExportJson(contract: string, runs: IssueExportRun[]): string {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createValidationRunExport, issueRunsToCsv, validationRunExportJson } from "../src/issue-export";
+import { createValidationRunExport, issueRunsToCsv, parseValidationRunExport, validationRunExportJson } from "../src/issue-export";
 import { validateCsvFile } from "../src/node/streaming-validator";
 import { renderResults } from "../src/results-view";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
@@ -61,7 +61,19 @@ test("JSON export preserves complete run results and reports detail completeness
     issueDetailsComplete: true
   });
   assert.deepEqual(output.runs, runs);
-  assert.deepEqual(JSON.parse(validationRunExportJson("contracts/customers.csvtest.yaml", runs)), output);
+  const serialized = JSON.parse(validationRunExportJson("contracts/customers.csvtest.yaml", runs));
+  assert.deepEqual({ ...serialized, exportedAt: output.exportedAt }, output);
+  const imported = parseValidationRunExport(JSON.stringify(serialized));
+  assert.equal(imported.contract, "contracts/customers.csvtest.yaml");
+  assert.deepEqual(imported.runs, runs);
+  assert.match(imported.exportedAt!, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test("results import rejects unrelated JSON and malformed finding details", () => {
+  assert.throws(() => parseValidationRunExport("{}"), /Unsupported results JSON/);
+  const invalid = createValidationRunExport("contracts/customers.csvtest.yaml", runs);
+  (invalid.runs[0].result!.issues[0] as { message?: string }).message = undefined;
+  assert.throws(() => parseValidationRunExport(JSON.stringify(invalid)), /missing its level, code, or message/);
 });
 
 test("JSON export discloses when validation retained fewer issue details than it counted", () => {
@@ -92,5 +104,6 @@ test("a Workbench-sized retention setting exports more than one thousand CSV fin
     const html = renderResults([{ target: "entities.csv", result }]);
     assert.match(html, /Showing the first 500 matching details/);
     assert.equal((html.match(/data-result-search=/g) ?? []).length, 500);
+    assert.match(html, /finding-card/);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

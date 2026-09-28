@@ -1,6 +1,16 @@
 import type { ValidationResult } from "./core/model";
 export interface DisplayRun { workId?: string; runId?: string; evaluatedAt?: string; scope?: string; target?: string; table?: string; member?: string; status?: string; error?: string; result?: ValidationResult }
 const escape = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+const humanize = (value: string) => value.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[._/-]+/g, " ").replace(/\b\w/g, letter => letter.toUpperCase());
+const shown = (value: unknown) => value === undefined ? "Not provided" : value === "" ? "(empty)" : String(value);
+function issueLocation(issue: ValidationResult["issues"][number]): string {
+  const parts = [issue.row === undefined ? undefined : `Row ${issue.row}`, issue.column ? `Column ${issue.column}` : undefined,
+    issue.level === "file" ? "Whole target" : issue.level === "column" && !issue.column ? "Column check" : undefined].filter(Boolean);
+  return parts.join(" · ") || humanize(issue.level);
+}
+function groupTags(group?: Record<string, string>): string {
+  return Object.entries(group ?? {}).map(([name, value]) => `<span class="finding-chip"><span>${escape(name)}</span> ${escape(shown(value))}</span>`).join("");
+}
 export const issueSelectionKey = (run: DisplayRun, index: number) => JSON.stringify([run.workId ?? [run.member, run.table, run.target], index]);
 const matches = (run: DisplayRun, value: unknown, filter: string) => JSON.stringify([run.member, run.target, run.table, run.status, value]).toLowerCase().includes(filter.toLowerCase());
 export function filterResultRuns<T extends DisplayRun>(runs: T[], filter: string, selected: string[] = []): T[] {
@@ -26,14 +36,31 @@ export function renderResults(runs: DisplayRun[], filter = "", stale = false): s
     }
     const select = (index: number) => `<input type="checkbox" data-issue-selection="${escape(issueSelectionKey(run, index))}" aria-label="Select ${escape(index < 0 ? "execution diagnostic" : result?.issues[index].testId ?? result?.issues[index].code)} for export">`;
     return `<section class="target-result run"><div class="target-result__heading"><strong>${escape(status)}</strong> <code>${escape(run.table ?? run.target ?? run.member)}</code></div>
-      ${run.error && matches(run, run.error, filter) ? `<div data-result-search="${escape(JSON.stringify([run.status, run.error]))}">${select(-1)}<pre class="error" role="alert">${escape(run.error)}</pre></div>` : ""}
-      ${result ? `<p>${result.rowCount} rows examined · ${result.errorCount} assertion failures · ${result.warningCount} warnings</p>
+      ${run.error && matches(run, run.error, filter) ? `<article class="finding-card finding-card--error" data-result-search="${escape(JSON.stringify([run.status, run.error]))}">
+        <div class="finding-card__select">${select(-1)}</div><div class="finding-card__body"><div class="finding-card__topline"><span class="finding-severity finding-severity--error">Execution error</span></div>
+        <h3>The target could not be validated</h3><pre class="error" role="alert">${escape(run.error)}</pre></div></article>` : ""}
+      ${result ? `<p class="target-result__summary">${result.rowCount.toLocaleString()} rows examined · ${result.errorCount.toLocaleString()} errors · ${result.warningCount.toLocaleString()} warnings</p>
       ${result.preview ? `<p>${result.preview.scope === "sample" ? `Sample of up to ${result.preview.rowLimit} rows; remaining rows were not validated.` : "Complete configured scope."} Examples limited to ${result.preview.exampleLimit} per outcome and conditional rule; aggregate rules have no row examples.</p>` : ""}
       ${result.examples?.length ? `<details><summary>Preview examples (${result.examples.length})</summary>${result.examples.map(e => `<p>${escape(e.id)} · ${escape(e.outcome)} · row ${e.row}</p><pre>${escape(JSON.stringify(e.values, null, 2))}</pre>`).join("")}</details>` : ""}
       ${result.ruleOutcomes?.map(r => `<p><button data-action="jump-rule" data-rule="${escape(r.id)}">${escape(r.id)}</button>: ${r.selected} selected · ${r.passed} passed · ${r.failed} failed${r.selected === 0 ? " · No rows matched the condition" : ""}</p>`).join("") ?? ""}
       ${result.groupOutcomes?.map(g => `<p>${escape(g.id)}: ${g.groups} groups · ${g.passed} passed · ${g.failed} failed</p>`).join("") ?? ""}
       ${result.truncated ? `<p>${result.issues.length.toLocaleString()} details retained for ${result.issueCount.toLocaleString()} reported issue events. SQL aggregate rules can summarize multiple rows in one detail.</p>` : ""}
       ${matchingIssues > visibleIssues.length ? `<p>Showing the first ${visibleIssues.length.toLocaleString()} matching details here. Export includes all retained details.</p>` : ""}
-      <div class="table-scroll"><table><thead><tr><th>Select</th><th>Rule / code</th><th>Severity</th><th>Group / row</th><th>Expected</th><th>Actual</th><th>Diagnostic</th></tr></thead><tbody>${visibleIssues.map(({ issue: i, index }) => `<tr data-result-search="${escape(JSON.stringify([run.member, run.target, run.table, run.status, i]))}"><td>${select(index)}</td><td><button data-action="jump-rule" data-rule="${escape(i.testId ?? i.code)}">${escape(i.testId ?? i.code)}</button></td><td>${escape(i.severity ?? "error")}</td><td>${escape(i.group ? JSON.stringify(i.group) : i.column)} ${escape(i.row)} ${i.relatedRows?.length ? `↔ ${escape(i.relatedRows.join(", "))}` : ""}</td><td>${escape(i.expected)}</td><td>${escape(i.actual)}</td><td>${escape(i.message)}</td></tr>`).join("")}</tbody></table></div>` : ""}</section>`;
+      <div class="finding-list">${visibleIssues.map(({ issue: i, index }) => {
+        const severity = i.severity ?? "error";
+        const identity = i.testId ?? i.code;
+        const comparison = i.expected !== undefined || i.actual !== undefined ? `<dl class="finding-comparison">
+          <div><dt>Expected</dt><dd>${escape(shown(i.expected))}</dd></div><div><dt>Actual</dt><dd>${escape(shown(i.actual))}</dd></div></dl>` : "";
+        return `<article class="finding-card finding-card--${escape(severity)}" data-result-search="${escape(JSON.stringify([run.member, run.target, run.table, run.status, i]))}">
+          <div class="finding-card__select">${select(index)}</div><div class="finding-card__body">
+            <div class="finding-card__topline"><span class="finding-severity finding-severity--${escape(severity)}">${escape(severity)}</span><span>${escape(issueLocation(i))}</span></div>
+            <h3>${i.testId ? `<button data-action="jump-rule" data-rule="${escape(i.testId)}">${escape(humanize(i.testId))}</button>` : escape(humanize(i.code))}</h3>
+            <p class="finding-message">${escape(i.message)}</p>
+            ${i.group ? `<div class="finding-groups" aria-label="Group values">${groupTags(i.group)}</div>` : ""}
+            ${i.relatedRows?.length ? `<p class="finding-related">Related ${i.relatedRows.length === 1 ? "row" : "rows"}: ${escape(i.relatedRows.join(", "))}</p>` : ""}
+            ${comparison}
+            <details class="finding-technical"><summary>Technical details</summary><dl><div><dt>Rule or code</dt><dd><code>${escape(identity)}</code></dd></div><div><dt>Issue code</dt><dd><code>${escape(i.code)}</code></dd></div><div><dt>Scope</dt><dd>${escape(i.level)}</dd></div></dl></details>
+          </div></article>`;
+      }).join("")}</div>` : ""}</section>`;
   }).join("");
 }

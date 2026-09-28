@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.19.0
+
+- Load a `incursa.csv-contract-results/v1` JSON export into its matching contract Workbench for historical, read-only review.
+- Replace the dense failure table with readable finding cards that emphasize the message, location, group values, and expected-versus-actual comparison while keeping technical codes available on demand.
+
 ## 0.18.3
 
 - Read values only for columns named by grouped child contracts while retaining the full target header list for schema and column-count checks. Continue ordering by the configured locator.

@@ -33,7 +33,7 @@ import { generateSqlServerValidation } from "./core/sql-server-generator";
 import { mergeImportedSchema, parseSqlSchemaSource, type ImportedSqlTable } from "./core/sql-schema-import";
 import { hasSqlServerConnection, resolveSqlServerTargets, sqlServerTargetLabel, type ResolvedSqlServerTarget } from "./core/sql-server-targets";
 import { suggestSqlColumnMappings } from "./core/sql-server-column-mapping";
-import { issueRunsToCsv, validationRunExportJson } from "./issue-export";
+import { issueRunsToCsv, parseValidationRunExport, validationRunExportJson } from "./issue-export";
 
 const viewType = "csv-contract-vsce.contractEditor";
 
@@ -501,6 +501,8 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
     let latestRuns: TargetRun[] = [];
     let stale = false;
     let runNotice = "";
+    let resultsSource: "run" | "imported" = "run";
+    let importedResultsName = "";
     let previewRule: string | undefined;
     let completedRuns = 0;
     let watchInputs = false;
@@ -570,7 +572,8 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         });
         return report.runs.map(run => ({ ...run, target: run.table ?? files[Number(run.target)]?.label ?? run.target }));
       } finally { await panel.webview.postMessage({ type: "runState", running: false }); }
-    }, (runs) => { completedRuns++; stale = false; latestRuns = runs.map(r => ({ ...r, target: r.target ?? r.member }));
+    }, (runs) => { completedRuns++; stale = false; resultsSource = "run"; importedResultsName = "";
+      latestRuns = runs.map(r => ({ ...r, target: r.target ?? r.member }));
       consecutiveErrors = runs.some(r => r.status === "ERROR") ? consecutiveErrors + 1 : 0;
       if (consecutiveErrors >= 3) { scheduler.pause(); runNotice += " · Live tests paused after three consecutive execution errors."; }
       void postState(); },
@@ -595,7 +598,8 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         const sqlTargets = resolveSqlServerTargets(effective(contract), false);
         await panel.webview.postMessage({
           type: "state",
-          stale, live: scheduler.enabled, watchInputs, runNotice, documentVersion: document.version, dirty: document.isDirty,
+          stale, live: scheduler.enabled, watchInputs, runNotice, resultsSource, importedResultsName,
+          documentVersion: document.version, dirty: document.isDirty,
           contract,
           contractName: vscode.workspace.asRelativePath(document.uri, false) + (memberId ? ` / ${memberId} (inline; saved in suite)` : ""),
           targetNames: [...activeTargets.map((target) => target.label), ...sqlTargets.map(sqlServerTargetLabel)],
@@ -724,6 +728,29 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         } else {
           void vscode.window.showInformationMessage(`Exported results for ${latestRuns.length.toLocaleString()} validation target${latestRuns.length === 1 ? "" : "s"}.`);
         }
+      } else if (message.type === "reviewResults") {
+        const selected = await vscode.window.showOpenDialog({
+          title: "Review validation results",
+          canSelectMany: false,
+          defaultUri: document.uri.with({ path: document.uri.path.replace(/[^/]+$/, "") }),
+          filters: { "CSV Contract results JSON": ["json"] }
+        });
+        if (!selected?.[0]) return;
+        const imported = parseValidationRunExport(new TextDecoder().decode(await vscode.workspace.fs.readFile(selected[0])));
+        const expected = vscode.workspace.asRelativePath(document.uri, false).replaceAll("\\", "/");
+        const declared = imported.contract.replaceAll("\\", "/");
+        const filename = (value: string) => value.split("/").at(-1)?.toLocaleLowerCase() ?? "";
+        if (declared.toLocaleLowerCase() !== expected.toLocaleLowerCase() && filename(declared) !== filename(expected)) {
+          throw new Error(`These results belong to ${imported.contract}, not ${expected}. Open the matching contract to review them.`);
+        }
+        latestRuns = imported.runs.map(run => ({ target: run.target, result: run.result, status: run.status, error: run.error }));
+        resultsSource = "imported";
+        importedResultsName = selected[0].path.split("/").at(-1) ?? "results.json";
+        stale = false;
+        const exported = imported.exportedAt && Number.isFinite(Date.parse(imported.exportedAt))
+          ? ` from ${new Date(imported.exportedAt).toLocaleString()}` : "";
+        runNotice = `Loaded ${latestRuns.length.toLocaleString()} target result${latestRuns.length === 1 ? "" : "s"}${exported}.`;
+        await postState();
       } else if (message.type === "run" || message.type === "preview") {
         previewRule = message.type === "preview" ? String(message.ruleId) : undefined;
         refreshRevision();

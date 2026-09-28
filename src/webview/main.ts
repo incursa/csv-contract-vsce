@@ -36,6 +36,8 @@ let stale = false;
 let live = false;
 let resultFilter = "";
 let runNotice = "";
+let resultsSource: "run" | "imported" = "run";
+let importedResultsName = "";
 let watchInputs = false;
 let dirty = false;
 let parseError = "";
@@ -298,6 +300,7 @@ function render(): void {
             <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="review-baseline">Review schema drift</button>
           </div>
           <div class="workbench-tools__group"><h3>Runs and updates</h3>
+            <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="review-results">Review results JSON</button>
             <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="history">Run history</button>
             <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="live">${live ? "Pause live tests" : "Enable live tests"}</button>
             <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="watch-inputs">${watchInputs ? "Stop watching CSV input" : "Watch CSV input changes"}</button>
@@ -368,11 +371,13 @@ function render(): void {
       ].map(([label, value]) => `<article class="inc-card metric"><span>${label}</span><strong>${escape(value)}</strong></article>`).join("")}
     </section>
     <section class="inc-card pane results-pane">
-      <p role="status">${stale ? "STALE — definitions or sources changed. " : ""}${live ? "Live tests active. " : ""}${escape(runNotice)}</p>
-      <label>Search failures<input id="result-filter" type="search" class="form-control" value="${escape(resultFilter)}"></label>
+      ${resultsSource === "imported" ? `<div class="results-provenance" role="status"><div><span class="report-eyebrow">IMPORTED RESULTS</span><strong>${escape(importedResultsName)}</strong><p>Historical, read-only evidence loaded for review. Run the contract to replace it with current results.</p></div></div>` : ""}
+      <p role="status">${stale ? "STALE — the contract changed after these results were produced. " : ""}${live ? "Live tests active. " : ""}${escape(runNotice)}</p>
+      <label>Find a failure<input id="result-filter" type="search" class="form-control" value="${escape(resultFilter)}" placeholder="Search by message, rule, code, column, row, target, or value"></label>
       <div class="pane-heading">
-        <div><h2>Latest results</h2><p>${runs.length > 0 ? `${runs.filter((run) => run.result?.valid && run.result.preview?.scope !== "sample").length} of ${runs.length} targets passed` : "Run the contract to see results."}</p></div>
-        ${runs.length > 0 ? `<button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="export-issues">Export results${retainedIssueCount > 0 ? ` (${retainedIssueCount.toLocaleString()} details)` : ""}</button>` : ""}
+        <div><h2>${resultsSource === "imported" ? "Reviewed results" : "Latest results"}</h2><p>${runs.length > 0 ? `${runs.filter((run) => run.result?.valid && run.result.preview?.scope !== "sample").length} of ${runs.length} targets passed · ${retainedIssueCount.toLocaleString()} retained finding${retainedIssueCount === 1 ? "" : "s"}` : "Run the contract or load a results JSON export."}</p></div>
+        <div class="results-actions"><button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="review-results">Review results JSON</button>
+        ${runs.length > 0 ? `<button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="export-issues">Export results${retainedIssueCount > 0 ? ` (${retainedIssueCount.toLocaleString()} details)` : ""}</button>` : ""}</div>
       </div>
       <div class="results">
         ${renderResults(runs, resultFilter, stale) || `<p>No test results yet.</p>`}
@@ -559,6 +564,7 @@ function bind(): void {
   }));
   app.querySelector('[data-action="watch-inputs"]')?.addEventListener("click", () => vscode.postMessage({ type: "watchInputs" }));
   app.querySelector('[data-action="history"]')?.addEventListener("click", () => vscode.postMessage({ type: "history" }));
+  app.querySelectorAll('[data-action="review-results"]').forEach(button => button.addEventListener("click", () => vscode.postMessage({ type: "reviewResults" })));
   app.querySelector('[data-action="insert-template"]')?.addEventListener("click", () => vscode.postMessage({ type: "insertTemplate" }));
   app.querySelector('[data-action="edit-connection"]')?.addEventListener("click", () => vscode.postMessage({ type: "editConnection" }));
   app.querySelector('[data-action="preflight"]')?.addEventListener("click", () => vscode.postMessage({ type: "preflight" }));
@@ -742,6 +748,8 @@ window.addEventListener("message", (event) => {
     usingConfiguredTargets = message.usingConfiguredTargets ?? false;
     runs = message.runs ?? [];
     stale = message.stale ?? false; live = message.live ?? false; runNotice = message.runNotice ?? "";
+    resultsSource = message.resultsSource ?? "run";
+    importedResultsName = message.importedResultsName ?? "";
     render();
   } else if (message.type === "runState") {
     running = message.running === true;

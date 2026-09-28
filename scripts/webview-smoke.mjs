@@ -77,8 +77,11 @@ const failedState = {
         level: "cell",
         code: "CELL_NOT_EQUAL",
         testId: "expected-customer-status",
+        column: "Status",
         row: index + 2,
-        message: `Expected Active; found Inactive at row ${index + 2}.`
+        message: `Expected Active; found Inactive at row ${index + 2}.`,
+        expected: "Active",
+        actual: "Inactive"
       }))
     }
   }]
@@ -177,7 +180,11 @@ if (removeSqlMessage?.type !== "updateContract" || removeSqlMessage.contract.sql
 }
 
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), failedState);
-if ((await page.locator(".results tbody tr").count()) !== 12) throw new Error("Failure grid must include all retained issues.");
+if ((await page.locator(".results .finding-card").count()) !== 12) throw new Error("Finding list must include all retained issues.");
+if (!(await page.locator(".finding-card").first().textContent()).includes("Expected Customer Status")
+  || !(await page.locator(".finding-card").first().textContent()).includes("Row 2")) {
+  throw new Error("Finding cards did not explain the rule and location in readable language.");
+}
 const exportIssuesButton = page.locator('[data-action="export-issues"]');
 if (!await exportIssuesButton.isVisible() || (await exportIssuesButton.textContent())?.trim() !== "Export results (12 details)") {
   throw new Error("Failed results did not expose the complete issue export action.");
@@ -392,14 +399,27 @@ await page.locator('[data-action="create-baseline"]').click();
 if ((await page.evaluate(() => window.__messages.at(-1))).type !== "createBaseline") throw new Error("Baseline capture control did not dispatch explicitly.");
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), { ...failedState, stale: true, runNotice: "Full-scope preview · synthetic data" });
 await page.locator("#result-filter").fill("row 2.");
-if (await page.locator(".results tbody tr").count() !== 1) throw new Error("Failure search did not select the expected row.");
+if (await page.locator(".results .finding-card").count() !== 1) throw new Error("Failure search did not select the expected finding.");
 await page.locator('.results [data-issue-selection]').check();
 await page.locator('[data-action="export-issues"]').click();
 const selectedExport = await page.evaluate(() => window.__messages.at(-1));
 if (selectedExport.type !== "exportIssues" || selectedExport.selectedIssues.length !== 1 || selectedExport.filter !== "row 2.") throw new Error("Rendered issue selection export failed.");
-await page.locator('.results tbody [data-action="jump-rule"]').first().click();
+await page.locator('.results [data-action="jump-rule"]').first().click();
 if ((await page.evaluate(() => window.__messages.at(-1))).type !== "jumpRule") throw new Error("Filtered results lost jump-to-rule navigation.");
 await page.locator(".results-pane").screenshot({ path: join(qaScreenshotDir, "filtered-stale-results.png") });
+await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), {
+  ...failedState, resultsSource: "imported", importedResultsName: "customers.results.json", runNotice: "Loaded 1 target result."
+});
+if (!(await page.locator(".results-provenance").textContent()).includes("Historical, read-only evidence")) {
+  throw new Error("Imported result provenance was not visible.");
+}
+await page.locator('.results-pane [data-action="review-results"]').click();
+if ((await page.evaluate(() => window.__messages.at(-1))).type !== "reviewResults") throw new Error("Review results did not send the expected host message.");
+await page.locator(".results-pane").screenshot({ path: join(qaScreenshotDir, "imported-results-review.png") });
+await page.setViewportSize({ width: 600, height: 900 });
+if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)) throw new Error("Imported result review has mobile page overflow.");
+await page.screenshot({ path: join(qaScreenshotDir, "imported-results-review-narrow.png"), fullPage: true });
+await page.setViewportSize({ width: 1440, height: 1000 });
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), state);
 await page.locator('[data-action="run"]').click();
 if (!(await page.locator(".run-view").isVisible())) throw new Error("Run action did not open the run view.");

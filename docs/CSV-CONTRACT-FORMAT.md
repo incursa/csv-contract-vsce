@@ -242,6 +242,10 @@ Group findings carry the group key, child rule ID, source row, related rows when
 
 Grouped SQL reads fetch values only for columns named by child contracts. The child still sees the complete SQL header list for column-count, order, and additional-column checks. Unreferenced large fields need not cross the connection just to evaluate a group.
 
+## Review exported results
+
+Open the matching `*.csvtest.yaml` in the Workbench and select **Review results JSON** to load a previously exported `incursa.csv-contract-results/v1` file. The Workbench verifies the contract name, labels the evidence as imported and read-only, and presents the retained findings through the normal search, rule navigation, selection, and export controls. Running the contract replaces the imported evidence with current results. Exports with a different contract filename are rejected so findings are not reviewed against the wrong rules.
+
 For large SQL targets, an index that supports the scope filter (when present) and `rowLocator` order can avoid a server-side sort before the first row arrives. The run view shows time to first row and rows per second during grouped reads; a long first-row wait points to SQL execution or sorting, while a low streaming rate points to transfer or local row processing.
 
 ## Exact header order
