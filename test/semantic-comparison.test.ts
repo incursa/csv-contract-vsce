@@ -6,7 +6,8 @@ import test from "node:test";
 import { compareCsvTexts } from "../src/comparison/engine";
 import { createEvidenceFiles } from "../src/comparison/evidence";
 import type { ComparisonOptions } from "../src/comparison/model";
-import { compareCsvPathsDesktop } from "../src/node/semantic-comparison";
+import { compareCsvPathsDesktop, compareDefinitionPathsDesktop } from "../src/node/semantic-comparison";
+import type { ComparisonDefinition } from "../src/comparison/definition";
 
 interface ParityCase {
   name: string;
@@ -121,6 +122,33 @@ test("desktop spill comparison preserves exact multiset and keyed duplicate beha
     assert.ok(evidenceNames.includes("ComparisonSummary.json"));
     assert.ok(evidenceNames.includes("ChangedRows.csv"));
     assert.ok(!evidenceNames.includes("NormalizedLeft.csv"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("desktop saved comparison streams renamed columns, conversions, and blank rows", async () => {
+  const root = mkdtempSync(join(tmpdir(), "csv-contract-definition-test-"));
+  try {
+    const left = join(root, "left.csv");
+    const right = join(root, "right.csv");
+    writeFileSync(left, "Code,Amount,Note,Unused\n001,1.00,alpha,x\n002,2.50,beta,y\n003,0,,z\n", "utf8");
+    writeFileSync(right, "Identifier,Total,Description\n001,1,alpha\n002,2.500,beta\n003,0,\n", "utf8");
+    const definition: ComparisonDefinition = {
+      schema: "incursa.data-comparison/v1",
+      name: "Saved desktop comparison",
+      left: { kind: "CSV", path: left },
+      right: { kind: "CSV", path: right },
+      mappings: [
+        { left: "Code", right: "Identifier", key: true, include: true, conversion: "Exact" },
+        { left: "Amount", right: "Total", key: false, include: true, conversion: "Decimal" },
+        { left: "Note", right: "Description", key: false, include: true, conversion: "Exact" }
+      ]
+    };
+    const result = await compareDefinitionPathsDesktop(left, right, definition, 1);
+    assert.equal(result.summary.semanticEqual, true);
+    assert.equal(result.summary.left.rowCount, 3);
+    assert.equal(result.details.normalizedRowsTruncated, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

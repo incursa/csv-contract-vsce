@@ -32,8 +32,9 @@ leading zeros, decimal values, dates and trimmed text.
 
 The VS Code saved-setup runner currently supports CSV ↔ CSV with explicit keys and
 Exact, Text, Trim text, Decimal, Date, Date/time, Boolean, GUID and Binary conversions.
-It preserves blank rows and rejects duplicate converted keys. Its current read
-limit is 20 MiB / 250,000 rows per CSV. It conservatively rejects unsupported scalar
+It preserves blank rows and rejects duplicate converted keys. VS Code desktop streams
+larger local CSV files through temporary normalized partitions. The 20 MiB / 250,000-row
+limit applies only to browser and remote web extension hosts. It conservatively rejects unsupported scalar
 spellings instead of inferring a conversion. Decimal input uses a point, no exponent
 or grouping, and at most 38 digits. ISO and M/d/yyyy dates preserve seven fractional
 second digits. SSMS supports additional sources/conversions and its existing limits.

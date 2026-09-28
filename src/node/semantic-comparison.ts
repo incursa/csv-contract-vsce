@@ -12,6 +12,7 @@ import type {
   DuplicateKeyGroup
 } from "../comparison/model";
 import { rowsToCsv } from "../comparison/evidence";
+import { convertDefinitionValue, validatePortableExecution, type ComparisonDefinition } from "../comparison/definition";
 import { readCsvRecords } from "./csv-stream";
 
 const inMemoryBytes = 20 * 1024 * 1024;
@@ -329,9 +330,101 @@ async function compareLargeFiles(leftPath: string, rightPath: string, options: C
 export async function compareCsvFilesDesktop(
   leftUri: vscode.Uri,
   rightUri: vscode.Uri,
-  options: ComparisonOptions
+  options: ComparisonOptions,
+  definition?: ComparisonDefinition
 ): Promise<ComparisonResult> {
+  if (definition) return compareDefinitionPathsDesktop(leftUri.fsPath, rightUri.fsPath, definition);
   return compareCsvPathsDesktop(leftUri.fsPath, rightUri.fsPath, options);
+}
+
+function csvRecord(values: string[]): string {
+  return values.map(value => /[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value).join(",") + "\r\n";
+}
+
+async function projectDefinitionCsv(
+  sourcePath: string,
+  outputPath: string,
+  definition: ComparisonDefinition,
+  side: "left" | "right",
+  sentinel: string
+): Promise<void> {
+  const maps = definition.mappings.filter(mapping => mapping.include || mapping.key);
+  const descriptor = openSync(outputPath, "w");
+  let buffer = csvRecord([...maps.map(mapping => mapping.left), sentinel]);
+  let headers: string[] | undefined;
+  let positions: number[] = [];
+  let dataRow = 0;
+  const flush = (): void => {
+    if (!buffer) return;
+    writeSync(descriptor, buffer, undefined, "utf8");
+    buffer = "";
+  };
+  try {
+    for await (const record of readCsvRecords(sourcePath, { delimiter: ",", quote: "\"", allowBlankRows: true })) {
+      if (!headers) {
+        headers = record.fields;
+        assertUniqueHeader(headers, side === "left" ? "Left" : "Right");
+        positions = maps.map(mapping => {
+          const column = mapping[side];
+          const position = headers!.indexOf(column);
+          if (position < 0) throw new Error(`Missing ${side} column: ${column}`);
+          return position;
+        });
+        continue;
+      }
+      dataRow += 1;
+      if (record.fields.length !== headers.length) {
+        throw new Error(`${side} row ${dataRow} has an invalid width.`);
+      }
+      const values = maps.map((mapping, index) => {
+        try { return convertDefinitionValue(record.fields[positions[index]], mapping.conversion); }
+        catch { throw new Error(`${side} row ${dataRow}, column '${mapping[side]}': ${mapping.conversion} conversion failed. Values have not been logged.`); }
+      });
+      buffer += csvRecord([...values, "1"]);
+      if (buffer.length >= 1024 * 1024) flush();
+    }
+    if (!headers) throw new Error(`${side} CSV is empty.`);
+    flush();
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+export async function compareDefinitionPathsDesktop(
+  leftPath: string,
+  rightPath: string,
+  definition: ComparisonDefinition,
+  maxInMemoryBytes = inMemoryBytes
+): Promise<ComparisonResult> {
+  validatePortableExecution(definition);
+  if (definition.vscodeOptions) {
+    return compareCsvPathsDesktop(leftPath, rightPath, { ...definition.vscodeOptions, name: definition.name }, maxInMemoryBytes);
+  }
+  const maps = definition.mappings.filter(mapping => mapping.include || mapping.key);
+  let sentinel = "__csv_contract_present";
+  const mappedNames = new Set(maps.map(mapping => mapping.left));
+  while (mappedNames.has(sentinel)) sentinel += "_";
+  const directory = mkdtempSync(join(tmpdir(), "csv-contract-definition-"));
+  const projectedLeft = join(directory, "left.csv");
+  const projectedRight = join(directory, "right.csv");
+  try {
+    const projections = await Promise.allSettled([
+      projectDefinitionCsv(leftPath, projectedLeft, definition, "left", sentinel),
+      projectDefinitionCsv(rightPath, projectedRight, definition, "right", sentinel)
+    ]);
+    const failed = projections.find((projection): projection is PromiseRejectedResult => projection.status === "rejected");
+    if (failed) throw failed.reason;
+    const result = await compareCsvPathsDesktop(projectedLeft, projectedRight, {
+      name: definition.name,
+      keyColumns: maps.filter(mapping => mapping.key).map(mapping => mapping.left),
+      ignoredColumns: [sentinel]
+    }, maxInMemoryBytes);
+    if (result.summary.differences.duplicateKeysLeft) throw new Error("left has duplicate keys after conversion. Comparison is blocked.");
+    if (result.summary.differences.duplicateKeysRight) throw new Error("right has duplicate keys after conversion. Comparison is blocked.");
+    return result;
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 export async function compareCsvPathsDesktop(

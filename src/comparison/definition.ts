@@ -64,7 +64,7 @@ export function validatePortableExecution(value: ComparisonDefinition): void {
   for (const m of included) if (!portableModes.has(m.conversion)) throw new Error(`Conversion '${m.conversion}' is not supported by the portable CSV runner. Run this setup in SSMS; no conversion was changed.`);
 }
 
-function convert(value: string, mode: string): string {
+export function convertDefinitionValue(value: string, mode: string): string {
   if (mode === "Exact" || mode === "Text") return value;
   const text = value.trim();
   if (mode === "Trim text") return text;
@@ -106,7 +106,7 @@ export function compareDefinition(value: ComparisonDefinition, leftText: string,
     const rows = csv.rows.map((row, number) => {
       if (row.length !== csv.headers.length) throw new Error(`${side} row ${number + 1} has an invalid width.`);
       const values = maps.map((m, i) => {
-        try { return convert(row[positions[i]], m.conversion); }
+        try { return convertDefinitionValue(row[positions[i]], m.conversion); }
         catch { throw new Error(`${side} row ${number + 1}, column '${m[side]}': ${m.conversion} conversion failed. Values have not been logged.`); }
       });
       const key = JSON.stringify(values.filter((_, i) => maps[i].key));

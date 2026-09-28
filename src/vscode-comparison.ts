@@ -20,7 +20,8 @@ export interface ComparisonCommandRequest {
 export type DesktopComparisonRunner = (
   leftUri: vscode.Uri,
   rightUri: vscode.Uri,
-  options: ComparisonOptions
+  options: ComparisonOptions,
+  definition?: ComparisonDefinition
 ) => Promise<ComparisonResult>;
 
 class NormalizedComparisonProvider implements vscode.TextDocumentContentProvider {
@@ -59,9 +60,14 @@ export function registerSemanticComparison(
         const action = await vscode.window.showInformationMessage(`Loaded ${definition.name}. Read ${left.fsPath} and ${right.fsPath} and compare?`, "Run comparison", "View setup");
         if (action === "View setup") { await vscode.window.showTextDocument(file); return; }
         if (action !== "Run comparison") return;
-        const [leftText, rightText] = await Promise.all([readPortableCsv(left), readPortableCsv(right)]);
-        const result = compareDefinition(definition, leftText, rightText);
-        enforcePortableRowLimit(result, false);
+        let result: ComparisonResult;
+        if (desktopRunner && left.scheme === "file" && right.scheme === "file") {
+          result = await desktopRunner(left, right, { ...(definition.vscodeOptions ?? {}), name: definition.name }, definition);
+        } else {
+          const [leftText, rightText] = await Promise.all([readPortableCsv(left), readPortableCsv(right)]);
+          result = compareDefinition(definition, leftText, rightText);
+          enforcePortableRowLimit(result, false);
+        }
         showResultPanel(context, provider, result, left, right, definition);
       } catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : "Could not load comparison setup."); }
     })
@@ -106,7 +112,7 @@ async function compareCommand(
 }
 
 async function readPortableCsv(uri: vscode.Uri): Promise<string> {
-  if ((await vscode.workspace.fs.stat(uri)).size > webMaxBytesPerFile) throw new Error("Saved comparison execution is limited to 20 MiB per CSV in VS Code.");
+  if ((await vscode.workspace.fs.stat(uri)).size > webMaxBytesPerFile) throw new Error("Portable comparison is limited to 20 MiB per CSV. Use VS Code desktop for larger local files.");
   const bytes = await vscode.workspace.fs.readFile(uri);
   if (bytes.byteLength > webMaxBytesPerFile) {
     throw new Error(`Portable comparison is limited to ${webMaxBytesPerFile / 1024 / 1024} MiB per CSV. Use VS Code desktop for larger files.`);

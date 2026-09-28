@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.19.2
+
+- Run saved comparison setups against large local CSV files in VS Code desktop using the exact spill-to-disk comparison path instead of applying the browser host's 20 MiB and 250,000-row limits.
+- Stream mapped columns and supported conversions into temporary normalized data while preserving renamed columns, blank values, duplicate-key protection, and automatic cleanup.
+
 ## 0.19.1
 
 - Let row, conditional, grouped, and SQL conditional rules declare a user-facing result title and failure message while retaining the generated validator diagnostic.
