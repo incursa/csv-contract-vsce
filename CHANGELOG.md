@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.1
 
 - Rerun only failed targets from a contract run and only failed test files from a suite run while retaining successful results.
 - Start independent suite member files concurrently by default, then evaluate cross-file checks after their inputs finish.
