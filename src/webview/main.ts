@@ -7,7 +7,7 @@ import type { ValidationProgress } from "../core/run-progress";
 import { predicateDescription } from "../core/predicate";
 import { renderPredicate, readPredicate, editPredicateTree } from "./rule-editor";
 import { insertPreset, presetCatalog, type PresetInput } from "../core/presets";
-import type { ResultColorMode } from "../core/result-health";
+import type { ResultColorMode, ResultHealth } from "../core/result-health";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 
@@ -49,6 +49,7 @@ let runningTargetIndex = 0;
 let runningTargetCount = 0;
 type RunTargetState = { label: string; status: "queued" | "running" | "PASS" | "FAIL" | "ERROR" | "CANCELED" | "SKIPPED" | "SAMPLED";
   progress?: ValidationProgress; rows?: number; groups?: Array<{ id: string; groups: number; passed: number; failed: number }>; error?: string;
+  health?: ResultHealth;
   groupProgress: Record<string, { validated: number; rowsProcessed: number; totalRows: number }> };
 let runView = false;
 let runTargets: RunTargetState[] = [];
@@ -76,7 +77,8 @@ function renderRunView(): void {
     <section class="run-view__targets" aria-label="Target progress">${runTargets.map((target, index) => {
       const done = target.status !== "queued" && target.status !== "running";
       const progress = target.progress;
-      const phase = done ? target.status : target.status === "queued" ? "Waiting" : progress?.phase === "connecting" ? "Connecting" :
+      const showHealth = done && resultColorMode === "graded" && target.health;
+      const phase = done ? `${target.status}${showHealth ? ` · ${target.health!.score}/100` : ""}` : target.status === "queued" ? "Waiting" : progress?.phase === "connecting" ? "Connecting" :
         progress?.phase === "reading" ? "Reading target" : progress?.phase === "validating" ? "Validating" :
           progress?.phase === "summarizing" ? "Finishing results" : "Preparing";
       const activeGroup = progress?.groupId ? target.groupProgress[progress.groupId] : undefined;
@@ -85,11 +87,12 @@ function renderRunView(): void {
           ? activeGroup.rowsProcessed / activeGroup.totalRows : undefined;
       const percent = fraction === undefined ? undefined : Math.min(done ? 100 : 99, Math.max(0, Math.round(fraction * 100)));
       const groups = Object.entries(target.groupProgress);
-      return `<article class="run-target run-target--${target.status.toLowerCase()}">
+      return `<article class="run-target run-target--${target.status.toLowerCase()} ${showHealth ? `run-target--health-${target.health!.band}` : ""}">
         <div class="run-target__heading"><div><span class="run-target__number">TARGET ${index + 1}</span>
           <h2 title="${escape(target.label)}">${escape(target.label)}</h2></div><span class="run-target__status">${escape(phase)}</span></div>
         <progress class="run-target__bar ${percent === undefined && target.status === "running" ? "run-target__bar--indeterminate" : ""}"
           role="progressbar" aria-label="${escape(target.label)} progress" max="100" ${percent === undefined ? "" : `value="${percent}" aria-valuenow="${percent}"`}></progress>
+        ${showHealth ? `<div class="run-target__health"><span>Result health</span><progress class="run-target__health-scale" aria-label="Health score ${target.health!.score} out of 100" max="100" value="${target.health!.score}"></progress></div>` : ""}
         <div class="run-target__details">${progress?.rowsRead !== undefined || target.rows !== undefined
           ? `<span>${(progress?.rowsRead ?? target.rows ?? 0).toLocaleString()} rows read${progress?.totalRows !== undefined ? ` of ${progress.totalRows.toLocaleString()}` : ""}</span>` : ""}
           ${progress?.phase === "reading" && progress.bytesRead !== undefined ? `<span>${(progress.bytesRead / 1048576).toFixed(1)} MB read${progress.totalBytes ? ` of ${(progress.totalBytes / 1048576).toFixed(1)} MB` : ""}</span>` : ""}
@@ -873,6 +876,7 @@ window.addEventListener("message", (event) => {
       target.rows = message.rows;
       target.groups = message.groups;
       target.error = message.error;
+      target.health = message.health;
       if (runView) render();
     }
   } else if (message.type === "error") {

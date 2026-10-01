@@ -517,9 +517,13 @@ await page.screenshot({ path: join(qaScreenshotDir, "run-progress.png"), fullPag
 await page.setViewportSize({ width: 600, height: 900 });
 if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)) throw new Error("Run view has mobile page overflow.");
 await page.screenshot({ path: join(qaScreenshotDir, "run-progress-narrow.png"), fullPage: true });
-await runMessage({ type: "runTargetComplete", index: 0, status: "PASS", rows: 10, groups: [{ id: "by-account", groups: 3, passed: 3, failed: 0 }] });
-await runMessage({ type: "runTargetComplete", index: 1, status: "FAIL", rows: 2 });
+await runMessage({ type: "runTargetComplete", index: 0, status: "PASS", rows: 10, groups: [{ id: "by-account", groups: 3, passed: 3, failed: 0 }], health: { score: 100, band: "perfect", label: "PASS" } });
+await runMessage({ type: "runTargetComplete", index: 1, status: "FAIL", rows: 2, health: { score: 74, band: "concerning", label: "FAIL" } });
 await runMessage({ type: "runState", running: false });
+if (!(await page.locator('.run-target').nth(1).textContent()).includes("FAIL · 74/100") || await page.locator('.run-target').nth(1).locator('.run-target__health-scale').count() !== 1) {
+  throw new Error("Completed run progress did not show the graded health score and spectrum.");
+}
+await page.screenshot({ path: join(qaScreenshotDir, "run-progress-graded.png"), fullPage: true });
 const rerunFailed = page.locator('[data-action="rerun-failed"]');
 if (!await rerunFailed.isVisible() || !(await rerunFailed.textContent()).includes("Rerun 1 failed")) throw new Error("Completed contract run did not expose failed-target rerun.");
 await rerunFailed.click();
@@ -529,7 +533,7 @@ if ((await page.evaluate(() => window.__messages.at(-1))).type !== "rerunFailed"
 await runMessage({ type: "runTargets", targets: [runTargets[1]] });
 await runMessage({ type: "runState", running: true, total: 1 });
 await runMessage({ type: "runTargetStart", index: 0 });
-await runMessage({ type: "runTargetComplete", index: 0, status: "PASS", rows: 2 });
+await runMessage({ type: "runTargetComplete", index: 0, status: "PASS", rows: 2, health: { score: 100, band: "perfect", label: "PASS" } });
 await runMessage({ type: "runState", running: false });
 await page.locator('[data-action="return-workbench"]').click();
 if (!(await page.locator(".workbench-target").isVisible())) throw new Error("Run view did not return to the Workbench.");

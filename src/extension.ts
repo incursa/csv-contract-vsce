@@ -17,7 +17,7 @@ import * as vscode from "vscode";
 import { createContractFromCsv, parseContract, serializeContract, validateCsv } from "./core/contract";
 import type { CsvContract, SqlServerObjectInfo, SqlServerTableTarget, ValidationResult } from "./core/model";
 import type { ValidationProgress } from "./core/run-progress";
-import type { ResultColorMode } from "./core/result-health";
+import { resultHealth, type ResultColorMode } from "./core/result-health";
 import {
   configuredTargets,
   openTargetExternally,
@@ -574,7 +574,8 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
           signal, parallelTargets: labels.length,
           onTargetStart: (_run, index) => { void panel.webview.postMessage({ type: "runTargetStart", index }); },
           onProgress: (run, index) => { void panel.webview.postMessage({ type: "runTargetComplete", index,
-            status: run.status, rows: run.result?.rowCount, groups: run.result?.groupOutcomes, error: run.error }); }
+            status: run.status, rows: run.result?.rowCount, groups: run.result?.groupOutcomes, error: run.error,
+            health: resultHealth(run.result, run.status, "graded") }); }
         });
         return report.runs.map((run, index) => ({ ...run, target: labels[index] ?? run.table ?? files[Number(run.target)]?.label ?? run.target }));
       } finally { await panel.webview.postMessage({ type: "runState", running: false }); }

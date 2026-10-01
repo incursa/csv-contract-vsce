@@ -28,7 +28,7 @@ Create a contract from a CSV to start with its real column names, then set prese
 
 Run a contract against a CSV and follow live per-target progress while large files are being checked. Review file, column, row, and cell failures directly below the run summary, before the column and row-test editors.
 
-Choose **Red / green** or **Gradient** directly in the **Latest results** header. Gradient mode keeps PASS and FAIL semantics unchanged while adding a 0–100 presentation score. It considers the share of checks affected, the share of records or groups affected, and gives errors more weight than warnings. A completely clean result is the only 100-point green state; any finding is capped at 85 so it remains visibly different from a perfect pass. The preference also applies to suite and workspace reports and is available as `csvContract.resultColorMode` in VS Code Settings.
+Choose **Red / green** or **Gradient** directly in the **Latest results** header. Gradient mode keeps PASS and FAIL semantics unchanged while adding a 0–100 presentation score to completed cards on the test run screen and to the results. It considers the share of checks affected, the share of records or groups affected, and gives errors more weight than warnings. A completely clean result is the only 100-point green state; any finding is capped at 85 so it remains visibly different from a perfect pass. The preference also applies to suite and workspace reports and is available as `csvContract.resultColorMode` in VS Code Settings.
 
 ![Review CSV validation results in CSV Contract Workbench](images/workbench-results.png)
 

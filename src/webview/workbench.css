@@ -55,6 +55,10 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .run-target__status { padding: .3rem .55rem; border-radius: 3px; color: #344bbd; background: #e9edff; font-size: .73rem; font-weight: 600; }
 .run-target--pass .run-target__status { color: #23623f; background: #e5f4e9; }
 .run-target--fail .run-target__status, .run-target--error .run-target__status { color: #a12632; background: #fbe8ea; }
+.run-target--health-perfect .run-target__status { color: #23623f; background: #e5f4e9; }
+.run-target--health-attention .run-target__status { color: #806000; background: #fff4ce; }
+.run-target--health-concerning .run-target__status { color: #a64b00; background: #fff0df; }
+.run-target--health-critical .run-target__status { color: #a12632; background: #fbe8ea; }
 .run-target__bar { display: block; width: 100%; height: .5rem; margin: .9rem 0 .65rem; overflow: hidden; appearance: none; border: 0; border-radius: 99px; background: #e6e8ef; }
 .run-target__bar::-webkit-progress-bar { border-radius: 99px; background: #e6e8ef; }
 .run-target__bar::-webkit-progress-value { border-radius: 99px; background: #445bd4; }
@@ -66,6 +70,11 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .run-target__bar--indeterminate { background: linear-gradient(90deg, #e6e8ef 0%, #445bd4 50%, #e6e8ef 100%); background-size: 200% 100%; animation: run-target-sweep 1.4s ease-in-out infinite; }
 @keyframes run-target-sweep { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 .run-target__details { display: flex; flex-wrap: wrap; gap: .35rem 1.2rem; color: var(--inc-text-secondary); font-size: .76rem; }
+.run-target__health { display: grid; grid-template-columns: auto minmax(8rem, 1fr); align-items: center; gap: .6rem; color: var(--inc-text-secondary); font-size: .7rem; }
+.run-target__health-scale { width: 100%; height: .38rem; appearance: none; border: 0; border-radius: 999px; background: #e6e8ef; }
+.run-target__health-scale::-webkit-progress-bar { border-radius: 999px; background: #e6e8ef; }
+.run-target__health-scale::-webkit-progress-value { border-radius: 999px; background: linear-gradient(90deg, #d11a2a 0%, #df7b2c 58%, #c49412 100%); }
+.run-target--health-perfect .run-target__health-scale::-webkit-progress-value { background: #009743; }
 .run-target__error { color: #a12632; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) { .run-target__bar--indeterminate { animation: none; } }
 .workbench-run-status { grid-column: 1 / -1; display: flex; min-width: 0; align-items: center; gap: .75rem; padding: .75rem .85rem; border: 1px solid #b8c1f7; border-radius: 4px; color: #263b9f; background: #edf0ff; }
@@ -194,6 +203,7 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .target-result { display: grid; gap: .5rem; min-width: 0; padding-bottom: .75rem; border-bottom: 1px solid #dbdcdc; }
 .target-result:last-child { padding-bottom: 0; border-bottom: 0; }
 .target-result__heading { display: grid; grid-template-columns: minmax(3.5rem, auto) minmax(0, 1fr); gap: .2rem .5rem; align-items: center; }
+.target-result__health { display: grid; gap: .22rem; min-width: 8.5rem; }
 .target-result__heading code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .target-result__heading small { grid-column: 2; color: #656668; }
 .target-result__pass { color: #00833a; font-weight: 600; }
@@ -203,6 +213,10 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .result-health--attention .result-health__status { color: #806000; background: #fff4ce; }
 .result-health--concerning .result-health__status { color: #a64b00; background: #fff0df; }
 .result-health--critical .result-health__status { color: #b01524; background: #fff0f1; }
+.result-health__scale { display: block; width: 100%; height: .3rem; appearance: none; border: 0; border-radius: 999px; background: #e6e8ef; }
+.result-health__scale::-webkit-progress-bar { border-radius: 999px; background: #e6e8ef; }
+.result-health__scale::-webkit-progress-value { border-radius: 999px; background: linear-gradient(90deg, #d11a2a 0%, #df7b2c 58%, #c49412 100%); }
+.result-health--perfect .result-health__scale::-webkit-progress-value { background: #009743; }
 .report-status--attention { color: #6f5200; border-color: #c49412; background: #fff4ce; }
 .report-status--concerning { color: #8e3d00; border-color: #df7b2c; background: #fff0df; }
 .report-status--critical { color: #a01120; border-color: #df5966; background: #fff0f1; }

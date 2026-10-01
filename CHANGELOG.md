@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.20.4
+
+- Show the 0–100 health score and color spectrum on completed target cards in the contract run progress screen when **Gradient** result colors are selected.
+- Keep builds reliable when a running VS Code extension host has the packaged Windows integrated SQL driver open.
+
 ## 0.20.3
 
 - Put the result color selector directly in the visible results header and use the clearer **Red / green** and **Gradient** labels.
