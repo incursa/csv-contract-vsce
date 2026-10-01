@@ -1,5 +1,6 @@
 import * as esbuild from "esbuild";
-import { copyFile, cp, mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { copyFile, cp, mkdir, readFile } from "node:fs/promises";
 
 const production = process.argv.includes("--production");
 const watch = process.argv.includes("--watch");
@@ -110,6 +111,11 @@ if (watch) {
 // self-contained while the rest of mssql remains bundled by esbuild.
 await cp("node_modules/msnodesqlv8/lib", "dist/node_modules/msnodesqlv8/lib", { recursive: true });
 await mkdir("dist/node_modules/msnodesqlv8/build/Release", { recursive: true });
-await copyFile("node_modules/msnodesqlv8/build/Release/sqlserver.node", "dist/node_modules/msnodesqlv8/build/Release/sqlserver.node");
 await copyFile("node_modules/msnodesqlv8/package.json", "dist/node_modules/msnodesqlv8/package.json");
 await copyFile("node_modules/msnodesqlv8/LICENSE", "dist/node_modules/msnodesqlv8/LICENSE");
+const sourceNative = "node_modules/msnodesqlv8/build/Release/sqlserver.node";
+const packagedNative = "dist/node_modules/msnodesqlv8/build/Release/sqlserver.node";
+const digest = async (path) => createHash("sha256").update(await readFile(path)).digest("hex");
+let nativeCurrent = false;
+try { nativeCurrent = await digest(sourceNative) === await digest(packagedNative); } catch { /* Destination does not exist yet. */ }
+if (!nativeCurrent) await copyFile(sourceNative, packagedNative);

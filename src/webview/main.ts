@@ -326,7 +326,6 @@ function render(): void {
             <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="review-baseline">Review schema drift</button>
           </div>
           <div class="workbench-tools__group"><h3>Runs and updates</h3>
-            <label class="compact-setting">Result colors<select class="form-select" data-action="result-color-mode"><option value="binary"${resultColorMode === "binary" ? " selected" : ""}>Pass / fail</option><option value="graded"${resultColorMode === "graded" ? " selected" : ""}>Graded health</option></select></label>
             <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="review-results">Review results JSON</button>
             <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="history">Run history</button>
             <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="live">${live ? "Pause live tests" : "Enable live tests"}</button>
@@ -412,7 +411,7 @@ function render(): void {
       <label>Find a failure<input id="result-filter" type="search" class="form-control" value="${escape(resultFilter)}" placeholder="Search by message, rule, code, column, row, target, or value"></label>
       <div class="pane-heading">
         <div><h2>${resultsSource === "imported" ? "Reviewed results" : "Latest results"}</h2><p>${runs.length > 0 ? `${runs.filter((run) => run.result?.valid && run.result.preview?.scope !== "sample").length} of ${runs.length} targets passed · ${retainedIssueCount.toLocaleString()} retained finding${retainedIssueCount === 1 ? "" : "s"}` : "Run the contract or load a results JSON export."}</p></div>
-        <div class="results-actions"><button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="review-results">Review results JSON</button>
+        <div class="results-actions"><label class="result-color-control">Result colors<select class="form-select" data-action="result-color-mode" aria-label="Result color mode"><option value="binary"${resultColorMode === "binary" ? " selected" : ""}>Red / green</option><option value="graded"${resultColorMode === "graded" ? " selected" : ""}>Gradient</option></select></label><button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="review-results">Review results JSON</button>
         ${runs.length > 0 ? `<button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="export-issues">Export results${retainedIssueCount > 0 ? ` (${retainedIssueCount.toLocaleString()} details)` : ""}</button>` : ""}</div>
       </div>
       <div class="results">

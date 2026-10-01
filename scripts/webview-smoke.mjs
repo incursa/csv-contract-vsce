@@ -146,6 +146,10 @@ await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message"
 await page.locator("text=CSV Contract Workbench").waitFor();
 await page.locator('[data-column="CustomerId"]').click();
 if (await page.locator(".metrics").count() !== 1) throw new Error("Metric layout did not render.");
+const colorModeSelector = page.locator('[data-action="result-color-mode"]');
+if (!await colorModeSelector.isVisible() || (await colorModeSelector.locator("option").allTextContents()).join(",") !== "Red / green,Gradient") {
+  throw new Error("The result color selector must be visible in the results header with clear labels.");
+}
 if ((await page.locator(".workbench-target .configured-target-row").count()) !== 4) throw new Error("Configured CSV and SQL targets did not render.");
 if ((await page.locator(".workbench-target .target-type").allTextContents()).join(",") !== "PATH,PATH,URL,VIEW") {
   throw new Error("Configured target types did not render correctly.");

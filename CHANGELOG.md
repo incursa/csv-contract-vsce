@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.20.3
+
+- Put the result color selector directly in the visible results header and use the clearer **Red / green** and **Gradient** labels.
+- Package the complete Windows integrated SQL driver metadata so saved integrated-authentication profiles resolve `msnodesqlv8` correctly after installation.
+
 ## 0.20.2
 
 - Keep CSV and SQL Server targets configured while disabling them from execution, with compact Workbench actions to enable, disable, edit, open, or remove each target.

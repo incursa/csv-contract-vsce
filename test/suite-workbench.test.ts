@@ -24,6 +24,7 @@ test("suite Workbench shows independent members, filters, and sends actions only
   assert.equal(document.querySelectorAll("[data-member]").length, 2);
   assert.match(document.body.textContent!, /EmployeeId/);
   assert.match(document.body.textContent!, /DepartmentCode/);
+  assert.match(document.querySelector('[data-action="color-mode"]')!.textContent!, /Red \/ green/);
   const filter = document.querySelector<HTMLInputElement>("#filter")!;
   filter.value = "departments"; filter.dispatchEvent(new dom.window.Event("input"));
   assert.equal(document.querySelector<HTMLElement>('[data-member="employees"]')!.hidden, true);
