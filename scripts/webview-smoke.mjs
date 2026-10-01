@@ -483,6 +483,17 @@ await page.screenshot({ path: join(qaScreenshotDir, "run-progress-narrow.png"), 
 await runMessage({ type: "runTargetComplete", index: 0, status: "PASS", rows: 10, groups: [{ id: "by-account", groups: 3, passed: 3, failed: 0 }] });
 await runMessage({ type: "runTargetComplete", index: 1, status: "FAIL", rows: 2 });
 await runMessage({ type: "runState", running: false });
+const rerunFailed = page.locator('[data-action="rerun-failed"]');
+if (!await rerunFailed.isVisible() || !(await rerunFailed.textContent()).includes("Rerun 1 failed")) throw new Error("Completed contract run did not expose failed-target rerun.");
+await rerunFailed.click();
+if ((await page.evaluate(() => window.__messages.at(-1))).type !== "rerunFailed" || await page.locator(".run-target").count() !== 1) {
+  throw new Error("Failed-target rerun did not request or display only the failed target.");
+}
+await runMessage({ type: "runTargets", targets: [runTargets[1]] });
+await runMessage({ type: "runState", running: true, total: 1 });
+await runMessage({ type: "runTargetStart", index: 0 });
+await runMessage({ type: "runTargetComplete", index: 0, status: "PASS", rows: 2 });
+await runMessage({ type: "runState", running: false });
 await page.locator('[data-action="return-workbench"]').click();
 if (!(await page.locator(".workbench-target").isVisible())) throw new Error("Run view did not return to the Workbench.");
 await page.goto(`http://127.0.0.1:${address.port}/suite`);

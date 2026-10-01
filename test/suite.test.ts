@@ -138,6 +138,25 @@ test("independent targets run concurrently with a limit and keep report order", 
   false, undefined, { parallelTargets: 1, onTargetStart: (_run, index) => singleStarts.push(index) });
   assert.deepEqual(singleStarts, [0]);
 });
+test("suite member files run concurrently by default and keep declaration order", async () => {
+  const makeContract = (table: string): CsvContract => ({ version: 1,
+    schema: { columns: { Id: { presence: "required" } } },
+    sqlServer: { connection: "test", schema: "stage", table } });
+  const members = ["CatalogA", "CatalogB", "CatalogC"].map((table, index) => ({
+    id: `catalog-${index + 1}`, source: `catalog-${index + 1}.csvtest.yaml`, contract: makeContract(table)
+  }));
+  let active = 0;
+  let maximum = 0;
+  const report = await runSuite({ id: "catalog-suite", source: "catalog.csvsuite.yaml", isSuite: true, members }, async contract => {
+    active++;
+    maximum = Math.max(maximum, active);
+    await new Promise(resolve => setTimeout(resolve, contract.sqlServer?.table === "CatalogA" ? 30 : 10));
+    active--;
+    return validateCsv(contract, "Id\nvalue\n");
+  });
+  assert.equal(maximum, 3);
+  assert.deepEqual(report.runs.map(run => run.member), members.map(member => member.id));
+});
 test("external paths retain meaning after relocation and are reported as nonportable", async (t) => {
   const { root, master } = await fixture(t);
   const c = contract(); c.targets = [{ path: "../data/people.csv" }];

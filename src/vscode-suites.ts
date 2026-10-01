@@ -165,6 +165,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
   let renderVersion = 0;
   let notice: string | undefined;
   let report: Awaited<ReturnType<typeof executeVscodeSuite>> | undefined;
+  let mergeMembers: string[] | undefined;
   let runView = false;
   let runProgress: SuiteRunProgress | undefined;
   const render = async (): Promise<void> => {
@@ -212,7 +213,26 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
         }
       });
     } finally { running = false; if (runProgress) runProgress.running = false; }
-  }, result => { report = result; stale = false; affected.clear(); notice = `${result.status}: ${result.runs.length} work items; ${new Date().toISOString()}`;
+  }, result => {
+    if (mergeMembers?.length && report) {
+      const selected = new Set(mergeMembers);
+      const rerun = result.runs.filter(run => selected.has(run.member) || run.member.startsWith("cross:") && run.status !== "SKIPPED");
+      const replaced = new Set(rerun.map(run => run.member));
+      const retained = report.runs.filter(run => !selected.has(run.member) && !replaced.has(run.member));
+      const memberOrder = new Map(parseSuite(document.getText()).members.map((member, index) => [member.id, index]));
+      const combined = [...retained, ...rerun].map((run, index) => ({ run, index })).sort((a, b) =>
+        (memberOrder.get(a.run.member) ?? Number.MAX_SAFE_INTEGER) - (memberOrder.get(b.run.member) ?? Number.MAX_SAFE_INTEGER) || a.index - b.index).map(item => item.run);
+      const status = combined.some(run => run.status === "ERROR") || !combined.length ? "ERROR" : combined.some(run => run.status === "CANCELED") ? "CANCELED" :
+        combined.some(run => run.status === "FAIL") ? "FAIL" : combined.some(run => run.status === "SKIPPED") ? "SKIPPED" : combined.some(run => run.status === "SAMPLED") ? "SAMPLED" : "PASS";
+      const summary = { ...result.summary, PASS: combined.filter(run => run.status === "PASS").length, FAIL: combined.filter(run => run.status === "FAIL").length,
+        ERROR: combined.filter(run => run.status === "ERROR").length, SKIPPED: combined.filter(run => run.status === "SKIPPED").length,
+        CANCELED: combined.filter(run => run.status === "CANCELED").length, ...(combined.some(run => run.status === "SAMPLED") ? { SAMPLED: combined.filter(run => run.status === "SAMPLED").length } : {}) };
+      result = { ...result, runs: combined, status, valid: status === "PASS", exitCode: status === "PASS" ? 0 : status === "FAIL" ? 1 : 2,
+        summary,
+        members: result.members.map(member => ({ id: member.id, runs: combined.filter(run => run.member === member.id) })) };
+    }
+    mergeMembers = undefined;
+    report = result; stale = false; affected.clear(); notice = `${result.status}: ${result.runs.length} work items; ${new Date().toISOString()}`;
     if (runProgress) {
       runProgress.running = false; runProgress.status = result.status;
       for (const member of runProgress.members) {
@@ -225,7 +245,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
     consecutiveErrors = result.runs.some(r => r.status === "ERROR") ? consecutiveErrors + 1 : 0;
     if (consecutiveErrors >= 3) { scheduler.pause(); notice += " · Live tests paused after three consecutive execution errors."; }
     void render(); },
-  error => { notice = errorDetails(error); stale = true; running = false; if (runProgress) { runProgress.running = false; runProgress.status = "ERROR"; } void render(); });
+  error => { mergeMembers = undefined; notice = errorDetails(error); stale = true; running = false; if (runProgress) { runProgress.running = false; runProgress.status = "ERROR"; } void render(); });
   const refresh = async (uri?: vscode.Uri, selection?: string[]): Promise<void> => {
     if (uri && !dependencies.has(uri.toString())) return;
     // Invalidate before asynchronous dependency reads; an old query may finish during those reads.
@@ -276,6 +296,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
     }), panel.webview.onDidReceiveMessage(async (message: { type?: string; index?: number; ruleId?: string; memberId?: string; memberIds?: string[]; resultFilter?: string; selectedIssues?: string[] }) => {
       try {
         if (["run", "selected", "failed"].includes(message.type ?? "") && !running) {
+          mergeMembers = undefined;
           let members: string[] | undefined;
           if (message.type === "failed") {
             const checks = parseSuite(document.getText()).crossChecks ?? [];
@@ -283,6 +304,9 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
               const check = checks.find(c => `cross:${c.id}` === r.member);
               return check ? [check.from, check.to] : [r.member];
             }) ?? [];
+            members = [...new Set(members)];
+            if (!members.length) { notice = "There are no failed test files to rerun."; await render(); return; }
+            mergeMembers = members;
           }
           if (message.type === "selected") {
             const selected = await vscode.window.showQuickPick(parseSuite(document.getText()).members.map(m => m.id), { canPickMany: true, title: "Run selected members" });

@@ -178,16 +178,17 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
   controls: { signal?: AbortSignal; members?: string[]; onProgress?: (run: SuiteRun, index?: number) => void;
     onTargetStart?: (target: Pick<SuiteRun, "suite" | "member" | "spec" | "table" | "target">, index: number) => void;
     onTargetProgress?: (target: Pick<SuiteRun, "suite" | "member" | "spec" | "table" | "target">, progress: ValidationProgress, index: number) => void;
-    parallelTargets?: number; crossExecutor?: CrossExecutor } = {}) {
+    parallelTargets?: number; parallelMembers?: number; crossExecutor?: CrossExecutor } = {}) {
   const runs: SuiteRun[] = [];
   const runId = globalThis.crypto.randomUUID();
   const startedAt = new Date().toISOString();
   let stopped = false;
-  for (const member of suite.members) {
+  const executeMember = async (member: LoadedSuite["members"][number]): Promise<SuiteRun[]> => {
+    const memberRuns: SuiteRun[] = [];
     const base = { suite: suite.id, member: member.id, spec: member.source };
-    if (controls.signal?.aborted) { runs.push({ ...base, status: "CANCELED", error: "Canceled before member execution." }); continue; }
-    if (controls.members && !controls.members.includes(member.id)) { runs.push({ ...base, status: "SKIPPED", error: "Outside selected member scope." }); continue; }
-    if (stopped) { runs.push({ ...base, status: "SKIPPED", error: "Not executed after fail-fast." }); continue; }
+    if (controls.signal?.aborted) { memberRuns.push({ ...base, status: "CANCELED", error: "Canceled before member execution." }); return memberRuns; }
+    if (controls.members && !controls.members.includes(member.id)) { memberRuns.push({ ...base, status: "SKIPPED", error: "Outside selected member scope." }); return memberRuns; }
+    if (stopped) { memberRuns.push({ ...base, status: "SKIPPED", error: "Not executed after fail-fast." }); return memberRuns; }
     try {
       if (member.error || !member.contract) throw new Error(member.error ?? "Contract was not loaded.");
       const evaluatedContract = resolveEvaluation(member.contract, startedAt);
@@ -227,53 +228,68 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
             controls.onProgress?.(outcomes[index], index);
           }
         }));
-        runs.push(...outcomes);
-        continue;
+        memberRuns.push(...outcomes);
+        return memberRuns;
       }
       for (const [targetIndex, target] of targets.entries()) {
         const identity = { ...base, table: `${target.schema}.${target.table}`, target: target.name ?? `${target.schema}.${target.table}` };
-        if (controls.signal?.aborted) { runs.push({ ...identity, status: "CANCELED", error: "Canceled before target execution." }); continue; }
-        if (stopped) { runs.push({ ...identity, status: "SKIPPED", error: "Not executed after fail-fast." }); continue; }
+        if (controls.signal?.aborted) { memberRuns.push({ ...identity, status: "CANCELED", error: "Canceled before target execution." }); continue; }
+        if (stopped) { memberRuns.push({ ...identity, status: "SKIPPED", error: "Not executed after fail-fast." }); continue; }
         try {
           controls.onTargetStart?.(identity, targetIndex);
           const started = Date.now();
           const result = await validate(evaluatedContract, target, member.source, targetIndex,
             progress => controls.onTargetProgress?.(identity, progress, targetIndex));
           result.evaluatedAt = startedAt;
-          runs.push(controls.signal?.aborted ? { ...identity, status: "CANCELED", error: "Canceled during execution; result discarded." }
+          memberRuns.push(controls.signal?.aborted ? { ...identity, status: "CANCELED", error: "Canceled during execution; result discarded." }
             : { ...identity, status: result.valid ? "PASS" : "FAIL", result, durationMs: Date.now() - started });
-          controls.onProgress?.(runs[runs.length - 1]);
+          controls.onProgress?.(memberRuns[memberRuns.length - 1]);
           if (failFast && !result.valid) stopped = true;
         } catch (error) {
-          runs.push({ ...identity, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) });
-          controls.onProgress?.(runs[runs.length - 1]);
+          memberRuns.push({ ...identity, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) });
+          controls.onProgress?.(memberRuns[memberRuns.length - 1]);
           if (failFast) stopped = true;
         }
       }
       for (const [fileIndex, target] of (validateFile ? member.contract.targets ?? [] : []).entries()) {
         const identity = { ...base, target: target.path ?? target.url };
         const targetIndex = targets.length + fileIndex;
-        if (controls.signal?.aborted) { runs.push({ ...identity, status: "CANCELED", error: "Canceled before target execution." }); continue; }
-        if (stopped) { runs.push({ ...identity, status: "SKIPPED", error: "Not executed after fail-fast." }); continue; }
+        if (controls.signal?.aborted) { memberRuns.push({ ...identity, status: "CANCELED", error: "Canceled before target execution." }); continue; }
+        if (stopped) { memberRuns.push({ ...identity, status: "SKIPPED", error: "Not executed after fail-fast." }); continue; }
         try {
           controls.onTargetStart?.(identity, targetIndex);
           const started = Date.now();
           const result = await validateFile!(evaluatedContract, member.source, target, targetIndex,
             progress => controls.onTargetProgress?.(identity, progress, targetIndex));
           result.evaluatedAt = startedAt;
-          runs.push(controls.signal?.aborted ? { ...identity, status: "CANCELED", error: "Canceled during execution; result discarded." } : { ...identity, status: result.valid ? "PASS" : "FAIL", result, durationMs: Date.now() - started });
-          controls.onProgress?.(runs[runs.length - 1]);
+          memberRuns.push(controls.signal?.aborted ? { ...identity, status: "CANCELED", error: "Canceled during execution; result discarded." } : { ...identity, status: result.valid ? "PASS" : "FAIL", result, durationMs: Date.now() - started });
+          controls.onProgress?.(memberRuns[memberRuns.length - 1]);
           if (failFast && !result.valid) stopped = true;
         } catch (error) {
-          runs.push({ ...identity, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) });
-          controls.onProgress?.(runs[runs.length - 1]);
+          memberRuns.push({ ...identity, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) });
+          controls.onProgress?.(memberRuns[memberRuns.length - 1]);
           if (failFast) stopped = true;
         }
       }
     } catch (error) {
-      runs.push({ ...base, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) });
+      memberRuns.push({ ...base, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) });
       if (failFast) stopped = true;
     }
+    return memberRuns;
+  };
+  const memberConcurrency = failFast ? 1 : Math.max(1, Math.floor(controls.parallelMembers ?? suite.members.length));
+  if (memberConcurrency === 1 || suite.members.length < 2) {
+    for (const member of suite.members) runs.push(...await executeMember(member));
+  } else {
+    const outcomes: SuiteRun[][] = new Array(suite.members.length);
+    let nextMember = 0;
+    await Promise.all(Array.from({ length: Math.min(memberConcurrency, suite.members.length) }, async () => {
+      while (nextMember < suite.members.length) {
+        const index = nextMember++;
+        outcomes[index] = await executeMember(suite.members[index]);
+      }
+    }));
+    outcomes.forEach(memberRuns => runs.push(...memberRuns));
   }
   for (const check of suite.crossChecks ?? []) {
     const base = { suite: suite.id, member: `cross:${check.id}`, spec: suite.source, target: `${check.from} → ${check.to}` };

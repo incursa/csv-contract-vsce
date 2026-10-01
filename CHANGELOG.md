@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Rerun only failed targets from a contract run and only failed test files from a suite run while retaining successful results.
+- Start independent suite member files concurrently by default, then evaluate cross-file checks after their inputs finish.
+
 ## 0.20.0
 
 - Add aggregate-only `rowReconciliation` suite checks for missing source-to-output keys, exact blank replacement, and preservation of nonblank values.

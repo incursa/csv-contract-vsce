@@ -63,11 +63,12 @@ function escape(value: unknown): string {
 function renderRunView(): void {
   const scrollPosition = window.scrollY;
   const complete = runTargets.filter(target => target.status !== "queued" && target.status !== "running").length;
+  const failed = runTargets.filter(target => target.status === "FAIL" || target.status === "ERROR").length;
   app.innerHTML = `<main class="run-view">
     <header class="run-view__header"><div><span class="run-view__eyebrow">CONTRACT RUN</span>
       <h1>${running ? "Running tests" : "Run complete"}</h1>
       <p>${complete} of ${runTargets.length} targets complete${running ? " · Independent targets run concurrently" : ""}</p></div>
-      <div class="run-view__actions">${running ? `<button class="inc-btn inc-btn--outline-secondary" data-action="cancel-run">Cancel run</button>` : ""}
+      <div class="run-view__actions">${running ? `<button class="inc-btn inc-btn--outline-secondary" data-action="cancel-run">Cancel run</button>` : failed ? `<button class="inc-btn inc-btn--outline-secondary" data-action="rerun-failed">Rerun ${failed} failed</button>` : ""}
         <button class="inc-btn inc-btn--primary" data-action="return-workbench">${running ? "Back to Workbench" : "View results"}</button></div>
     </header>
     <section class="run-view__targets" aria-label="Target progress">${runTargets.map((target, index) => {
@@ -101,8 +102,24 @@ function renderRunView(): void {
     }).join("")}</section>
   </main>`;
   app.querySelector('[data-action="cancel-run"]')?.addEventListener("click", () => vscode.postMessage({ type: "cancel" }));
+  app.querySelector('[data-action="rerun-failed"]')?.addEventListener("click", () => beginRun(true));
   app.querySelector('[data-action="return-workbench"]')?.addEventListener("click", () => { runView = false; render(); });
   window.scrollTo(0, scrollPosition);
+}
+
+function beginRun(failedOnly = false): void {
+  if (running) return;
+  const failedLabels = runTargets.filter(target => target.status === "FAIL" || target.status === "ERROR").map(target => target.label);
+  const labels = failedOnly ? (failedLabels.length ? failedLabels : runs.filter(run => run.status === "FAIL" || run.status === "ERROR").map(run => run.target ?? run.table ?? "Target")) : targetNames;
+  if (failedOnly && !labels.length) return;
+  running = true;
+  runningTarget = "";
+  runningTargetIndex = 0;
+  runningTargetCount = labels.length;
+  runTargets = labels.map(label => ({ label, status: "queued", groupProgress: {} }));
+  runView = true;
+  render();
+  vscode.postMessage({ type: failedOnly ? "rerunFailed" : "run" });
 }
 
 function configuredSqlTargets(value: CsvContract): Array<{
@@ -280,6 +297,7 @@ function render(): void {
         <button class="inc-btn inc-btn--outline-secondary" data-action="choose-csv">Select test CSV</button>
         <button class="inc-btn inc-btn--outline-secondary" data-action="open-yaml">Open YAML</button>
         ${running ? `<button class="inc-btn inc-btn--outline-secondary" data-action="cancel">Cancel execution</button>` : ""}
+        ${!running && runs.some(run => run.status === "FAIL" || run.status === "ERROR") ? `<button class="inc-btn inc-btn--outline-secondary" data-action="rerun-failed">Rerun failed</button>` : ""}
         <button class="inc-btn inc-btn--primary run-button" data-action="run" ${running ? "disabled aria-busy=\"true\"" : ""}>
           ${running ? `<span class="run-spinner run-spinner--button" aria-hidden="true"></span><span>Running…</span>` : "Run tests"}
         </button>
@@ -693,17 +711,8 @@ function bind(): void {
   }));
   app.querySelector('[data-action="open-yaml"]')?.addEventListener("click", () => vscode.postMessage({ type: "openYaml" }));
   app.querySelector('[data-action="export-issues"]')?.addEventListener("click", () => vscode.postMessage({ type: "exportIssues", filter: resultFilter, selectedIssues: Array.from(app.querySelectorAll<HTMLElement>('[data-issue-selection]:checked')).map(input => input.dataset.issueSelection) }));
-  app.querySelector('[data-action="run"]')?.addEventListener("click", () => {
-    if (running) return;
-    running = true;
-    runningTarget = "";
-    runningTargetIndex = 0;
-    runningTargetCount = targetNames.length;
-    runTargets = targetNames.map(label => ({ label, status: "queued", groupProgress: {} }));
-    runView = true;
-    render();
-    vscode.postMessage({ type: "run" });
-  });
+  app.querySelector('[data-action="run"]')?.addEventListener("click", () => beginRun());
+  app.querySelector('[data-action="rerun-failed"]')?.addEventListener("click", () => beginRun(true));
   app.querySelector('[data-action="add-row-test"]')?.addEventListener("click", () => {
     if (!contract) return;
     const id = `row-test-${(contract.rowTests?.length ?? 0) + 1}`;

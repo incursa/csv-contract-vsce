@@ -34,7 +34,7 @@ Run a contract against a CSV and follow live per-target progress while large fil
 
 ## Run workspace test suites
 
-Running a suite opens a dedicated progress screen. It rolls all test files into an overall suite bar, shows one member bar per referenced or inline contract, and displays compact target progress beneath each member while independent targets execute concurrently.
+Running a suite opens a dedicated progress screen. It rolls all test files into an overall suite bar, shows one member bar per referenced or inline contract, and displays compact target progress beneath each member. Independent test files and their targets execute concurrently. Completed contract and suite runs offer **Rerun failed** when a target or test file fails.
 
 Open **CSV Contract** in the Activity Bar to see every `*.csvtest.yaml` and `*.csvtest.yml` file in the workspace. Expand a contract to inspect and open its local or URL targets. Check the contracts you want and select **Run Selected**. A dedicated report opens with totals for the complete test run and expandable results for every contract-target pair. Select **Last run** to reopen the aggregate report, or select an individual green or red run to open the report focused on that result. Contracts that share a target reuse the same loaded CSV, and the selection remains checked for the workspace.
 

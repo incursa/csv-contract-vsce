@@ -61,6 +61,22 @@ test("suite run view rolls up every test file and keeps target progress compact"
   dom.window.close();
 });
 
+test("completed suite runs can rerun only failed test files", () => {
+  const messages: unknown[] = [];
+  const members = suite.members.map((member, index) => ({ id: member.id, source: member.source,
+    status: index === 0 ? "FAIL" as const : "PASS" as const,
+    targets: [{ label: `stage.Dataset${index + 1}`, status: index === 0 ? "FAIL" as const : "PASS" as const }] }));
+  const dom = new JSDOM(renderSuiteWorkbench({ suite, runView: true, runProgress: { running: false, status: "FAIL", members } }, "test"), {
+    runScripts: "dangerously",
+    beforeParse(window) { Object.assign(window, { acquireVsCodeApi: () => ({ postMessage: (message: unknown) => messages.push(message) }) }); }
+  });
+  const button = dom.window.document.querySelector<HTMLButtonElement>('[data-action="failed"]')!;
+  assert.match(button.textContent!, /Rerun 1 failed/);
+  button.click();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages)), [{ type: "failed" }]);
+  dom.window.close();
+});
+
 test("ODBC objects retain diagnostics through execution, rendering and CSV export", async () => {
   const report = await runSuite(suite, async () => { throw { message: "Login failed", sqlstate: "28000", code: 18456, originalError: new Error("ODBC denied access"), password: "never-export" }; });
   assert.equal(report.status, "ERROR");

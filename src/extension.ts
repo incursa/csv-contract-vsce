@@ -507,10 +507,12 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
     let completedRuns = 0;
     let watchInputs = false;
     let consecutiveErrors = 0;
-    const scheduler = new LiveTests<{ contract: CsvContract; preview?: string; targets?: ResolvedTarget[] }, SuiteRun[]>(async (draft, signal) => {
+    let rerunRevision = 0;
+    const partialRunKeys = new Set<string>();
+    const scheduler = new LiveTests<{ contract: CsvContract; preview?: string; targets?: ResolvedTarget[]; sqlTargets?: ResolvedSqlServerTarget[] }, SuiteRun[]>(async (draft, signal) => {
       let contract = await resolveBaseline(draft.contract, document.uri.toString(), vscodeSuiteIO);
       let files = draft.targets ?? configuredTargets(document.uri, contract);
-      let sqlTargets = resolveSqlServerTargets(contract, false);
+      let sqlTargets = draft.sqlTargets ?? resolveSqlServerTargets(contract, false);
       let preview: PreviewOptions | undefined;
       if (draft.preview) {
         contract = previewContract(contract, draft.preview);
@@ -570,10 +572,15 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
           onProgress: (run, index) => { void panel.webview.postMessage({ type: "runTargetComplete", index,
             status: run.status, rows: run.result?.rowCount, groups: run.result?.groupOutcomes, error: run.error }); }
         });
-        return report.runs.map(run => ({ ...run, target: run.table ?? files[Number(run.target)]?.label ?? run.target }));
+        return report.runs.map((run, index) => ({ ...run, target: labels[index] ?? run.table ?? files[Number(run.target)]?.label ?? run.target }));
       } finally { await panel.webview.postMessage({ type: "runState", running: false }); }
-    }, (runs) => { completedRuns++; stale = false; resultsSource = "run"; importedResultsName = "";
-      latestRuns = runs.map(r => ({ ...r, target: r.target ?? r.member }));
+    }, (runs, key) => { completedRuns++; stale = false; resultsSource = "run"; importedResultsName = "";
+      const completed = runs.map(r => ({ ...r, target: r.target ?? r.member }));
+      if (partialRunKeys.delete(key)) {
+        const replacements = new Map(completed.map(run => [run.target, run]));
+        latestRuns = latestRuns.map(run => replacements.get(run.target) ?? run);
+        for (const run of completed) if (!latestRuns.some(existing => existing.target === run.target)) latestRuns.push(run);
+      } else latestRuns = completed;
       consecutiveErrors = runs.some(r => r.status === "ERROR") ? consecutiveErrors + 1 : 0;
       if (consecutiveErrors >= 3) { scheduler.pause(); runNotice += " · Live tests paused after three consecutive execution errors."; }
       void postState(); },
@@ -751,6 +758,21 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
           ? ` from ${new Date(imported.exportedAt).toLocaleString()}` : "";
         runNotice = `Loaded ${latestRuns.length.toLocaleString()} target result${latestRuns.length === 1 ? "" : "s"}${exported}.`;
         await postState();
+      } else if (message.type === "rerunFailed") {
+        const failed = new Set(latestRuns.filter(run => run.status === "FAIL" || run.status === "ERROR").map(run => run.target));
+        if (!failed.size) {
+          void vscode.window.showInformationMessage("There are no failed targets to rerun.");
+          return;
+        }
+        const contract = effective(read());
+        const files = (manualTargets ?? configuredTargets(document.uri, contract)).filter(target => failed.has(target.label));
+        const sqlTargets = resolveSqlServerTargets(contract, false).filter(target => failed.has(sqlServerTargetLabel(target)));
+        if (!files.length && !sqlTargets.length) throw new Error("The failed targets no longer match this contract. Run all tests to refresh the target list.");
+        previewRule = undefined;
+        const key = JSON.stringify([contract, files.map(target => target.label), sqlTargets.map(sqlServerTargetLabel), "failed", ++rerunRevision]);
+        partialRunKeys.add(key);
+        scheduler.change({ key, value: { contract, targets: files, sqlTargets } });
+        scheduler.request();
       } else if (message.type === "run" || message.type === "preview") {
         previewRule = message.type === "preview" ? String(message.ruleId) : undefined;
         refreshRevision();
