@@ -12,7 +12,7 @@ import { LiveTests } from "../src/core/live-tests";
 import { insertPreset } from "../src/core/presets";
 import { insertTemplate, coverageDiagnostics } from "../src/core/authoring";
 import { crossResult, planCrossCheck } from "../src/core/cross-checks";
-import { runSuite, type LoadedSuite } from "../src/core/suite";
+import { parseSuite, runSuite, type LoadedSuite } from "../src/core/suite";
 import { renderResults, filterResultRuns, issueSelectionKey } from "../src/results-view";
 import { issueRunsToCsv } from "../src/issue-export";
 import { summarizeRules, compareRules } from "../src/core/history";
@@ -84,8 +84,8 @@ test("history compares stable rules without retaining literals or inventing miss
 
 test("cross-table scopes are independently parameterized on both sides", () => {
   const make = (valueEnvironment: string): CsvContract => ({ version: 1, schema: { columns: { Id: { presence: "required" } } }, sqlServer: { connection: "local", schema: "dbo", table: "T", scope: { column: "Batch]Id", parameter: "load", sqlType: "nvarchar(20)", valueEnvironment } } });
-  for (const kind of ["foreignKey", "equalPopulation", "equalTotal"] as const) {
-    const plan = planCrossCheck({ id: "scoped", kind, from: "a", to: "b", keys: [{ from: "Id", to: "Id" }], valueColumns: { from: "Id", to: "Id" } }, [{ id: "a", contract: make("LEFT_BATCH") }, { id: "b", contract: make("RIGHT_BATCH") }]);
+  for (const kind of ["foreignKey", "equalPopulation", "equalTotal", "rowReconciliation"] as const) {
+    const plan = planCrossCheck({ id: "scoped", kind, from: "a", to: "b", keys: [{ from: "Id", to: "Id" }], valueColumns: { from: "Id", to: "Id" }, valueMappings: [{ from: "Id", to: "Id", otherwise: "preserve" }] }, [{ id: "a", contract: make("LEFT_BATCH") }, { id: "b", contract: make("RIGHT_BATCH") }]);
     assert.match(plan.sql, /@cross_from/); assert.match(plan.sql, /@cross_to/);
     assert.match(plan.sql, /\[Batch\]\]Id\]/);
     assert.equal(plan.from.scope?.valueEnvironment, "LEFT_BATCH");
@@ -176,6 +176,25 @@ test("total checks quote mappings, reject tolerance injection and retain invalid
   assert.match(plan.sql, /IS NULL THEN 1/);
   assert.match(plan.sql, /Invalid/);
   assert.throws(() => planCrossCheck({ ...check, tolerance: "0'; DROP TABLE x" }, members), /tolerance/);
+});
+
+test("row reconciliation checks missing keys and conditional blank replacement without exposing row data", () => {
+  const source: CsvContract = { version: 1, schema: { columns: { Id: { presence: "required" }, TRI: { presence: "required" } } }, sqlServer: { connection: "synthetic", schema: "source", table: "People", columnMap: { TRI: "Source]TRI" } } };
+  const output: CsvContract = { version: 1, schema: { columns: { PersonId: { presence: "required" }, TaxId: { presence: "required" } } }, sqlServer: { connection: "synthetic", schema: "output", table: "People", columnMap: { TaxId: "Output]TRI" } } };
+  const check = { id: "tri-reconciliation", kind: "rowReconciliation" as const, from: "source", to: "output", keys: [{ from: "Id", to: "PersonId" }], valueMappings: [{ from: "TRI", to: "TaxId", blankTo: "PX'0000", otherwise: "preserve" as const }], nulls: "fail" as const };
+  const plan = planCrossCheck(check, [{ id: "source", contract: source }, { id: "output", contract: output }]);
+  assert.match(plan.sql, /NOT EXISTS/);
+  assert.match(plan.sql, /EXISTS/);
+  assert.match(plan.sql, /\[Source\]\]TRI\]/);
+  assert.match(plan.sql, /\[Output\]\]TRI\]/);
+  assert.match(plan.sql, /PX''0000/);
+  assert.match(plan.sql, /Latin1_General_100_BIN2/);
+  assert.match(plan.sql, /LTRIM\(RTRIM/);
+  assert.doesNotMatch(crossResult(check, 2).issues[0].message, /PX|TRI|TaxId/);
+  assert.throws(() => planCrossCheck({ ...check, valueMappings: [{ from: "Missing", to: "TaxId", otherwise: "preserve" }] }, [{ id: "source", contract: source }, { id: "output", contract: output }]), /undeclared value-mapping/);
+  const parsed = parseSuite(`suiteVersion: 1\nid: tri\nmembers:\n  - {id: source, ref: source.yaml}\n  - {id: output, ref: output.yaml}\ncrossChecks:\n  - id: tri-reconciliation\n    kind: rowReconciliation\n    from: source\n    to: output\n    keys: [{from: Id, to: PersonId}]\n    valueMappings: [{from: TRI, to: TaxId, blankTo: PX0000, otherwise: preserve}]\n`);
+  assert.equal(parsed.crossChecks?.[0].kind, "rowReconciliation");
+  assert.throws(() => parseSuite(`suiteVersion: 1\nid: tri\nmembers: [{id: source, ref: source.yaml}, {id: output, ref: output.yaml}]\ncrossChecks: [{id: bad, kind: rowReconciliation, from: source, to: output, keys: [{from: Id, to: Id}], valueMappings: [{from: TRI, to: TRI}]}]`), /value mappings/);
 });
 
 test("mapped baseline acceptance updates only the selected physical-column property", () => {

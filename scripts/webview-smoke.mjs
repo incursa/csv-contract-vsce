@@ -9,9 +9,27 @@ import { build } from "esbuild";
 const suiteBundle = await build({ entryPoints: ["src/suite-workbench.ts"], bundle: true, write: false, format: "esm", platform: "node" });
 const { renderSuiteWorkbench } = await import(`data:text/javascript;base64,${Buffer.from(suiteBundle.outputFiles[0].contents).toString("base64")}`);
 const suiteState = { suite: { id: "synthetic-suite", source: "suite.yaml", isSuite: true, members: [
-  { id: "employees", source: "employees.yaml", contract: { version: 1, schema: { columns: { EmployeeId: { presence: "required" } } }, sqlServer: { connection: "local", schema: "dbo", table: "Employees" } } },
-  { id: "departments", source: "suite.yaml", contract: { version: 1, schema: { columns: { DepartmentId: { presence: "required" } } }, sqlServer: { connection: "local", schema: "dbo", table: "Departments" } } }
-] }, references: ["./employees.yaml", undefined] };
+  { id: "catalog", source: "catalog.yaml", contract: { version: 1, schema: { columns: { ItemCode: { presence: "required" } } }, sqlServer: { connection: "local", schema: "dbo", table: "Catalog" } } },
+  { id: "locations", source: "suite.yaml", contract: { version: 1, schema: { columns: { LocationCode: { presence: "required" } } }, sqlServer: { connection: "local", schema: "dbo", table: "Locations" } } }
+] }, references: ["./catalog.yaml", undefined] };
+const suiteRunState = {
+  ...suiteState,
+  runView: true,
+  runProgress: {
+    running: true,
+    members: Array.from({ length: 4 }, (_, memberIndex) => ({
+      id: `dataset-${memberIndex + 1}`,
+      source: `file:///dataset-${memberIndex + 1}.csvtest.yaml`,
+      status: memberIndex < 2 ? "running" : "queued",
+      targets: Array.from({ length: 6 }, (_, targetIndex) => ({
+        label: `reporting.Dataset${memberIndex + 1}_${targetIndex + 1}`,
+        status: memberIndex < 2 && targetIndex < 2 ? "running" : "queued",
+        ...(memberIndex === 0 && targetIndex === 0 ? { progress: { phase: "reading", rowsRead: 3750, readElapsedMs: 4200, firstRowMs: 300 } } : {}),
+        ...(memberIndex === 1 && targetIndex === 0 ? { progress: { phase: "validating", totalRows: 62000, groupRowsProcessed: 31000, groupsValidated: 420 } } : {})
+      }))
+    }))
+  }
+};
 
 const state = {
   type: "state",
@@ -94,6 +112,11 @@ const server = createServer(async (request, response) => {
   if (request.url === "/suite") {
     response.setHeader("content-type", "text/html");
     response.end(renderSuiteWorkbench(suiteState, "smoke").replace('<script nonce="smoke">', '<script nonce="smoke">window.__messages=[];window.acquireVsCodeApi=()=>({postMessage:m=>window.__messages.push(m),getState:()=>({}),setState:()=>{}});'));
+    return;
+  }
+  if (request.url === "/suite-run") {
+    response.setHeader("content-type", "text/html");
+    response.end(renderSuiteWorkbench(suiteRunState, "smoke").replace('<script nonce="smoke">', '<script nonce="smoke">window.__messages=[];window.acquireVsCodeApi=()=>({postMessage:m=>window.__messages.push(m)});'));
     return;
   }
   if (request.url === "/webview.js") {
@@ -465,14 +488,24 @@ if (!(await page.locator(".workbench-target").isVisible())) throw new Error("Run
 await page.goto(`http://127.0.0.1:${address.port}/suite`);
 if (await page.title() !== "CSV Contract Suite Workbench") throw new Error("Suite page identity failed.");
 if ((await page.evaluate(() => window.__messages)).length !== 0) throw new Error("Opening the suite initiated an action.");
-await page.locator('[data-member="departments"] > details > summary').click();
+await page.locator('[data-member="locations"] > details > summary').click();
 await page.locator('[data-action="member"][data-index="1"]').click();
 if ((await page.evaluate(() => window.__messages.at(-1))).type !== "member") throw new Error("Inline member visual-edit action failed.");
-await page.locator("#filter").fill("departments");
-if (await page.locator('[data-member="employees"]').isVisible()) throw new Error("Suite filtering failed.");
+await page.locator("#filter").fill("locations");
+if (await page.locator('[data-member="catalog"]').isVisible()) throw new Error("Suite filtering failed.");
 await page.screenshot({ path: join(qaScreenshotDir, "suite-workbench.png"), fullPage: true });
 await page.setViewportSize({ width: 600, height: 900 });
 if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)) throw new Error("Suite has mobile page overflow.");
+await page.setViewportSize({ width: 1440, height: 1000 });
+await page.goto(`http://127.0.0.1:${address.port}/suite-run`);
+if (await page.title() !== "Suite run") throw new Error("Suite run page identity failed.");
+if (await page.locator("[data-run-member]").count() !== 4 || await page.locator("[data-run-target]").count() !== 24) throw new Error("Suite run did not render every member and target.");
+if (await page.locator("progress").count() !== 29) throw new Error("Suite rollup, member, and target progress bars are incomplete.");
+if (!(await page.locator('[data-run-target="dataset-2:0"] [data-target-detail]').textContent()).includes("420 groups validated")) throw new Error("Suite target validation progress did not render.");
+await page.screenshot({ path: join(qaScreenshotDir, "suite-run-progress.png"), fullPage: true });
+await page.setViewportSize({ width: 600, height: 900 });
+if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)) throw new Error("Suite run has mobile page overflow.");
+await page.screenshot({ path: join(qaScreenshotDir, "suite-run-progress-narrow.png"), fullPage: true });
 if (consoleProblems.length > 0) throw new Error(`Webview console problems:\n${consoleProblems.join("\n")}`);
 await browser.close();
 server.close();

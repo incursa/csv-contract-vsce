@@ -180,10 +180,10 @@ that connection. A single text script across different connections is refused.
 
 Open a `*.csvsuite.yaml` or `*.csvsuite.yml` file in the Suite Workbench. The
 overview lists every member and target; expand members to inspect their schemas
-and rules. **Run suite** displays member results and failure details in the editor.
+and rules. Completed member results and failure details remain available in the editor.
 **Generate SQL** opens the generated script or connection-specific batch manifest.
 **Open contract** opens referenced members in their existing Workbench; **Edit inline
-contract** opens the embedded mapping in the shared visual editor beside the suite. **Edit suite YAML**
+contract** opens the embedded mapping in the shared visual editor beside the suite. **Run suite** opens a dedicated live view with an overall rollup, one progress bar for every suite member, and compact target rows showing reading and grouped-validation progress. Independent targets run concurrently. **Edit suite YAML**
 provides schema validation and completion. Opening a suite does not execute tests.
 
 Starting with 0.13.2, **Edit default connection** changes suite defaults, and each

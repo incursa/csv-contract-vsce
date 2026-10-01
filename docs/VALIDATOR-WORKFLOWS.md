@@ -204,6 +204,14 @@ crossChecks:
     kind: equalPopulation
     from: employees
     to: archive
+  - id: tri-reconciliation
+    kind: rowReconciliation
+    from: source
+    to: output
+    keys: [{from: PersonId, to: PersonId}]
+    valueMappings:
+      - {from: TRI, to: TRI, blankTo: PX0000, otherwise: preserve}
+    nulls: fail
 ```
 
 Each participating member must resolve to exactly one SQL object on the
@@ -214,6 +222,17 @@ NULL for these relational checks. Canonical key names use each target's column m
 Equal population compares `COUNT_BIG` totals. Queries are read-only aggregates
 and retrieve no employee/example records. Each scoped participant binds its own `scope.valueEnvironment` to an independent query parameter. Missing runtime values fail before connecting; values are never written into reports or generated SQL. Cross-connection comparisons are rejected. Generated scripts declare separate required parameters for both sides. Selective/live changes to either participant invalidate
 the cross-check. The Workbench, CLI dbtest and SQL generation share the same plan.
+
+`rowReconciliation` joins source (`from`) to output (`to`) by the declared keys.
+Every source row must have a matching output row. Each value mapping can require a
+trimmed blank or SQL NULL source value to become the exact `blankTo` literal and/or
+require every nonblank source value to be preserved with `otherwise: preserve`.
+All matching output rows must satisfy the mapping, so an incorrect duplicate cannot
+be hidden by a correct one. Reconciled values use case-sensitive ordinal text
+comparison after SQL Server conversion to `nvarchar(max)`. `nulls` controls null source keys just as it does for
+`foreignKey`. The result is only the aggregate count of missing or mismatched source
+rows; literals, keys, and example values are not returned. Output-only rows are out
+of scope; add a reverse `foreignKey` check if the output must not contain extras.
 
 ## Compatibility and verification
 

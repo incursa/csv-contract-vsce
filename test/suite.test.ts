@@ -112,20 +112,24 @@ test("independent targets run concurrently with a limit and keep report order", 
   let maximum = 0;
   const starts: number[] = [];
   const completions: number[] = [];
+  const targetProgress: Array<{ member: string; index: number; rows: number }> = [];
   const report = await runSuite({ id: "parallel", source: "parallel", isSuite: false,
-    members: [{ id: "entity", source: "entity", contract: definition }] }, async (_contract, _target, _source, index) => {
+    members: [{ id: "entity", source: "entity", contract: definition }] }, async (_contract, _target, _source, index, onProgress) => {
     active++;
     maximum = Math.max(maximum, active);
+    onProgress?.({ phase: "reading", rowsRead: (index ?? 0) + 1 });
     await new Promise(resolve => setTimeout(resolve, index === 0 ? 35 : 10));
     active--;
     return validateCsv(definition, "Id\nvalue\n");
   }, false, undefined, { parallelTargets: 3,
     onTargetStart: (_run, index) => starts.push(index),
+    onTargetProgress: (run, progress, index) => targetProgress.push({ member: run.member, index, rows: progress.rowsRead ?? 0 }),
     onProgress: (_run, index) => completions.push(index!) });
   assert.equal(maximum, 3);
   assert.deepEqual(starts.slice(0, 3), [0, 1, 2]);
   assert.deepEqual(report.runs.map(run => run.table), [0, 1, 2, 3, 4].map(index => `dbo.Entity${index}`));
   assert.equal(completions.length, 5);
+  assert.deepEqual(targetProgress, [0, 1, 2, 3, 4].map(index => ({ member: "entity", index, rows: index + 1 })));
   assert(report.runs.every(run => run.status === "PASS"));
   const singleStarts: number[] = [];
   await runSuite({ id: "single", source: "single", isSuite: false,

@@ -3,11 +3,12 @@ import { resolveSqlServerTargets, physicalSqlServerColumn, type ResolvedSqlServe
 import { sqlIdentifier } from "./sql-server-generator";
 export interface CrossCheck {
   id: string;
-  kind: "foreignKey" | "equalPopulation" | "equalTotal";
+  kind: "foreignKey" | "equalPopulation" | "equalTotal" | "rowReconciliation";
   from: string;
   to: string;
   keys?: { from: string; to: string }[];
   valueColumns?: { from: string; to: string };
+  valueMappings?: { from: string; to: string; blankTo?: string; otherwise?: "preserve" }[];
   /** Nonnegative decimal tolerance, retained as a literal string. */
   tolerance?: string;
   nulls?: "ignore" | "fail";
@@ -46,7 +47,7 @@ export function planCrossCheck(check: CrossCheck, members: { id: string; contrac
     };
     sql = `SELECT CASE WHEN COALESCE(a.Invalid,0) + COALESCE(b.Invalid,0) > 0 OR ABS(a.Total-b.Total) > CAST('${tolerance}' AS decimal(38,10)) THEN 1 ELSE 0 END AS FailureCount FROM (${aggregate(from, columns.from)}) a CROSS JOIN (${aggregate(to, columns.to)}) b;`;
   }
-  else {
+  else if (check.kind === "foreignKey") {
     if (!check.keys?.length) throw new Error(`Cross-check ${check.id}: foreignKey requires keys.`);
     for (const key of check.keys) if (!left.contract.schema.columns[key.from] || !right.contract.schema.columns[key.to]) throw new Error(`Cross-check ${check.id}: undeclared key column.`);
     const keys = check.keys.map(k => ({ from: `a.${sqlIdentifier(physicalSqlServerColumn(from, k.from))}`, to: `b.${sqlIdentifier(physicalSqlServerColumn(to, k.to))}` }));
@@ -55,6 +56,32 @@ export function planCrossCheck(check: CrossCheck, members: { id: string; contrac
     const missing = `NOT EXISTS (SELECT 1 FROM ${object(to)} AS b WHERE ${equality})`;
     sql = `SELECT COUNT_BIG(*) AS FailureCount FROM ${object(from)} AS a WHERE ${check.nulls === "fail" ? `NOT (${present}) OR (${missing})` : `(${present}) AND (${missing})`};`;
   }
+  else {
+    if (!check.keys?.length || !check.valueMappings?.length) throw new Error(`Cross-check ${check.id}: rowReconciliation requires keys and valueMappings.`);
+    for (const key of check.keys) if (!left.contract.schema.columns[key.from] || !right.contract.schema.columns[key.to]) throw new Error(`Cross-check ${check.id}: undeclared key column.`);
+    for (const mapping of check.valueMappings) {
+      if (!left.contract.schema.columns[mapping.from] || !right.contract.schema.columns[mapping.to]) throw new Error(`Cross-check ${check.id}: undeclared value-mapping column.`);
+      if (mapping.blankTo === undefined && mapping.otherwise !== "preserve") throw new Error(`Cross-check ${check.id}: each value mapping requires blankTo, otherwise: preserve, or both.`);
+    }
+    const keys = check.keys.map(k => ({ from: `a.${sqlIdentifier(physicalSqlServerColumn(from, k.from))}`, to: `b.${sqlIdentifier(physicalSqlServerColumn(to, k.to))}` }));
+    const present = keys.map(k => `${k.from} IS NOT NULL`).join(" AND ");
+    const equality = keys.map(k => `${k.from} = ${k.to}`).join(" AND ");
+    const literal = (value: string) => `N'${value.replaceAll("'", "''")}' COLLATE Latin1_General_100_BIN2`;
+    const text = (expression: string) => `CONVERT(nvarchar(max), ${expression}) COLLATE Latin1_General_100_BIN2`;
+    const violations = check.valueMappings.flatMap(mapping => {
+      const source = `a.${sqlIdentifier(physicalSqlServerColumn(from, mapping.from))}`;
+      const target = `b.${sqlIdentifier(physicalSqlServerColumn(to, mapping.to))}`;
+      const blank = `(${source} IS NULL OR NULLIF(LTRIM(RTRIM(${text(source)})), N'') IS NULL)`;
+      const rules: string[] = [];
+      if (mapping.blankTo !== undefined) rules.push(`(${blank} AND CASE WHEN ${text(target)} = ${literal(mapping.blankTo)} THEN 0 ELSE 1 END = 1)`);
+      if (mapping.otherwise === "preserve") rules.push(`(NOT ${blank} AND CASE WHEN ${text(target)} = ${text(source)} THEN 0 ELSE 1 END = 1)`);
+      return rules;
+    });
+    const missing = `NOT EXISTS (SELECT 1 FROM ${object(to)} AS b WHERE ${equality})`;
+    const mismatch = `EXISTS (SELECT 1 FROM ${object(to)} AS b WHERE ${equality} AND (${violations.join(" OR ")}))`;
+    const failure = `(${missing}) OR (${mismatch})`;
+    sql = `SELECT COUNT_BIG(*) AS FailureCount FROM ${object(from)} AS a WHERE ${check.nulls === "fail" ? `NOT (${present}) OR (${failure})` : `(${present}) AND (${failure})`};`;
+  }
   return { check, from, to, sql };
 }
 export function crossResult(check: CrossCheck, count: unknown): ValidationResult {
@@ -62,5 +89,5 @@ export function crossResult(check: CrossCheck, count: unknown): ValidationResult
   if (count === null || count === undefined || String(count).trim() === "" || !Number.isSafeInteger(failures) || failures < 0) throw new Error(`Invalid cross-check summary for ${check.id}.`);
   const warning = check.severity === "warning";
   return { valid: !failures || warning, rowCount: 0, columnCount: 0, testCount: 1, issueCount: failures, errorCount: warning ? 0 : failures, warningCount: warning ? failures : 0,
-    truncated: false, issues: failures ? [{ level: "row", code: "CROSS_CHECK_FAILED", testId: check.id, severity: check.severity ?? "error", actual: failures, expected: 0, message: `${check.kind}: ${failures} ${check.kind === "foreignKey" ? "orphan rows" : check.kind === "equalTotal" ? "total mismatch or invalid numeric/null inputs" : "rows of population difference"} (${check.from} → ${check.to}). Aggregate only; no example rows retrieved.` }] : [] };
+    truncated: false, issues: failures ? [{ level: "row", code: "CROSS_CHECK_FAILED", testId: check.id, severity: check.severity ?? "error", actual: failures, expected: 0, message: `${check.kind}: ${failures} ${check.kind === "foreignKey" ? "orphan rows" : check.kind === "equalTotal" ? "total mismatch or invalid numeric/null inputs" : check.kind === "rowReconciliation" ? "missing or value-mismatched source rows" : "rows of population difference"} (${check.from} → ${check.to}). Aggregate only; no example rows retrieved.` }] : [] };
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.20.0
+
+- Add aggregate-only `rowReconciliation` suite checks for missing source-to-output keys, exact blank replacement, and preservation of nonblank values.
+- Give suite runs a dedicated live progress screen with an overall rollup, one progress bar per test file, and compact per-target reading and validation progress.
+- Align the suite Workbench with the single-contract interface by using a compact header, condensed member cards, and a secondary tools menu.
+
 ## 0.19.2
 
 - Run saved comparison setups against large local CSV files in VS Code desktop using the exact spill-to-disk comparison path instead of applying the browser host's 20 MiB and 250,000-row limits.

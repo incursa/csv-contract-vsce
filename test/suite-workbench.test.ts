@@ -34,6 +34,33 @@ test("suite Workbench shows independent members, filters, and sends actions only
   dom.window.close();
 });
 
+test("suite run view rolls up every test file and keeps target progress compact", () => {
+  const messages: unknown[] = [];
+  const members = Array.from({ length: 4 }, (_, memberIndex) => ({
+    id: `catalog-${memberIndex + 1}`,
+    source: `file:///catalog-${memberIndex + 1}.csvtest.yaml`,
+    status: memberIndex === 0 ? "running" as const : "queued" as const,
+    targets: Array.from({ length: 6 }, (_, targetIndex) => ({
+      label: `staging.Dataset${memberIndex + 1}_${targetIndex + 1}`,
+      status: memberIndex === 0 && targetIndex === 0 ? "running" as const : "queued" as const,
+      ...(memberIndex === 0 && targetIndex === 0 ? { progress: { phase: "reading" as const, rowsRead: 250, totalRows: 1000 } } : {})
+    }))
+  }));
+  const dom = new JSDOM(renderSuiteWorkbench({ suite, runView: true, runProgress: { running: true, members } }, "test"), {
+    runScripts: "dangerously",
+    beforeParse(window) { Object.assign(window, { acquireVsCodeApi: () => ({ postMessage: (message: unknown) => messages.push(message) }) }); }
+  });
+  const document = dom.window.document;
+  assert.equal(document.querySelectorAll("[data-run-member]").length, 4);
+  assert.equal(document.querySelectorAll("[data-run-target]").length, 24);
+  assert.equal(document.querySelectorAll("progress").length, 29, "one suite bar, four member bars, and one bar per target");
+  assert.match(document.body.textContent!, /0 of 4 test files complete/);
+  assert.match(document.body.textContent!, /250 rows read of 1,000/);
+  document.querySelector<HTMLButtonElement>('[data-action="show-results"]')!.click();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages)), [{ type: "show-results" }]);
+  dom.window.close();
+});
+
 test("ODBC objects retain diagnostics through execution, rendering and CSV export", async () => {
   const report = await runSuite(suite, async () => { throw { message: "Login failed", sqlstate: "28000", code: 18456, originalError: new Error("ODBC denied access"), password: "never-export" }; });
   assert.equal(report.status, "ERROR");

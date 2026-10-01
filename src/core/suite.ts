@@ -1,4 +1,5 @@
 import { errorDetails } from "./error-details";
+import type { ValidationProgress } from "./run-progress";
 import { resolveEvaluation } from "./evaluation";
 import { planCrossCheck, type CrossCheck, type CrossExecutor } from "./cross-checks";
 import { isScalar, parseDocument, stringify, visit } from "yaml";
@@ -92,12 +93,13 @@ export function parseSuite(text: string): ContractSuite {
   const checks = new Set<string>();
   if (suite.crossChecks !== undefined && !Array.isArray(suite.crossChecks)) throw new Error("crossChecks must be an array.");
   for (const check of suite.crossChecks ?? []) {
-    if (!check || !/^[a-z0-9][a-z0-9._-]*$/.test(check.id) || checks.has(check.id) || !ids.has(check.from) || !ids.has(check.to) || !["foreignKey", "equalPopulation", "equalTotal"].includes(check.kind)) throw new Error("Invalid cross-check identity, kind or member dependency.");
-    keys(check, ["id", "kind", "from", "to", "keys", "valueColumns", "tolerance", "nulls", "severity"], `Cross-check ${check.id}`);
+    if (!check || !/^[a-z0-9][a-z0-9._-]*$/.test(check.id) || checks.has(check.id) || !ids.has(check.from) || !ids.has(check.to) || !["foreignKey", "equalPopulation", "equalTotal", "rowReconciliation"].includes(check.kind)) throw new Error("Invalid cross-check identity, kind or member dependency.");
+    keys(check, ["id", "kind", "from", "to", "keys", "valueColumns", "valueMappings", "tolerance", "nulls", "severity"], `Cross-check ${check.id}`);
     if (check.keys !== undefined && (!Array.isArray(check.keys) || !check.keys.length || check.keys.some(k => !k || typeof k.from !== "string" || typeof k.to !== "string" || Object.keys(k).some(p => !["from", "to"].includes(p))))) throw new Error("Invalid cross-check key mappings.");
     if (check.valueColumns !== undefined && (!check.valueColumns || typeof check.valueColumns.from !== "string" || typeof check.valueColumns.to !== "string" || Object.keys(check.valueColumns).some(p => !["from", "to"].includes(p)))) throw new Error("Invalid total value columns.");
+    if (check.valueMappings !== undefined && (!Array.isArray(check.valueMappings) || !check.valueMappings.length || check.valueMappings.some(mapping => !mapping || typeof mapping.from !== "string" || typeof mapping.to !== "string" || mapping.blankTo !== undefined && typeof mapping.blankTo !== "string" || mapping.otherwise !== undefined && mapping.otherwise !== "preserve" || mapping.blankTo === undefined && mapping.otherwise === undefined || Object.keys(mapping).some(p => !["from", "to", "blankTo", "otherwise"].includes(p))))) throw new Error("Invalid reconciliation value mappings.");
     if (check.tolerance !== undefined && (typeof check.tolerance !== "string" || !/^(?:0|[1-9]\d{0,17})(?:\.\d{1,10})?$/.test(check.tolerance))) throw new Error("Invalid total tolerance.");
-    if (check.kind === "foreignKey" && !check.keys?.length || check.kind === "equalTotal" && !check.valueColumns) throw new Error("Cross-check requires keys or total value columns.");
+    if (check.kind === "foreignKey" && !check.keys?.length || check.kind === "equalTotal" && !check.valueColumns || check.kind === "rowReconciliation" && (!check.keys?.length || !check.valueMappings?.length)) throw new Error("Cross-check requires keys, total value columns, or reconciliation value mappings.");
     if (check.nulls !== undefined && !["ignore", "fail"].includes(check.nulls)) throw new Error("Invalid cross-check null policy.");
     if (check.severity !== undefined && !["warning", "error"].includes(check.severity)) throw new Error("Invalid cross-check severity.");
     checks.add(check.id);
@@ -169,10 +171,13 @@ export interface SuiteRun {
   result?: ValidationResult;
   error?: string;
 }
-export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContract, target: ResolvedSqlServerTarget, source: string, index?: number) => Promise<ValidationResult>, failFast = false,
-  validateFile?: (contract: CsvContract, source: string, target: CsvTarget, index?: number) => Promise<ValidationResult>,
+export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContract, target: ResolvedSqlServerTarget, source: string, index?: number,
+  onProgress?: (progress: ValidationProgress) => void) => Promise<ValidationResult>, failFast = false,
+  validateFile?: (contract: CsvContract, source: string, target: CsvTarget, index?: number,
+    onProgress?: (progress: ValidationProgress) => void) => Promise<ValidationResult>,
   controls: { signal?: AbortSignal; members?: string[]; onProgress?: (run: SuiteRun, index?: number) => void;
     onTargetStart?: (target: Pick<SuiteRun, "suite" | "member" | "spec" | "table" | "target">, index: number) => void;
+    onTargetProgress?: (target: Pick<SuiteRun, "suite" | "member" | "spec" | "table" | "target">, progress: ValidationProgress, index: number) => void;
     parallelTargets?: number; crossExecutor?: CrossExecutor } = {}) {
   const runs: SuiteRun[] = [];
   const runId = globalThis.crypto.randomUUID();
@@ -191,9 +196,11 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
       if (!failFast && controls.parallelTargets !== undefined && controls.parallelTargets >= 1) {
         const jobs = [
           ...targets.map((target) => ({ identity: { ...base, table: `${target.schema}.${target.table}`, target: target.name ?? `${target.schema}.${target.table}` },
-            execute: (index: number) => validate(evaluatedContract, target, member.source, index) })),
+            execute: (index: number) => validate(evaluatedContract, target, member.source, index,
+              progress => controls.onTargetProgress?.({ ...base, table: `${target.schema}.${target.table}`, target: target.name ?? `${target.schema}.${target.table}` }, progress, index)) })),
           ...(validateFile ? member.contract.targets ?? [] : []).map((target) => ({ identity: { ...base, target: target.path ?? target.url },
-            execute: (index: number) => validateFile!(evaluatedContract, member.source, target, index) }))
+            execute: (index: number) => validateFile!(evaluatedContract, member.source, target, index,
+              progress => controls.onTargetProgress?.({ ...base, target: target.path ?? target.url }, progress, index)) }))
         ];
         const outcomes: SuiteRun[] = new Array(jobs.length);
         let next = 0;
@@ -223,13 +230,15 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
         runs.push(...outcomes);
         continue;
       }
-      for (const target of targets) {
+      for (const [targetIndex, target] of targets.entries()) {
         const identity = { ...base, table: `${target.schema}.${target.table}`, target: target.name ?? `${target.schema}.${target.table}` };
         if (controls.signal?.aborted) { runs.push({ ...identity, status: "CANCELED", error: "Canceled before target execution." }); continue; }
         if (stopped) { runs.push({ ...identity, status: "SKIPPED", error: "Not executed after fail-fast." }); continue; }
         try {
+          controls.onTargetStart?.(identity, targetIndex);
           const started = Date.now();
-          const result = await validate(evaluatedContract, target, member.source);
+          const result = await validate(evaluatedContract, target, member.source, targetIndex,
+            progress => controls.onTargetProgress?.(identity, progress, targetIndex));
           result.evaluatedAt = startedAt;
           runs.push(controls.signal?.aborted ? { ...identity, status: "CANCELED", error: "Canceled during execution; result discarded." }
             : { ...identity, status: result.valid ? "PASS" : "FAIL", result, durationMs: Date.now() - started });
@@ -241,13 +250,16 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
           if (failFast) stopped = true;
         }
       }
-      for (const target of validateFile ? member.contract.targets ?? [] : []) {
+      for (const [fileIndex, target] of (validateFile ? member.contract.targets ?? [] : []).entries()) {
         const identity = { ...base, target: target.path ?? target.url };
+        const targetIndex = targets.length + fileIndex;
         if (controls.signal?.aborted) { runs.push({ ...identity, status: "CANCELED", error: "Canceled before target execution." }); continue; }
         if (stopped) { runs.push({ ...identity, status: "SKIPPED", error: "Not executed after fail-fast." }); continue; }
         try {
+          controls.onTargetStart?.(identity, targetIndex);
           const started = Date.now();
-          const result = await validateFile!(evaluatedContract, member.source, target);
+          const result = await validateFile!(evaluatedContract, member.source, target, targetIndex,
+            progress => controls.onTargetProgress?.(identity, progress, targetIndex));
           result.evaluatedAt = startedAt;
           runs.push(controls.signal?.aborted ? { ...identity, status: "CANCELED", error: "Canceled during execution; result discarded." } : { ...identity, status: result.valid ? "PASS" : "FAIL", result, durationMs: Date.now() - started });
           controls.onProgress?.(runs[runs.length - 1]);

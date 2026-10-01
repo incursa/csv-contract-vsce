@@ -11,8 +11,9 @@ import { generateSuiteSql, loadSuite, parseSuite, runSuite, yamlDocument, type S
 import type { DesktopSqlServerRunner } from "./extension";
 import { renderWorkspaceReportHtml } from "./workspace-report";
 import { configuredTargets, readTargetText } from "./vscode-targets";
+import { resolveSqlServerTargets } from "./core/sql-server-targets";
 import { validateCsv } from "./core/contract";
-import { renderSuiteWorkbench } from "./suite-workbench";
+import { renderSuiteWorkbench, type SuiteMemberProgress, type SuiteRunProgress, type SuiteTargetProgress } from "./suite-workbench";
 import { suiteErrorsCsv, updateSuiteConnection } from "./suite-actions";
 import { filterResultRuns } from "./results-view";
 import { errorDetails } from "./core/error-details";
@@ -119,6 +120,36 @@ async function bulkConnections(document: vscode.TextDocument): Promise<void> {
   if (!await vscode.workspace.applyEdit(edit)) throw new Error("Could not apply bulk connection changes.");
 }
 
+function suiteProgressPlan(suite: LoadedSuite, selected?: string[]): SuiteRunProgress {
+  const included = selected ? new Set(selected) : undefined;
+  return {
+    running: true,
+    members: suite.members.map(member => {
+      const targets: SuiteTargetProgress[] = [];
+      if (member.contract) {
+        try {
+          targets.push(...resolveSqlServerTargets(member.contract, false).map(target => ({ label: target.name ?? `${target.schema}.${target.table}`, status: "queued" as const })));
+          targets.push(...configuredTargets(vscode.Uri.parse(member.source), member.contract).map(target => ({ label: target.label, status: "queued" as const })));
+        } catch { /* The member-level execution result carries the configuration error. */ }
+      }
+      const skipped = included && !included.has(member.id);
+      if (skipped) targets.forEach(target => target.status = "SKIPPED");
+      return { id: member.id, source: member.source, status: skipped ? "SKIPPED" : "queued", targets };
+    })
+  };
+}
+
+function updateMemberProgress(member: SuiteMemberProgress): void {
+  if (member.targets.some(target => target.status === "running")) member.status = "running";
+  else if (member.targets.some(target => target.status === "queued")) member.status = "queued";
+  else if (member.targets.some(target => target.status === "ERROR")) member.status = "ERROR";
+  else if (member.targets.some(target => target.status === "FAIL")) member.status = "FAIL";
+  else if (member.targets.some(target => target.status === "CANCELED")) member.status = "CANCELED";
+  else if (member.targets.some(target => target.status === "SAMPLED")) member.status = "SAMPLED";
+  else if (member.targets.length && member.targets.every(target => target.status === "SKIPPED")) member.status = "SKIPPED";
+  else if (member.targets.length) member.status = "PASS";
+}
+
 export async function resolveSuiteEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel, runner?: DesktopSqlServerRunner, openInline?: (memberId: string) => Promise<void>, context?: vscode.ExtensionContext, crossExecutor?: CrossExecutor, schemaReader?: import("./vscode-baselines").SqlSchemaReader): Promise<void> {
   panel.webview.options = { enableScripts: true, localResourceRoots: [] };
   let running = false;
@@ -134,6 +165,8 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
   let renderVersion = 0;
   let notice: string | undefined;
   let report: Awaited<ReturnType<typeof executeVscodeSuite>> | undefined;
+  let runView = false;
+  let runProgress: SuiteRunProgress | undefined;
   const render = async (): Promise<void> => {
     const version = ++renderVersion;
     const nonce = globalThis.crypto.randomUUID().replaceAll("-", "");
@@ -142,20 +175,57 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
       const suite = await loadSuite(document.uri.toString(), vscodeSuiteIO);
       if (disposed || version !== renderVersion) return;
       panel.webview.html = renderSuiteWorkbench({ suite, name: parsed.name, description: parsed.description,
-        references: parsed.members.map((m) => m.ref), running, runs: report?.runs, notice, stale, live: scheduler.enabled, watchInputs }, nonce);
+        references: parsed.members.map((m) => m.ref), running, runs: report?.runs, notice, stale, live: scheduler.enabled, watchInputs,
+        runView, runProgress }, nonce);
     } catch (error) {
       if (!disposed && version === renderVersion) panel.webview.html = renderSuiteWorkbench({ error: String(error), running }, nonce);
     }
   };
   const scheduler = new LiveTests<{ suite: LoadedSuite; members?: string[] }, Awaited<ReturnType<typeof executeVscodeSuite>>>(async (snapshot, signal) => {
-    running = true; notice = "Executing selected scope…"; await render();
-    try { return await executeLoadedSuite(snapshot.suite, runner, { signal, members: snapshot.members, crossExecutor }); }
-    finally { running = false; await render(); }
+    running = true; runView = true; runProgress = suiteProgressPlan(snapshot.suite, snapshot.members); notice = "Executing selected scope…"; await render();
+    const lastProgress = new Map<string, number>();
+    const memberTarget = (target: Pick<import("./core/suite").SuiteRun, "member">, index: number): SuiteTargetProgress | undefined =>
+      runProgress?.members.find(member => member.id === target.member)?.targets[index];
+    const publish = (): void => { if (runProgress) void panel.webview.postMessage({ type: "suiteRunProgress", run: runProgress }); };
+    try {
+      return await executeLoadedSuite(snapshot.suite, runner, {
+        signal, members: snapshot.members, crossExecutor,
+        onTargetStart: (identity, index) => {
+          const target = memberTarget(identity, index); if (target) target.status = "running";
+          const member = runProgress?.members.find(item => item.id === identity.member); if (member) updateMemberProgress(member);
+          publish();
+        },
+        onTargetProgress: (identity, progress, index) => {
+          const key = `${identity.member}:${index}`;
+          const now = Date.now();
+          if (progress.phase === "reading" && now - (lastProgress.get(key) ?? 0) < 100) return;
+          lastProgress.set(key, now);
+          const target = memberTarget(identity, index); if (target) target.progress = { ...target.progress, ...progress };
+          publish();
+        },
+        onProgress: (completed, index) => {
+          if (index === undefined) return;
+          const target = memberTarget(completed, index);
+          if (target) { target.status = completed.status; target.rows = completed.result?.rowCount; target.error = completed.error; }
+          const member = runProgress?.members.find(item => item.id === completed.member); if (member) updateMemberProgress(member);
+          publish();
+        }
+      });
+    } finally { running = false; if (runProgress) runProgress.running = false; }
   }, result => { report = result; stale = false; affected.clear(); notice = `${result.status}: ${result.runs.length} work items; ${new Date().toISOString()}`;
+    if (runProgress) {
+      runProgress.running = false; runProgress.status = result.status;
+      for (const member of runProgress.members) {
+        const memberRuns = result.runs.filter(run => run.member === member.id);
+        if (!member.targets.length || memberRuns.some(run => run.status === "ERROR") && member.targets.every(target => target.status === "queued")) {
+          member.status = memberRuns.some(run => run.status === "ERROR") ? "ERROR" : memberRuns.some(run => run.status === "FAIL") ? "FAIL" : memberRuns.some(run => run.status === "SKIPPED") ? "SKIPPED" : memberRuns.length ? "PASS" : member.status;
+        } else updateMemberProgress(member);
+      }
+    }
     consecutiveErrors = result.runs.some(r => r.status === "ERROR") ? consecutiveErrors + 1 : 0;
     if (consecutiveErrors >= 3) { scheduler.pause(); notice += " · Live tests paused after three consecutive execution errors."; }
     void render(); },
-  error => { notice = errorDetails(error); stale = true; void render(); });
+  error => { notice = errorDetails(error); stale = true; running = false; if (runProgress) { runProgress.running = false; runProgress.status = "ERROR"; } void render(); });
   const refresh = async (uri?: vscode.Uri, selection?: string[]): Promise<void> => {
     if (uri && !dependencies.has(uri.toString())) return;
     // Invalidate before asynchronous dependency reads; an old query may finish during those reads.
@@ -220,6 +290,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
             members = selected;
           }
           await refresh(undefined, members); scheduler.request();
+        } else if (message.type === "show-results") { runView = false; await render();
         } else if (message.type === "live") {
           if (scheduler.enabled) scheduler.pause();
           else { await refresh(); scheduler.enable(); }
@@ -313,13 +384,16 @@ export async function executeVscodeSuite(uri: vscode.Uri, runner?: DesktopSqlSer
   return executeLoadedSuite(suite, runner, { crossExecutor });
 }
 async function executeLoadedSuite(suite: LoadedSuite, runner?: DesktopSqlServerRunner, controls: Parameters<typeof runSuite>[4] = {}) {
-  return runSuite(suite, async (contract, target, source) => {
+  return runSuite(suite, async (contract, target, source, _index, onProgress) => {
     if (!runner) throw new Error("Database suite execution requires the desktop extension host.");
-    return runner(await resolveBaseline(contract, source, vscodeSuiteIO), await resolveTargetBaseline(target, source, vscodeSuiteIO), controls.signal);
-  }, false, async (contract, source, target) => {
+    return runner(await resolveBaseline(contract, source, vscodeSuiteIO), await resolveTargetBaseline(target, source, vscodeSuiteIO), controls.signal, undefined, onProgress);
+  }, false, async (contract, source, target, _index, onProgress) => {
     const resolved = configuredTargets(vscode.Uri.parse(source), { ...contract, targets: [target] })[0];
-    return validateCsv(await resolveBaseline(contract, source, vscodeSuiteIO), await readTargetText(resolved));
-  }, controls);
+    onProgress?.({ phase: "reading" });
+    const csv = await readTargetText(resolved);
+    onProgress?.({ phase: "validating", bytesRead: csv.length, totalBytes: csv.length });
+    return validateCsv(await resolveBaseline(contract, source, vscodeSuiteIO), csv);
+  }, { parallelTargets: Number.MAX_SAFE_INTEGER, ...controls });
 }
 export async function showSuiteRun(context: vscode.ExtensionContext, uri: vscode.Uri, runner?: DesktopSqlServerRunner, crossExecutor?: CrossExecutor): Promise<void> {
   try {
