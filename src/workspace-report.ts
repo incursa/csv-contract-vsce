@@ -1,5 +1,5 @@
 import type { ValidationIssue, ValidationResult } from "./core/model";
-import { aggregateResultHealth, resultHealth, type ResultColorMode } from "./core/result-health";
+import { aggregateResultHealth, resultHealth, resultHealthCategory, resultHealthTitle, type ResultColorMode } from "./core/result-health";
 
 export interface WorkspaceReportEntryView {
   status?: string;
@@ -40,7 +40,7 @@ export function renderWorkspaceReportHtml(
   const colorMode = options.resultColorMode ?? "binary";
   const overallHealth = aggregateResultHealth(report.entries, colorMode);
   const overallTone = colorMode === "graded" ? overallHealth.band : report.valid ? "pass" : "fail";
-  const overallLabel = colorMode === "graded" ? `${status} · ${overallHealth.score}/100` : status;
+  const overallLabel = colorMode === "graded" ? `${status} · ${resultHealthCategory(overallHealth)}` : status;
 
   return `<!doctype html>
 <html lang="en">
@@ -58,7 +58,7 @@ export function renderWorkspaceReportHtml(
       <h1>CSV Contract Test Report</h1>
       <p>Completed ${escapeHtml(report.completedAt.toLocaleString())}</p>
     </div>
-    <span class="report-status report-status--${overallTone}">${overallLabel}</span>
+    <span class="report-status report-status--${overallTone}"${colorMode === "graded" ? ` title="${escapeAttribute(resultHealthTitle(overallHealth))}"` : ""}>${overallLabel}</span>
   </header>
   <main class="workspace-report">
     <section class="report-metrics" aria-label="Run summary">
@@ -93,14 +93,14 @@ function renderSelectedEntry(entry: WorkspaceReportEntryView, index: number, col
   const valid = entry.result?.valid === true;
   const health = resultHealth(entry.result, entry.status ?? (entry.error ? "ERROR" : undefined), colorMode);
   const tone = colorMode === "graded" ? health.band : valid ? "pass" : "fail";
-  const label = `${entry.status ?? (entry.error ? "ERROR" : valid ? "PASS" : "FAIL")}${colorMode === "graded" ? ` · ${health.score}/100` : ""}`;
+  const label = `${entry.status ?? (entry.error ? "ERROR" : valid ? "PASS" : "FAIL")}${colorMode === "graded" ? ` · ${resultHealthCategory(health)}` : ""}`;
   return `<section class="inc-card report-selected report-selected--${tone}" aria-labelledby="selected-run-title">
     <div class="report-section-heading">
       <div>
         <span class="report-eyebrow">Selected run</span>
         <h2 id="selected-run-title">${escapeHtml(fileName(entry.contractLabel))}</h2>
       </div>
-      <span class="report-status report-status--${tone}">${label}</span>
+      <span class="report-status report-status--${tone}"${colorMode === "graded" ? ` title="${escapeAttribute(resultHealthTitle(health))}"` : ""}>${label}</span>
     </div>
     <dl class="report-run-metrics">
       ${runMetric("Contract", entry.contractLabel)}
@@ -120,10 +120,10 @@ function renderEntry(entry: WorkspaceReportEntryView, index: number, open: boole
   const result = entry.result;
   const health = resultHealth(result, entry.status ?? (entry.error ? "ERROR" : undefined), colorMode);
   const tone = colorMode === "graded" ? health.band : valid ? "pass" : "fail";
-  const label = `${entry.status ?? (entry.error ? "ERROR" : valid ? "PASS" : "FAIL")}${colorMode === "graded" ? ` · ${health.score}/100` : ""}`;
+  const label = `${entry.status ?? (entry.error ? "ERROR" : valid ? "PASS" : "FAIL")}${colorMode === "graded" ? ` · ${resultHealthCategory(health)}` : ""}`;
   return `<details id="run-${index + 1}" class="report-run report-run--${tone}"${open ? " open" : ""}>
     <summary>
-      <span class="report-run-status">${label}</span>
+      <span class="report-run-status"${colorMode === "graded" ? ` title="${escapeAttribute(resultHealthTitle(health))}"` : ""}>${label}</span>
       <span class="report-run-name">
         <strong>${escapeHtml(fileName(entry.contractLabel))}</strong>
         <small>${escapeHtml(entry.target)}</small>

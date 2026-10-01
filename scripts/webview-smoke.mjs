@@ -234,7 +234,9 @@ if (removeSqlMessage?.type !== "updateContract" || removeSqlMessage.contract.sql
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), failedState);
 if ((await page.locator(".results .finding-card").count()) !== 12) throw new Error("Finding list must include all retained issues.");
 const healthStatus = page.locator(".results .result-health__status").first();
-if (!/FAIL · \d+\/100 health/.test((await healthStatus.textContent()) ?? "") || await page.locator(".results .result-health--perfect").count()) {
+if (!/FAIL · (Limited|Moderate|High) impact/.test((await healthStatus.textContent()) ?? "")
+  || !/Health score \d+\/100/.test((await healthStatus.getAttribute("title")) ?? "")
+  || await page.locator(".results .result-health--perfect").count()) {
   throw new Error("Graded results did not keep a failed run visibly distinct from a perfect pass.");
 }
 if (!await page.locator('[data-action="result-color-mode"]').isVisible()) await page.locator('.workbench-tools > summary').click();
@@ -520,8 +522,10 @@ await page.screenshot({ path: join(qaScreenshotDir, "run-progress-narrow.png"), 
 await runMessage({ type: "runTargetComplete", index: 0, status: "PASS", rows: 10, groups: [{ id: "by-account", groups: 3, passed: 3, failed: 0 }], health: { score: 100, band: "perfect", label: "PASS" } });
 await runMessage({ type: "runTargetComplete", index: 1, status: "FAIL", rows: 2, health: { score: 74, band: "concerning", label: "FAIL" } });
 await runMessage({ type: "runState", running: false });
-if (!(await page.locator('.run-target').nth(1).textContent()).includes("FAIL · 74/100") || await page.locator('.run-target').nth(1).locator('.run-target__health-scale').count() !== 1) {
-  throw new Error("Completed run progress did not show the graded health score and spectrum.");
+if (!(await page.locator('.run-target').nth(1).textContent()).includes("FAIL · Moderate impact")
+  || !/Health score 74\/100/.test((await page.locator('.run-target').nth(1).locator('.run-target__status').getAttribute("title")) ?? "")
+  || await page.locator('.run-target').nth(1).locator('.run-target__health-scale').count() !== 0) {
+  throw new Error("Completed run progress did not show the graded category on its main bar.");
 }
 await page.screenshot({ path: join(qaScreenshotDir, "run-progress-graded.png"), fullPage: true });
 const rerunFailed = page.locator('[data-action="rerun-failed"]');

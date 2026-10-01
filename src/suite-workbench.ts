@@ -2,7 +2,7 @@ import { renderResults } from "./results-view";
 import type { LoadedSuite, SuiteRun } from "./core/suite";
 import { resolveSqlServerTargets, sqlServerConnectionLabel } from "./core/sql-server-targets";
 import type { ValidationProgress } from "./core/run-progress";
-import { aggregateResultHealth, type ResultColorMode, type ResultHealth } from "./core/result-health";
+import { aggregateResultHealth, resultHealthCategory, resultHealthTitle, type ResultColorMode, type ResultHealth } from "./core/result-health";
 
 export type SuiteProgressStatus = "queued" | "running" | "PASS" | "FAIL" | "ERROR" | "CANCELED" | "SKIPPED" | "SAMPLED";
 export interface SuiteTargetProgress {
@@ -116,7 +116,7 @@ export function renderSuiteWorkbench(state: SuiteWorkbenchState, nonce: string):
   const colorMode = state.resultColorMode ?? "binary";
   const members = suite?.members ?? [];
   const status = (runs: SuiteRun[]): string => runs.some((r) => r.status === "ERROR") ? "ERROR" : runs.some((r) => r.status === "FAIL") ? "FAIL" : runs.some((r) => r.status === "CANCELED") ? "CANCELED" : runs.some((r) => r.status === "SKIPPED") ? "SKIPPED" : runs.length ? "PASS" : "NOT RUN";
-  const badge = (value: string, health?: ResultHealth): string => `<span class="badge ${value.toLowerCase().replaceAll(" ", "-")}${health ? ` health-${health.band}` : ""}">${escape(health && colorMode === "graded" ? `${value} · ${health.score}/100` : value)}</span>`;
+  const badge = (value: string, health?: ResultHealth): string => `<span class="badge ${value.toLowerCase().replaceAll(" ", "-")}${health ? ` health-${health.band}` : ""}"${health && colorMode === "graded" ? ` title="${escape(resultHealthTitle(health))}"` : ""}>${escape(health && colorMode === "graded" ? `${value} · ${resultHealthCategory(health)}` : value)}</span>`;
   const resultStatus = state.runs ? status(state.runs) : "NOT RUN";
   const suiteHealth = state.runs?.length ? aggregateResultHealth(state.runs, colorMode) : undefined;
   const hasFailures = state.runs?.some(run => run.status === "FAIL" || run.status === "ERROR") === true;

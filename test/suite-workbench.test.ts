@@ -138,8 +138,9 @@ test("suite Workbench shows graded health without changing failure status", asyn
     issueCount: 1, errorCount: 1, warningCount: 0, truncated: false,
     issues: [{ level: "row", code: "VALUE_INVALID", testId: "value-valid", message: "Review this value." }] }));
   const dom = new JSDOM(renderSuiteWorkbench({ suite, runs: report.runs, resultColorMode: "graded" }, "test"));
-  assert.match(dom.window.document.querySelector(".overview .badge")!.textContent!, /FAIL · \d+\/100/);
+  assert.match(dom.window.document.querySelector(".overview .badge")!.textContent!, /FAIL · (Limited|Moderate|High) impact/);
+  assert.match(dom.window.document.querySelector(".overview .badge")!.getAttribute("title")!, /Health score \d+\/100/);
   assert.equal(dom.window.document.querySelectorAll(".health-perfect").length, 0);
-  assert.match(dom.window.document.body.textContent!, /FAIL · \d+\/100 health/);
+  assert.match(dom.window.document.body.textContent!, /FAIL · (Limited|Moderate|High) impact/);
   dom.window.close();
 });

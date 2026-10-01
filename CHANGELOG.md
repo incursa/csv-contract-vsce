@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.20.5
+
+- Replace visible numeric health scores with **Clean**, **Limited impact**, **Moderate impact**, and **High impact** categories; keep the numeric heuristic in hover details.
+- Use the existing target progress bar for the completed health color instead of adding a second result bar.
+
 ## 0.20.4
 
 - Show the 0–100 health score and color spectrum on completed target cards in the contract run progress screen when **Gradient** result colors are selected.

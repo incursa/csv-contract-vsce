@@ -2,7 +2,7 @@
   "name": "csv-contract-vsce",
   "displayName": "CSV Contract Workbench",
   "description": "Design and run reusable YAML contracts for CSV files and SQL Server tables.",
-  "version": "0.20.4",
+  "version": "0.20.5",
   "publisher": "incursa",
   "license": "Apache-2.0",
   "engines": {
@@ -238,14 +238,14 @@
           ],
           "enumDescriptions": [
             "Show clean runs in green and any failed run in red.",
-            "Show a 0–100 health score with yellow and orange intermediate states. Only a completely clean run is green."
+            "Show health as Clean, Limited impact, Moderate impact, or High impact with yellow and orange intermediate states. Hover to see the numeric score."
           ],
           "enumItemLabels": [
             "Red / green",
             "Gradient"
           ],
           "default": "binary",
-          "description": "Choose red/green result colors or a yellow-to-red gradient with a 0–100 health score. This changes presentation only; PASS/FAIL status and exit codes are unchanged."
+          "description": "Choose red/green result colors or a graded health spectrum. Graded labels describe impact; hover to see the 0–100 heuristic. PASS/FAIL status and exit codes are unchanged."
         }
       }
     }

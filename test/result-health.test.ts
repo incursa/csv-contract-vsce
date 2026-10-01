@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { aggregateResultHealth, resultHealth } from "../src/core/result-health";
+import { aggregateResultHealth, resultHealth, resultHealthCategory, resultHealthTitle } from "../src/core/result-health";
 import type { ValidationResult } from "../src/core/model";
 
 const result = (values: Partial<ValidationResult> = {}): ValidationResult => ({
@@ -14,6 +14,8 @@ test("graded health reserves perfect green for a completely clean result", () =>
     issues: [{ level: "row", code: "VALUE_INVALID", testId: "value-valid", message: "Review this value." }] }), "FAIL", "graded");
   assert.ok(minor.score <= 85);
   assert.notEqual(minor.band, "perfect");
+  assert.equal(resultHealthCategory(minor), "Limited impact");
+  assert.match(resultHealthTitle(minor), /Health score \d+\/100/);
 });
 
 test("graded health distinguishes warnings, widespread failures, and execution errors", () => {

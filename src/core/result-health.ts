@@ -9,6 +9,15 @@ export interface ResultHealth {
   label: string;
 }
 
+export function resultHealthCategory(health: ResultHealth): string {
+  return health.band === "perfect" ? "Clean" : health.band === "attention" ? "Limited impact" :
+    health.band === "concerning" ? "Moderate impact" : "High impact";
+}
+
+export function resultHealthTitle(health: ResultHealth): string {
+  return `${resultHealthCategory(health)} · Health score ${health.score}/100. Based on the share of checks and records affected; warnings have less weight.`;
+}
+
 /**
  * Produces a presentation score without changing validation semantics.
  * A clean result is the only way to receive 100. Any finding is capped at 85

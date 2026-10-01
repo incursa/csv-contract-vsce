@@ -7,7 +7,7 @@ import type { ValidationProgress } from "../core/run-progress";
 import { predicateDescription } from "../core/predicate";
 import { renderPredicate, readPredicate, editPredicateTree } from "./rule-editor";
 import { insertPreset, presetCatalog, type PresetInput } from "../core/presets";
-import type { ResultColorMode, ResultHealth } from "../core/result-health";
+import { resultHealthCategory, resultHealthTitle, type ResultColorMode, type ResultHealth } from "../core/result-health";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 
@@ -78,7 +78,7 @@ function renderRunView(): void {
       const done = target.status !== "queued" && target.status !== "running";
       const progress = target.progress;
       const showHealth = done && resultColorMode === "graded" && target.health;
-      const phase = done ? `${target.status}${showHealth ? ` · ${target.health!.score}/100` : ""}` : target.status === "queued" ? "Waiting" : progress?.phase === "connecting" ? "Connecting" :
+      const phase = done ? `${target.status}${showHealth ? ` · ${resultHealthCategory(target.health!)}` : ""}` : target.status === "queued" ? "Waiting" : progress?.phase === "connecting" ? "Connecting" :
         progress?.phase === "reading" ? "Reading target" : progress?.phase === "validating" ? "Validating" :
           progress?.phase === "summarizing" ? "Finishing results" : "Preparing";
       const activeGroup = progress?.groupId ? target.groupProgress[progress.groupId] : undefined;
@@ -89,10 +89,9 @@ function renderRunView(): void {
       const groups = Object.entries(target.groupProgress);
       return `<article class="run-target run-target--${target.status.toLowerCase()} ${showHealth ? `run-target--health-${target.health!.band}` : ""}">
         <div class="run-target__heading"><div><span class="run-target__number">TARGET ${index + 1}</span>
-          <h2 title="${escape(target.label)}">${escape(target.label)}</h2></div><span class="run-target__status">${escape(phase)}</span></div>
+          <h2 title="${escape(target.label)}">${escape(target.label)}</h2></div><span class="run-target__status"${showHealth ? ` title="${escape(resultHealthTitle(target.health!))}"` : ""}>${escape(phase)}</span></div>
         <progress class="run-target__bar ${percent === undefined && target.status === "running" ? "run-target__bar--indeterminate" : ""}"
-          role="progressbar" aria-label="${escape(target.label)} progress" max="100" ${percent === undefined ? "" : `value="${percent}" aria-valuenow="${percent}"`}></progress>
-        ${showHealth ? `<div class="run-target__health"><span>Result health</span><progress class="run-target__health-scale" aria-label="Health score ${target.health!.score} out of 100" max="100" value="${target.health!.score}"></progress></div>` : ""}
+          role="progressbar" aria-label="${showHealth ? escape(resultHealthTitle(target.health!)) : `${escape(target.label)} progress`}"${showHealth ? ` title="${escape(resultHealthTitle(target.health!))}"` : ""} max="100" ${percent === undefined ? "" : `value="${percent}" aria-valuenow="${percent}"`}></progress>
         <div class="run-target__details">${progress?.rowsRead !== undefined || target.rows !== undefined
           ? `<span>${(progress?.rowsRead ?? target.rows ?? 0).toLocaleString()} rows read${progress?.totalRows !== undefined ? ` of ${progress.totalRows.toLocaleString()}` : ""}</span>` : ""}
           ${progress?.phase === "reading" && progress.bytesRead !== undefined ? `<span>${(progress.bytesRead / 1048576).toFixed(1)} MB read${progress.totalBytes ? ` of ${(progress.totalBytes / 1048576).toFixed(1)} MB` : ""}</span>` : ""}
