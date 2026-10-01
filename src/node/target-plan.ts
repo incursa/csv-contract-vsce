@@ -42,7 +42,7 @@ export function createTargetPlans(inputs: ContractRunInput[], explicitTargets: s
     }
   } else {
     for (const input of inputs) {
-      const targets = input.contract.targets ?? [];
+      const targets = (input.contract.targets ?? []).filter(target => target.enabled !== false);
       if (targets.length === 0) {
         throw new Error(`Contract ${input.spec} has no targets. Add targets or pass --csv explicitly.`);
       }

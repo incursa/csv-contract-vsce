@@ -443,6 +443,11 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Set to false to retain this CSV target without executing it."
+        },
         "path": {
           "type": "string",
           "minLength": 1,
@@ -591,6 +596,11 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Set to false to retain the legacy single-table target without executing it."
+        },
         "connection": {
           "type": "string",
           "minLength": 1,
@@ -708,6 +718,11 @@
         ]
       },
       "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Set to false to retain this SQL Server target without executing it."
+        },
         "name": {
           "type": "string",
           "minLength": 1

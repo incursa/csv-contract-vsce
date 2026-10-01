@@ -81,9 +81,21 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .configured-targets__heading p { margin: .2rem 0 0; color: #656668; font-size: .75rem; }
 .configured-targets__actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 .configured-target-list { display: grid; gap: .4rem; margin-top: .7rem; }
-.configured-target-row { display: grid; grid-template-columns: 3.25rem minmax(0, 1fr) auto 2rem; align-items: center; gap: .6rem; padding: .45rem .55rem; border: 1px solid #dbdcdc; border-radius: 4px; background: #fafafa; }
+.configured-target-row { display: grid; grid-template-columns: 3.25rem minmax(0, 1fr) auto auto; align-items: center; gap: .6rem; padding: .45rem .55rem; border: 1px solid #dbdcdc; border-radius: 4px; background: #fafafa; }
 .configured-target-row code { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.configured-target-row__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .4rem; }
+.configured-target-row--disabled { background: #f3f3f4; }
+.configured-target-row--disabled code { color: #656668; }
+.target-state { padding: .15rem .45rem; border-radius: 999px; font-size: .68rem; font-weight: 600; white-space: nowrap; }
+.target-state--enabled { color: #086d36; background: #e6f5ec; }
+.target-state--disabled { color: #656668; background: #e2e2e4; }
+.target-meta { display: inline-flex; align-items: center; gap: .4rem; color: #656668; font-size: .68rem; white-space: nowrap; }
+.target-actions { position: relative; }
+.target-actions > summary { padding: .3rem .55rem; border: 1px solid #c4c4c5; border-radius: 4px; list-style: none; background: #fff; font-size: .72rem; cursor: pointer; }
+.target-actions > summary::-webkit-details-marker { display: none; }
+.target-actions__menu { position: absolute; z-index: 5; right: 0; display: grid; min-width: 10rem; margin-top: .25rem; padding: .3rem; border: 1px solid #c4c4c5; border-radius: 4px; background: #fff; box-shadow: 0 4px 14px #0002; }
+.target-actions__menu button { padding: .4rem .5rem; border: 0; border-radius: 3px; color: #121316; background: transparent; text-align: left; cursor: pointer; }
+.target-actions__menu button:hover { background: #f0f2fa; }
+.target-actions__menu .danger-button { color: #b01524; }
 .target-type { color: #4459c6; font-size: .68rem; font-weight: 600; letter-spacing: .04em; }
 .target-mapping-count { color: #656668; font-size: .72rem; white-space: nowrap; }
 .metrics { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem; margin: 0 2rem 1rem; }
@@ -276,9 +288,9 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
   .row-test-editor__heading { flex-wrap: wrap; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .row-test-basics, .count-grid, .test-editor-row { grid-template-columns: 1fr; }
-  .configured-target-row { grid-template-columns: 3.25rem minmax(0, 1fr) 2rem; }
-  .configured-target-row__actions { grid-column: 2 / -1; grid-row: 2; justify-content: flex-start; }
-  .configured-target-row > .icon-button { grid-column: 3; grid-row: 1; }
+  .configured-target-row { grid-template-columns: 3.25rem minmax(0, 1fr) auto; }
+  .configured-target-row > .target-state, .configured-target-row > .target-meta { grid-column: 2; grid-row: 2; justify-self: start; }
+  .configured-target-row .target-actions { grid-column: 3; grid-row: 1; }
   .result { grid-template-columns: 1fr; }
   .icon-button { width: 100%; }
   .workspace-report { padding-inline: 1rem; }

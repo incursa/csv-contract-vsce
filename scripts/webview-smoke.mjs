@@ -36,9 +36,7 @@ const state = {
   contractName: "contracts/customers.csvtest.yaml",
   targetNames: [
     "../exports/customers-east.csv",
-    "../exports/customers-west.csv",
     "https://example.com/exports/customers.csv",
-    "warehouse-readonly:reporting.Customers"
   ],
   configuredTargetCount: 4,
   usingConfiguredTargets: true,
@@ -47,12 +45,13 @@ const state = {
     version: 1,
     targets: [
       { path: "../exports/customers-east.csv" },
-      { path: "../exports/customers-west.csv" },
+      { path: "../exports/customers-west.csv", enabled: false },
       { url: "https://example.com/exports/customers.csv" }
     ],
     csv: { nullValues: [""], trimValues: false, caseSensitive: true },
     sqlServer: {
       targets: [{
+        enabled: false,
         connection: "warehouse-readonly",
         schema: "reporting",
         table: "Customers",
@@ -158,12 +157,16 @@ if ((await page.locator('[data-action="open-target-vscode"]').count()) !== 3
   || (await page.locator('[data-action="open-target-external"]').count()) !== 3) {
   throw new Error("Configured targets do not expose both open actions.");
 }
-await page.locator('[data-action="open-target-vscode"]').first().click();
+const firstCsvActions = page.locator(".configured-target-row").filter({ hasText: "customers-east.csv" });
+await firstCsvActions.locator(".target-actions > summary").click();
+await firstCsvActions.locator('[data-action="open-target-vscode"]').click();
 let openMessage = await page.evaluate(() => window.__messages.at(-1));
 if (openMessage?.type !== "openTargetInVsCode" || openMessage.index !== 0) {
   throw new Error("Open in VS Code did not send the expected host message.");
 }
-await page.locator('[data-action="open-target-external"]').last().click();
+const urlActions = page.locator(".configured-target-row").filter({ hasText: "example.com/exports/customers.csv" });
+await urlActions.locator(".target-actions > summary").click();
+await urlActions.locator('[data-action="open-target-external"]').click();
 openMessage = await page.evaluate(() => window.__messages.at(-1));
 if (openMessage?.type !== "openTargetExternally" || openMessage.index !== 2) {
   throw new Error("Open externally did not send the expected host message.");
@@ -198,8 +201,26 @@ if (openMessage?.type !== "addSqlServerTarget") {
 await mkdir(qaScreenshotDir, { recursive: true });
 await page.locator('.workbench-tools > summary').click();
 
+if (await page.locator(".configured-target-row--disabled").count() !== 2) throw new Error("Disabled CSV and SQL targets were not visibly retained.");
+const disabledCsv = page.locator(".configured-target-row").filter({ hasText: "customers-west.csv" });
+await disabledCsv.locator(".target-actions > summary").click();
+await disabledCsv.locator('[data-action="toggle-target"]').click();
+let targetUpdate = await page.evaluate(() => window.__messages.at(-1));
+if (targetUpdate?.type !== "updateContract" || targetUpdate.contract.targets[1].enabled !== undefined) throw new Error("Re-enabling a CSV target did not persist the enabled state cleanly.");
+const editableCsv = page.locator(".configured-target-row").filter({ hasText: "customers-east.csv" });
+await editableCsv.locator(".target-actions > summary").click();
+await editableCsv.locator('[data-action="edit-target"]').click();
+targetUpdate = await page.evaluate(() => window.__messages.at(-1));
+if (targetUpdate?.type !== "editCsvTarget" || targetUpdate.index !== 0) throw new Error("CSV target edit did not send the expected host action.");
+const sqlTarget = page.locator(".sql-target-row").first();
+await sqlTarget.locator(".target-actions > summary").click();
+await sqlTarget.locator('[data-action="edit-sql-target"]').click();
+targetUpdate = await page.evaluate(() => window.__messages.at(-1));
+if (targetUpdate?.type !== "editSqlServerTarget" || targetUpdate.index !== 0) throw new Error("SQL target edit did not send the expected host action.");
+
 await page.screenshot({ path: join(qaScreenshotDir, "workbench-column-rules.png"), fullPage: true });
-await page.locator('[data-action="remove-sql-target"]').click();
+await sqlTarget.locator(".target-actions > summary").click();
+await sqlTarget.locator('[data-action="remove-sql-target"]').click();
 const removeSqlMessage = await page.evaluate(() => window.__messages.at(-1));
 if (removeSqlMessage?.type !== "updateContract" || removeSqlMessage.contract.sqlServer !== undefined) {
   throw new Error("Removing the SQL Server target did not emit the updated contract.");

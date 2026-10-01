@@ -41,6 +41,14 @@ test("explicit paths and URLs override configured targets for every contract", (
   assert.equal(plans[1].source, "https://example.com/export.csv");
 });
 
+test("disabled CSV targets remain configured but are excluded from plans", () => {
+  const spec = resolve("contracts", "catalog.csvtest.yaml");
+  const input = { spec, contract: contract([{ path: "active.csv" }, { path: "paused.csv", enabled: false }]) };
+  const plans = createTargetPlans([input]);
+  assert.deepEqual(plans.map(plan => plan.source), [resolve(dirname(spec), "active.csv")]);
+  assert.throws(() => createTargetPlans([{ spec, contract: contract([{ path: "paused.csv", enabled: false }]) }]), /no targets/i);
+});
+
 test("downloads an HTTP target to temporary disk before validation", async () => {
   const server = createServer((_request, response) => {
     response.setHeader("content-type", "text/csv");

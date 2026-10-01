@@ -123,6 +123,8 @@ function beginRun(failedOnly = false): void {
 }
 
 function configuredSqlTargets(value: CsvContract): Array<{
+  enabled?: boolean;
+  name?: string;
   connection?: string;
   integratedConnection?: SqlServerIntegratedConnection;
   schema: string;
@@ -133,6 +135,7 @@ function configuredSqlTargets(value: CsvContract): Array<{
   if (value.sqlServer?.targets?.length) return value.sqlServer.targets;
   if (value.sqlServer?.schema && value.sqlServer.table) {
     return [{
+      enabled: value.sqlServer.enabled,
       connection: value.sqlServer.connection ?? "",
       integratedConnection: value.sqlServer.integratedConnection,
       schema: value.sqlServer.schema,
@@ -345,14 +348,18 @@ function render(): void {
           ${configuredTargets.map((target, index) => {
             const type = target.url !== undefined ? "URL" : "PATH";
             const value = target.url ?? target.path;
-            return `<div class="configured-target-row">
+            const enabled = target.enabled !== false;
+            return `<div class="configured-target-row ${enabled ? "" : "configured-target-row--disabled"}">
               <span class="target-type">${type}</span>
               <code title="${escape(value)}">${escape(value)}</code>
-              <div class="configured-target-row__actions">
-                <button type="button" class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="open-target-vscode" data-index="${index}">Open in VS Code</button>
-                <button type="button" class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="open-target-external" data-index="${index}">Open externally</button>
-              </div>
-              <button type="button" class="icon-button" data-action="remove-target" data-index="${index}" aria-label="Remove ${type.toLowerCase()} target">×</button>
+              <span class="target-state target-state--${enabled ? "enabled" : "disabled"}">${enabled ? "Enabled" : "Disabled"}</span>
+              <details class="target-actions"><summary>Actions</summary><div class="target-actions__menu">
+                <button type="button" data-action="toggle-target" data-index="${index}">${enabled ? "Disable" : "Enable"}</button>
+                <button type="button" data-action="edit-target" data-index="${index}">Edit</button>
+                <button type="button" data-action="open-target-vscode" data-index="${index}">Open in VS Code</button>
+                <button type="button" data-action="open-target-external" data-index="${index}">Open externally</button>
+                <button type="button" class="danger-button" data-action="remove-target" data-index="${index}">Remove</button>
+              </div></details>
             </div>`;
           }).join("") || `<p class="empty compact-empty">No saved targets. You can still select CSVs for this session.</p>`}
         </div>
@@ -372,11 +379,16 @@ function render(): void {
               ? `${target.integratedConnection.server}/${target.integratedConnection.database} (Windows)`
               : target.connection || "unconfigured";
             const value = connectionOverview[index] ?? `${connectionLabel}:${target.schema}.${target.table}`;
-            return `<div class="configured-target-row sql-target-row">
+            const enabled = target.enabled !== false;
+            return `<div class="configured-target-row sql-target-row ${enabled ? "" : "configured-target-row--disabled"}">
               <span class="target-type">${type}</span>
               <code title="${escape(value)}">${escape(value)}</code>
-              <span class="target-mapping-count">${mappingCount ? `${mappingCount} mapped` : "exact names"}</span>
-              <button type="button" class="icon-button" data-action="remove-sql-target" data-index="${index}" aria-label="Remove SQL ${type.toLowerCase()} target">×</button>
+              <span class="target-meta"><span class="target-state target-state--${enabled ? "enabled" : "disabled"}">${enabled ? "Enabled" : "Disabled"}</span><span class="target-mapping-count">${mappingCount ? `${mappingCount} mapped` : "exact names"}</span></span>
+              <details class="target-actions"><summary>Actions</summary><div class="target-actions__menu">
+                <button type="button" data-action="toggle-sql-target" data-index="${index}">${enabled ? "Disable" : "Enable"}</button>
+                <button type="button" data-action="edit-sql-target" data-index="${index}">Edit</button>
+                <button type="button" class="danger-button" data-action="remove-sql-target" data-index="${index}">Remove</button>
+              </div></details>
             </div>`;
           }).join("") || `<p class="empty compact-empty">No SQL Server targets. Add a table or view from a configured read-only connection.</p>`}
         </div>
@@ -609,6 +621,12 @@ function bind(): void {
     } catch (error) { form.querySelector('[data-rule-error]')!.textContent = String(error); }
   }));
   app.querySelector('[data-action="watch-inputs"]')?.addEventListener("click", () => vscode.postMessage({ type: "watchInputs" }));
+  app.querySelectorAll<HTMLDetailsElement>("details.target-actions").forEach(menu => {
+    menu.addEventListener("toggle", () => {
+      if (menu.open) app.querySelectorAll<HTMLDetailsElement>("details.target-actions[open]").forEach(other => { if (other !== menu) other.open = false; });
+    });
+    menu.querySelectorAll("button").forEach(button => button.addEventListener("click", () => { menu.open = false; }));
+  });
   app.querySelector('[data-action="history"]')?.addEventListener("click", () => vscode.postMessage({ type: "history" }));
   app.querySelectorAll('[data-action="review-results"]').forEach(button => button.addEventListener("click", () => vscode.postMessage({ type: "reviewResults" })));
   app.querySelector('[data-action="insert-template"]')?.addEventListener("click", () => vscode.postMessage({ type: "insertTemplate" }));
@@ -684,6 +702,29 @@ function bind(): void {
   app.querySelectorAll<HTMLElement>('[data-action="open-target-external"]').forEach((button) => button.addEventListener("click", () =>
     vscode.postMessage({ type: "openTargetExternally", index: Number(button.dataset.index) })
   ));
+  app.querySelectorAll<HTMLElement>('[data-action="edit-target"]').forEach((button) => button.addEventListener("click", () =>
+    vscode.postMessage({ type: "editCsvTarget", index: Number(button.dataset.index) })
+  ));
+  app.querySelectorAll<HTMLElement>('[data-action="edit-sql-target"]').forEach((button) => button.addEventListener("click", () =>
+    vscode.postMessage({ type: "editSqlServerTarget", index: Number(button.dataset.index) })
+  ));
+  app.querySelectorAll<HTMLElement>('[data-action="toggle-target"]').forEach((button) => button.addEventListener("click", () => {
+    const target = contract?.targets?.[Number(button.dataset.index)];
+    if (!target) return;
+    if (target.enabled === false) delete target.enabled; else target.enabled = false;
+    render();
+    vscode.postMessage({ type: "updateContract", contract });
+  }));
+  app.querySelectorAll<HTMLElement>('[data-action="toggle-sql-target"]').forEach((button) => button.addEventListener("click", () => {
+    if (!contract?.sqlServer) return;
+    const index = Number(button.dataset.index);
+    const target = contract.sqlServer.targets?.[index];
+    if (target) { if (target.enabled === false) delete target.enabled; else target.enabled = false; }
+    else if (index === 0) { if (contract.sqlServer.enabled === false) delete contract.sqlServer.enabled; else contract.sqlServer.enabled = false; }
+    else return;
+    render();
+    vscode.postMessage({ type: "updateContract", contract });
+  }));
   app.querySelectorAll<HTMLElement>('[data-action="remove-target"]').forEach((button) => button.addEventListener("click", () => {
     if (!contract?.targets) return;
     contract.targets.splice(Number(button.dataset.index), 1);

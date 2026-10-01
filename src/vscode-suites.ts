@@ -2,7 +2,7 @@ import { LiveTests } from "./core/live-tests";
 import { DependencyWatchers } from "./vscode-dependencies";
 import type { CrossExecutor } from "./core/cross-checks";
 import { manageHistory } from "./vscode-history";
-import { contractPath, ruleOffset } from "./core/editor-document";
+import { contractPath, readEditorContract, ruleOffset } from "./core/editor-document";
 import type { LoadedSuite } from "./core/suite";
 import { resolveBaseline, resolveTargetBaseline, baselineReferences } from "./core/baseline";
 import { isMap } from "yaml";
@@ -19,11 +19,15 @@ import { filterResultRuns } from "./results-view";
 import { errorDetails } from "./core/error-details";
 import type { SuiteConnection } from "./core/suite";
 
-export async function editSuiteConnection(document: vscode.TextDocument, index?: number, standalone = false, memberId?: string): Promise<void> {
+export async function editSuiteConnection(document: vscode.TextDocument, index?: number, standalone = false, memberId?: string, targetIndex?: number): Promise<void> {
   const suite = standalone ? { members: [] } : parseSuite(document.getText());
   let targetDocument = document;
   let path: (string | number)[] = ["defaults"];
-  if (standalone) path = [...contractPath(document.getText(), memberId), "sqlServer"];
+  if (standalone) {
+    path = [...contractPath(document.getText(), memberId), "sqlServer"];
+    const contract = readEditorContract(document.getText(), memberId);
+    if (targetIndex !== undefined && contract.sqlServer?.targets?.length) path.push("targets", targetIndex);
+  }
   else if (index !== undefined) {
     if (!Number.isInteger(index) || index < 0 || index >= suite.members.length) return;
     const member = suite.members[index];

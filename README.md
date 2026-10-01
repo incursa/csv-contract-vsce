@@ -18,7 +18,7 @@ the remaining work. Baselines change only through explicit reviewed acceptance.
 
 ## Build contracts visually
 
-Create a contract from a CSV to start with its real column names, then set presence and data-quality rules from the workbench. Save one or more local paths or HTTP/HTTPS URLs as test targets when the same contract should run without prompting. Each configured target can be opened in VS Code or with its registered external application; URL targets open in a read-only VS Code document or in the browser. The YAML file remains the source of truth and can always be edited directly with schema-aware IntelliSense.
+Create a contract from a CSV to start with its real column names, then set presence and data-quality rules from the workbench. Save one or more local paths or HTTP/HTTPS URLs as test targets when the same contract should run without prompting. Each configured CSV or SQL Server target has a compact **Actions** menu for enabling, disabling, editing, opening, or removing it. Disabled targets remain in YAML and are excluded from runs until re-enabled. URL targets open in a read-only VS Code document or in the browser. The YAML file remains the source of truth and can always be edited directly with schema-aware IntelliSense.
 
 ![Configure column rules in CSV Contract Workbench](images/workbench-column-rules.png)
 

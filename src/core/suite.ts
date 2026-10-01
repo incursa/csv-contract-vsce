@@ -193,13 +193,14 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
       if (member.error || !member.contract) throw new Error(member.error ?? "Contract was not loaded.");
       const evaluatedContract = resolveEvaluation(member.contract, startedAt);
       const targets = resolveSqlServerTargets(evaluatedContract);
-      if (!targets.length && !(validateFile && member.contract.targets?.length)) throw new Error("No SQL Server targets configured; dbtest requires a database target for every member.");
+      const fileTargets = (validateFile ? member.contract.targets ?? [] : []).filter(target => target.enabled !== false);
+      if (!targets.length && !fileTargets.length) throw new Error("No enabled targets configured for this member.");
       if (!failFast && controls.parallelTargets !== undefined && controls.parallelTargets >= 1) {
         const jobs = [
           ...targets.map((target) => ({ identity: { ...base, table: `${target.schema}.${target.table}`, target: target.name ?? `${target.schema}.${target.table}` },
             execute: (index: number) => validate(evaluatedContract, target, member.source, index,
               progress => controls.onTargetProgress?.({ ...base, table: `${target.schema}.${target.table}`, target: target.name ?? `${target.schema}.${target.table}` }, progress, index)) })),
-          ...(validateFile ? member.contract.targets ?? [] : []).map((target) => ({ identity: { ...base, target: target.path ?? target.url },
+          ...fileTargets.map((target) => ({ identity: { ...base, target: target.path ?? target.url },
             execute: (index: number) => validateFile!(evaluatedContract, member.source, target, index,
               progress => controls.onTargetProgress?.({ ...base, target: target.path ?? target.url }, progress, index)) }))
         ];
@@ -251,7 +252,7 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
           if (failFast) stopped = true;
         }
       }
-      for (const [fileIndex, target] of (validateFile ? member.contract.targets ?? [] : []).entries()) {
+      for (const [fileIndex, target] of fileTargets.entries()) {
         const identity = { ...base, target: target.path ?? target.url };
         const targetIndex = targets.length + fileIndex;
         if (controls.signal?.aborted) { memberRuns.push({ ...identity, status: "CANCELED", error: "Canceled before target execution." }); continue; }

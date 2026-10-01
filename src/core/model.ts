@@ -208,6 +208,8 @@ export interface SqlServerIntegratedConnection {
 }
 
 export interface SqlServerTableTarget {
+  /** Disabled targets remain configured but are excluded from execution. */
+  enabled?: boolean;
   baseline?: import("./baseline").BaselineBinding;
   name?: string;
   /** Secret-backed profile for SQL authentication or a custom connection string. */
@@ -230,6 +232,8 @@ export interface SqlServerObjectInfo {
 }
 
 export interface SqlServerTarget {
+  /** Applies to the legacy single-table form. */
+  enabled?: boolean;
   /** Connection profile used by the legacy single-table form. */
   connection?: string;
   /** Windows integrated connection used by the legacy single-table form. */
@@ -266,8 +270,8 @@ export interface SqlServerImportedSchema {
 }
 
 export type CsvTarget =
-  | { path: string; url?: never }
-  | { url: string; path?: never };
+  | { path: string; url?: never; enabled?: boolean }
+  | { url: string; path?: never; enabled?: boolean };
 
 export interface CsvContract {
   version: 1;

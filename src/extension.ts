@@ -22,6 +22,7 @@ import {
   openTargetExternally,
   openTargetInVsCode,
   readTargetText,
+  resolveConfiguredTarget,
   registerTargetContentProvider,
   relativeTargetPath,
   type ResolvedTarget
@@ -361,6 +362,7 @@ function addConfiguredSqlTarget(contract: CsvContract, target: SqlServerTableTar
     return;
   }
   const previous: SqlServerTableTarget = {
+    enabled: config.enabled,
     connection: config.connection,
     integratedConnection: config.integratedConnection,
     schema: config.schema,
@@ -370,6 +372,7 @@ function addConfiguredSqlTarget(contract: CsvContract, target: SqlServerTableTar
   };
   config.targets = [previous, target];
   delete config.connection;
+  delete config.enabled;
   delete config.integratedConnection;
   delete config.schema;
   delete config.table;
@@ -602,7 +605,10 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         dependencies.push(...baselineReferences(contract).map(ref => vscodeSuiteIO.resolve(document.uri.toString(), ref)));
         if (watchInputs) dependencies.push(...activeTargets.filter(t => typeof t.source !== "string").map(t => t.source.toString()));
         dependencyWatchers.set(dependencies);
-        const sqlTargets = resolveSqlServerTargets(effective(contract), false);
+        const effectiveValue = effective(contract);
+        const sqlTargets = resolveSqlServerTargets(effectiveValue, false);
+        const declaredSqlTargets = effectiveValue.sqlServer?.targets?.length ? effectiveValue.sqlServer.targets
+          : effectiveValue.sqlServer?.schema && effectiveValue.sqlServer.table ? [{ ...effectiveValue.sqlServer, schema: effectiveValue.sqlServer.schema, table: effectiveValue.sqlServer.table }] : [];
         await panel.webview.postMessage({
           type: "state",
           stale, live: scheduler.enabled, watchInputs, runNotice, resultsSource, importedResultsName,
@@ -610,14 +616,15 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
           contract,
           contractName: vscode.workspace.asRelativePath(document.uri, false) + (memberId ? ` / ${memberId} (inline; saved in suite)` : ""),
           targetNames: [...activeTargets.map((target) => target.label), ...sqlTargets.map(sqlServerTargetLabel)],
-          connectionOverview: sqlTargets.map((target, index) => {
+          connectionOverview: declaredSqlTargets.map((target, index) => {
             const own = (value: { connection?: string; integratedConnection?: unknown } | undefined) => value?.connection !== undefined || value?.integratedConnection !== undefined;
             const origin = own(contract.sqlServer?.targets?.[index]) ? "table override" : own(contract.sqlServer) ? "contract" : memberId || suiteContext ? "suite default" : "unconfigured";
-            return `${sqlServerTargetLabel(target)} · ${origin}`;
+            const connection = target.integratedConnection ? `${target.integratedConnection.server}/${target.integratedConnection.database} (Windows)` : target.connection || "unconfigured";
+            return `${target.name ?? `${connection}:${target.schema}.${target.table}`} · ${origin}`;
           }),
           fileTargetCount: activeTargets.length,
-          configuredTargetCount: savedTargets.length + sqlTargets.length,
-          usingConfiguredTargets: manualTargets === undefined && (savedTargets.length > 0 || sqlTargets.length > 0),
+          configuredTargetCount: (contract.targets?.length ?? 0) + declaredSqlTargets.length,
+          usingConfiguredTargets: manualTargets === undefined && ((contract.targets?.length ?? 0) > 0 || declaredSqlTargets.length > 0),
           runs: latestRuns
         });
       } catch (error) {
@@ -680,7 +687,8 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         await write(contract);
       } else if (message.type === "openTargetInVsCode" || message.type === "openTargetExternally") {
         const contract = read();
-        const target = configuredTargets(document.uri, contract)[Number(message.index)];
+        const configured = contract.targets?.[Number(message.index)];
+        const target = configured ? resolveConfiguredTarget(document.uri, configured) : undefined;
         if (!target) {
           void vscode.window.showWarningMessage("That configured CSV target is no longer available.");
           return;
@@ -791,6 +799,54 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
       } else if (message.type === "updateContract") {
         if (message.documentVersion !== undefined && message.documentVersion !== document.version) { runNotice = "The document changed before this edit arrived. Review the current values and retry."; await postState(); return; }
         await write(message.contract as CsvContract);
+      } else if (message.type === "editCsvTarget") {
+        const contract = read();
+        const index = Number(message.index);
+        const target = contract.targets?.[index];
+        if (!target) return;
+        const isUrl = target.url !== undefined;
+        const value = await vscode.window.showInputBox({ title: `Edit ${isUrl ? "CSV URL" : "CSV path"}`, value: target.url ?? target.path,
+          prompt: isUrl ? "HTTP or HTTPS URL returning CSV content" : "Path relative to the contract, or an absolute path",
+          validateInput: input => !input.trim() ? "A target is required." : isUrl && !/^https?:\/\/\S+$/i.test(input) ? "Enter an HTTP or HTTPS URL." : undefined });
+        if (value === undefined) return;
+        const enabled = target.enabled;
+        contract.targets![index] = isUrl ? { url: value.trim(), ...(enabled !== undefined ? { enabled } : {}) } : { path: value.trim(), ...(enabled !== undefined ? { enabled } : {}) };
+        await write(contract);
+      } else if (message.type === "editSqlServerTarget") {
+        const contract = read();
+        const index = Number(message.index);
+        const targets = contract.sqlServer?.targets;
+        const target = targets?.[index] ?? (index === 0 && contract.sqlServer?.schema && contract.sqlServer.table ? {
+          enabled: contract.sqlServer.enabled, name: undefined, connection: contract.sqlServer.connection,
+          integratedConnection: contract.sqlServer.integratedConnection, schema: contract.sqlServer.schema, table: contract.sqlServer.table,
+          objectType: contract.sqlServer.objectType, columnMap: contract.sqlServer.columnMap, scope: contract.sqlServer.scope
+        } : undefined);
+        if (!target) return;
+        const choice = await vscode.window.showQuickPick([
+          { label: "Target details", description: "Display name, schema, table, and object type", action: "details" },
+          { label: "Connection", description: "Profile or Windows integrated settings", action: "connection" },
+          { label: "Column mappings and scope", description: "Open the YAML at this target", action: "yaml" }
+        ], { title: `Edit ${target.schema}.${target.table}` });
+        if (!choice) return;
+        if (choice.action === "connection") { await editSuiteConnection(document, undefined, true, memberId, index); return; }
+        if (choice.action === "yaml") {
+          const marker = target.name || target.table;
+          const offset = document.getText().indexOf(marker, document.getText().indexOf("sqlServer"));
+          const position = document.positionAt(Math.max(0, offset));
+          await vscode.window.showTextDocument(document, { viewColumn: vscode.ViewColumn.Beside, selection: new vscode.Range(position, position) });
+          return;
+        }
+        const name = await vscode.window.showInputBox({ title: "Target display name (optional)", value: target.name ?? "", prompt: "Leave blank to display the connection and object name." });
+        if (name === undefined) return;
+        const schema = await vscode.window.showInputBox({ title: "SQL Server schema", value: target.schema, validateInput: value => value.trim() ? undefined : "Schema is required." });
+        if (!schema) return;
+        const table = await vscode.window.showInputBox({ title: "SQL Server table or view", value: target.table, validateInput: value => value.trim() ? undefined : "Table or view is required." });
+        if (!table) return;
+        const objectType = await vscode.window.showQuickPick(["table", "view"] as const, { title: "Object type", placeHolder: target.objectType ?? "table" });
+        if (!objectType) return;
+        if (targets) Object.assign(targets[index], { name: name.trim() || undefined, schema: schema.trim(), table: table.trim(), objectType });
+        else Object.assign(contract.sqlServer!, { schema: schema.trim(), table: table.trim(), objectType });
+        await write(contract);
       } else if (message.type === "jumpRule") {
         const offset = ruleOffset(document.getText(), String(message.ruleId), memberId);
         const position = offset === undefined ? undefined : document.positionAt(offset);

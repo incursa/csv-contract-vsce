@@ -6,7 +6,9 @@ export function coverageDiagnostics(contract: CsvContract): string[] {
   const diagnostics: string[] = [];
   const rules = [...(contract.rules ?? []), ...(contract.sqlServer?.conditionalRules ?? [])];
   if (!rules.length && !contract.rowTests?.length && !contract.groupRules?.length && !contract.groupTests?.length && !contract.orderedRules?.length && !contract.identity && !contract.schema.rowCount && !Object.values(contract.schema.columns).some(c => c.constraints && Object.values(c.constraints).some(Boolean))) diagnostics.push("No substantive data validations; only schema presence is checked.");
-  if (!contract.targets?.length && !contract.sqlServer?.table && !contract.sqlServer?.targets?.length) diagnostics.push("No execution targets configured.");
+  const enabledSqlTarget = contract.sqlServer?.targets?.some(target => target.enabled !== false)
+    ?? Boolean(contract.sqlServer?.schema && contract.sqlServer.table && contract.sqlServer.enabled !== false);
+  if (!(contract.targets ?? []).some(target => target.enabled !== false) && !enabledSqlTarget) diagnostics.push("No enabled execution targets configured.");
   const seen = new Map<string, string>();
   for (const rule of rules) {
     const missing = [...predicateColumns(rule.when), ...predicateColumns(rule.expect)].filter(c => !contract.schema.columns[c]);

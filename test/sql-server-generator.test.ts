@@ -153,6 +153,17 @@ test("resolves multiple tables and connection profiles without changing shared r
   assert.match(generateSqlServerValidation(input, { target: targets[1] }).sql, /\[reporting\]\.\[Payroll\]/);
 });
 
+test("disabled SQL targets remain configured but are excluded from execution", () => {
+  const input = contract();
+  input.sqlServer = { targets: [
+    { connection: "test-readonly", schema: "stage", table: "Current" },
+    { connection: "test-readonly", schema: "stage", table: "Archive", enabled: false }
+  ] };
+  assert.deepEqual(resolveSqlServerTargets(input).map(target => target.table), ["Current"]);
+  input.sqlServer.targets![0].enabled = false;
+  assert.deepEqual(resolveSqlServerTargets(input), []);
+});
+
 test("resolves a non-secret Windows integrated connection without a profile", () => {
   const input = contract();
   input.sqlServer!.integratedConnection = {

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Keep CSV and SQL Server targets configured while disabling them from execution, with compact Workbench actions to enable, disable, edit, open, or remove each target.
+
 ## 0.20.1
 
 - Rerun only failed targets from a contract run and only failed test files from a suite run while retaining successful results.

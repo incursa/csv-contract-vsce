@@ -34,10 +34,11 @@ export function sqlServerTargetLabel(target: ResolvedSqlServerTarget): string {
 export function resolveSqlServerTargets(contract: CsvContract, requireConnection = true): ResolvedSqlServerTarget[] {
   const sqlServer = contract.sqlServer;
   if (!sqlServer) return [];
-  const candidates: SqlServerTableTarget[] = sqlServer.targets?.length
+  const configured: SqlServerTableTarget[] = sqlServer.targets?.length
     ? sqlServer.targets
     : sqlServer.schema && sqlServer.table
       ? [{
+          enabled: sqlServer.enabled,
           connection: sqlServer.connection ?? "",
           integratedConnection: sqlServer.integratedConnection,
           schema: sqlServer.schema,
@@ -45,11 +46,13 @@ export function resolveSqlServerTargets(contract: CsvContract, requireConnection
           objectType: sqlServer.objectType,
           columnMap: sqlServer.columnMap,
           scope: sqlServer.scope
-        }]
+      }]
       : [];
-  if (candidates.length === 0) {
+  if (configured.length === 0) {
     throw new Error("sqlServer must declare schema and table, or at least one targets entry.");
   }
+  const candidates = configured.filter(target => target.enabled !== false);
+  if (candidates.length === 0) return [];
   return candidates.map((target, index) => {
     if (!target.schema?.trim() || !target.table?.trim()) {
       throw new Error(`SQL Server target ${index + 1} must declare non-empty schema and table names.`);

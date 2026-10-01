@@ -64,7 +64,7 @@ export function resolveConfiguredTarget(contractUri: vscode.Uri, target: CsvTarg
 }
 
 export function configuredTargets(contractUri: vscode.Uri, contract: CsvContract): ResolvedTarget[] {
-  return (contract.targets ?? []).map((target) => resolveConfiguredTarget(contractUri, target));
+  return (contract.targets ?? []).filter(target => target.enabled !== false).map((target) => resolveConfiguredTarget(contractUri, target));
 }
 
 export function targetKey(target: ResolvedTarget): string {
