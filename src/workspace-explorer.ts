@@ -16,6 +16,7 @@ import {
 import { renderWorkspaceReportHtml } from "./workspace-report";
 import { hasSqlServerConnection, resolveSqlServerTargets, sqlServerConnectionKey, sqlServerConnectionLabel, sqlServerTargetLabel, type ResolvedSqlServerTarget } from "./core/sql-server-targets";
 import type { DesktopSqlServerRunner } from "./extension";
+import type { ResultColorMode } from "./core/result-health";
 
 export const explorerContainerId = "csvContractExplorer";
 export const explorerViewId = "csvContractExplorer.contracts";
@@ -277,7 +278,8 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
     this.reportPanel.webview.html = renderWorkspaceReportHtml(this.lastReport, {
       cspSource: this.reportPanel.webview.cspSource,
       styleUri: styleUri.toString(),
-      selectedEntryIndex: selectedEntryIndex === -1 ? undefined : selectedEntryIndex
+      selectedEntryIndex: selectedEntryIndex === -1 ? undefined : selectedEntryIndex,
+      resultColorMode: vscode.workspace.getConfiguration("csvContract").get<ResultColorMode>("resultColorMode", "binary")
     });
   }
 

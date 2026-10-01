@@ -229,6 +229,19 @@
           "minimum": 0,
           "default": 0,
           "description": "Maximum issue details retained for Workbench runs and exports. Use 0 to retain all details. SQL aggregate rules report counts rather than one detail per matching row."
+        },
+        "csvContract.resultColorMode": {
+          "type": "string",
+          "enum": [
+            "binary",
+            "graded"
+          ],
+          "enumDescriptions": [
+            "Show clean runs in green and any failed run in red.",
+            "Show a 0–100 health score with yellow and orange intermediate states. Only a completely clean run is green."
+          ],
+          "default": "binary",
+          "description": "Controls how validation results are colored. This changes presentation only; PASS/FAIL status and exit codes are unchanged."
         }
       }
     }

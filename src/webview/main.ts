@@ -7,6 +7,7 @@ import type { ValidationProgress } from "../core/run-progress";
 import { predicateDescription } from "../core/predicate";
 import { renderPredicate, readPredicate, editPredicateTree } from "./rule-editor";
 import { insertPreset, presetCatalog, type PresetInput } from "../core/presets";
+import type { ResultColorMode } from "../core/result-health";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 
@@ -41,6 +42,7 @@ let importedResultsName = "";
 let watchInputs = false;
 let dirty = false;
 let parseError = "";
+let resultColorMode: ResultColorMode = "binary";
 let running = false;
 let runningTarget = "";
 let runningTargetIndex = 0;
@@ -324,6 +326,7 @@ function render(): void {
             <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="review-baseline">Review schema drift</button>
           </div>
           <div class="workbench-tools__group"><h3>Runs and updates</h3>
+            <label class="compact-setting">Result colors<select class="form-select" data-action="result-color-mode"><option value="binary"${resultColorMode === "binary" ? " selected" : ""}>Pass / fail</option><option value="graded"${resultColorMode === "graded" ? " selected" : ""}>Graded health</option></select></label>
             <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="review-results">Review results JSON</button>
             <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="history">Run history</button>
             <button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="live">${live ? "Pause live tests" : "Enable live tests"}</button>
@@ -413,7 +416,7 @@ function render(): void {
         ${runs.length > 0 ? `<button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="export-issues">Export results${retainedIssueCount > 0 ? ` (${retainedIssueCount.toLocaleString()} details)` : ""}</button>` : ""}</div>
       </div>
       <div class="results">
-        ${renderResults(runs, resultFilter, stale) || `<p>No test results yet.</p>`}
+        ${renderResults(runs, resultFilter, stale, resultColorMode) || `<p>No test results yet.</p>`}
       </div>
     </section>
     <section class="inc-card pane advanced-rules-pane">
@@ -621,6 +624,11 @@ function bind(): void {
     } catch (error) { form.querySelector('[data-rule-error]')!.textContent = String(error); }
   }));
   app.querySelector('[data-action="watch-inputs"]')?.addEventListener("click", () => vscode.postMessage({ type: "watchInputs" }));
+  app.querySelector<HTMLSelectElement>('[data-action="result-color-mode"]')?.addEventListener("change", event => {
+    resultColorMode = (event.currentTarget as HTMLSelectElement).value as ResultColorMode;
+    render();
+    vscode.postMessage({ type: "setResultColorMode", mode: resultColorMode });
+  });
   app.querySelectorAll<HTMLDetailsElement>("details.target-actions").forEach(menu => {
     menu.addEventListener("toggle", () => {
       if (menu.open) app.querySelectorAll<HTMLDetailsElement>("details.target-actions[open]").forEach(other => { if (other !== menu) other.open = false; });
@@ -638,7 +646,7 @@ function bind(): void {
   app.querySelectorAll<HTMLElement>('[data-action="preview-rule"]').forEach(button => button.addEventListener("click", () => vscode.postMessage({ type: "preview", ruleId: button.dataset.rule })));
   app.querySelector<HTMLInputElement>("#result-filter")?.addEventListener("input", event => {
     resultFilter = (event.target as HTMLInputElement).value;
-    app.querySelector(".results")!.innerHTML = renderResults(runs, resultFilter, stale);
+    app.querySelector(".results")!.innerHTML = renderResults(runs, resultFilter, stale, resultColorMode);
   });
   app.querySelector("#preset-form")?.addEventListener("submit", event => {
     event.preventDefault();
@@ -825,6 +833,7 @@ window.addEventListener("message", (event) => {
     configuredTargetCount = message.configuredTargetCount ?? 0;
     usingConfiguredTargets = message.usingConfiguredTargets ?? false;
     runs = message.runs ?? [];
+    resultColorMode = message.resultColorMode === "graded" ? "graded" : "binary";
     stale = message.stale ?? false; live = message.live ?? false; runNotice = message.runNotice ?? "";
     resultsSource = message.resultsSource ?? "run";
     importedResultsName = message.importedResultsName ?? "";

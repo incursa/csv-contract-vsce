@@ -79,3 +79,14 @@ test("renders failure diagnostics without allowing report data to inject HTML", 
   assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
   assert.match(html, /12 sec/);
 });
+
+test("graded reports reserve perfect styling for clean runs and show health scores", () => {
+  const html = renderWorkspaceReportHtml(report, {
+    cspSource: "vscode-webview:",
+    styleUri: "vscode-webview://extension/webview.css",
+    resultColorMode: "graded"
+  });
+  assert.match(html, /FAIL · \d+\/100/);
+  assert.match(html, /PASS · 100\/100/);
+  assert.match(html, /report-status--(?:attention|concerning|critical)/);
+});

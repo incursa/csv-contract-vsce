@@ -28,6 +28,8 @@ Create a contract from a CSV to start with its real column names, then set prese
 
 Run a contract against a CSV and follow live per-target progress while large files are being checked. Review file, column, row, and cell failures directly below the run summary, before the column and row-test editors.
 
+Choose **Pass / fail** or **Graded health** under **More tools and settings**. Graded health keeps PASS and FAIL semantics unchanged while adding a 0–100 presentation score. It considers the share of checks affected, the share of records or groups affected, and gives errors more weight than warnings. A completely clean result is the only 100-point green state; any finding is capped at 85 so it remains visibly different from a perfect pass. The preference also applies to suite and workspace reports.
+
 ![Review CSV validation results in CSV Contract Workbench](images/workbench-results.png)
 
 *Inspect the selected column and the latest validation result in one workspace.*

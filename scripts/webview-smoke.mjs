@@ -40,6 +40,7 @@ const state = {
   ],
   configuredTargetCount: 4,
   usingConfiguredTargets: true,
+  resultColorMode: "graded",
   runs: [],
   contract: {
     version: 1,
@@ -228,6 +229,17 @@ if (removeSqlMessage?.type !== "updateContract" || removeSqlMessage.contract.sql
 
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), failedState);
 if ((await page.locator(".results .finding-card").count()) !== 12) throw new Error("Finding list must include all retained issues.");
+const healthStatus = page.locator(".results .result-health__status").first();
+if (!/FAIL · \d+\/100 health/.test((await healthStatus.textContent()) ?? "") || await page.locator(".results .result-health--perfect").count()) {
+  throw new Error("Graded results did not keep a failed run visibly distinct from a perfect pass.");
+}
+if (!await page.locator('[data-action="result-color-mode"]').isVisible()) await page.locator('.workbench-tools > summary').click();
+await page.locator('[data-action="result-color-mode"]').selectOption("binary");
+let colorModeMessage = await page.evaluate(() => window.__messages.at(-1));
+if (colorModeMessage?.type !== "setResultColorMode" || colorModeMessage.mode !== "binary") throw new Error("Result color mode did not persist the selected preference.");
+await page.locator('[data-action="result-color-mode"]').selectOption("graded");
+colorModeMessage = await page.evaluate(() => window.__messages.at(-1));
+if (colorModeMessage?.mode !== "graded") throw new Error("Graded result colors could not be restored.");
 if (!(await page.locator(".finding-card").first().textContent()).includes("Customer status must be active")
   || !(await page.locator(".finding-card").first().textContent()).includes("Review the customer status before continuing")
   || !(await page.locator(".finding-card").first().textContent()).includes("Why it failed")

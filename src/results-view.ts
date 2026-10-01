@@ -1,4 +1,5 @@
 import type { ValidationResult } from "./core/model";
+import { resultHealth, type ResultColorMode } from "./core/result-health";
 export interface DisplayRun { workId?: string; runId?: string; evaluatedAt?: string; scope?: string; target?: string; table?: string; member?: string; status?: string; error?: string; result?: ValidationResult }
 const escape = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 const humanize = (value: string) => value.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[._/-]+/g, " ").replace(/\b\w/g, letter => letter.toUpperCase());
@@ -24,10 +25,12 @@ export function filterResultRuns<T extends DisplayRun>(runs: T[], filter: string
     return [{ ...run, error, result: run.result ? { ...run.result, issues, examples: undefined, truncated: run.result.truncated || issues.length < run.result.issues.length } : undefined }];
   });
 }
-export function renderResults(runs: DisplayRun[], filter = "", stale = false): string {
+export function renderResults(runs: DisplayRun[], filter = "", stale = false, colorMode: ResultColorMode = "binary"): string {
   return runs.map(run => {
     const result = run.result;
     const status = stale ? "STALE" : result?.preview?.scope === "sample" ? "SAMPLED — incomplete validation" : run.status ?? (result?.valid ? "PASS" : result ? "FAIL" : "ERROR");
+    const health = resultHealth(result, run.status, colorMode);
+    const healthLabel = colorMode === "graded" && !stale && result?.preview?.scope !== "sample" ? ` · ${health.score}/100 health` : "";
     const visibleIssues: Array<{ issue: NonNullable<typeof result>["issues"][number]; index: number }> = [];
     let matchingIssues = 0;
     for (const [index, issue] of (result?.issues ?? []).entries()) if (matches(run, issue, filter)) {
@@ -42,7 +45,7 @@ export function renderResults(runs: DisplayRun[], filter = "", stale = false): s
         ${groupOutcomes.map(g => `<div class="rule-execution-row"><div><strong>${escape(g.name ?? humanize(g.id))}</strong><span>${g.groups} groups · ${g.passed} passed · ${g.failed} failed</span></div><button class="inc-btn inc-btn--outline-secondary inc-btn--sm" data-action="jump-rule" data-rule="${escape(g.id)}">View YAML definition</button></div>`).join("")}
       </div></details>` : "";
     const select = (index: number) => `<input type="checkbox" data-issue-selection="${escape(issueSelectionKey(run, index))}" aria-label="Select ${escape(index < 0 ? "execution diagnostic" : result?.issues[index].testId ?? result?.issues[index].code)} for export">`;
-    return `<section class="target-result run"><div class="target-result__heading"><strong>${escape(status)}</strong> <code>${escape(run.table ?? run.target ?? run.member)}</code></div>
+    return `<section class="target-result run result-health result-health--${health.band}"><div class="target-result__heading"><strong class="result-health__status">${escape(status + healthLabel)}</strong> <code>${escape(run.table ?? run.target ?? run.member)}</code></div>
       ${run.error && matches(run, run.error, filter) ? `<article class="finding-card finding-card--error" data-result-search="${escape(JSON.stringify([run.status, run.error]))}">
         <div class="finding-card__select">${select(-1)}</div><div class="finding-card__body"><div class="finding-card__topline"><span class="finding-severity finding-severity--error">Execution error</span></div>
         <h3>The target could not be validated</h3><pre class="error" role="alert">${escape(run.error)}</pre></div></article>` : ""}

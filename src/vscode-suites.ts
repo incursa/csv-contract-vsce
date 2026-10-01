@@ -18,6 +18,7 @@ import { suiteErrorsCsv, updateSuiteConnection } from "./suite-actions";
 import { filterResultRuns } from "./results-view";
 import { errorDetails } from "./core/error-details";
 import type { SuiteConnection } from "./core/suite";
+import type { ResultColorMode } from "./core/result-health";
 
 export async function editSuiteConnection(document: vscode.TextDocument, index?: number, standalone = false, memberId?: string, targetIndex?: number): Promise<void> {
   const suite = standalone ? { members: [] } : parseSuite(document.getText());
@@ -181,7 +182,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
       if (disposed || version !== renderVersion) return;
       panel.webview.html = renderSuiteWorkbench({ suite, name: parsed.name, description: parsed.description,
         references: parsed.members.map((m) => m.ref), running, runs: report?.runs, notice, stale, live: scheduler.enabled, watchInputs,
-        runView, runProgress }, nonce);
+        runView, runProgress, resultColorMode: vscode.workspace.getConfiguration("csvContract").get<ResultColorMode>("resultColorMode", "binary") }, nonce);
     } catch (error) {
       if (!disposed && version === renderVersion) panel.webview.html = renderSuiteWorkbench({ error: String(error), running }, nonce);
     }
@@ -319,6 +320,10 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
           }
           await refresh(undefined, members); scheduler.request();
         } else if (message.type === "show-results") { runView = false; await render();
+        } else if (message.type === "color-mode") {
+          const current = vscode.workspace.getConfiguration("csvContract").get<ResultColorMode>("resultColorMode", "binary");
+          await vscode.workspace.getConfiguration("csvContract").update("resultColorMode", current === "graded" ? "binary" : "graded", vscode.ConfigurationTarget.Global);
+          await render();
         } else if (message.type === "live") {
           if (scheduler.enabled) scheduler.pause();
           else { await refresh(); scheduler.enable(); }
@@ -431,7 +436,8 @@ export async function showSuiteRun(context: vscode.ExtensionContext, uri: vscode
     panel.webview.html = renderWorkspaceReportHtml({ completedAt: new Date(), durationMs: Date.now() - started,
       selectedContracts: report.members.length, targets: report.runs.length, valid: report.valid,
       entries: report.runs.map((run) => ({ status: run.status, contractLabel: `${run.suite}/${run.member}`, target: run.table ?? run.target ?? "Unresolved member", result: run.result, error: run.error }))
-    }, { cspSource: panel.webview.cspSource, styleUri: panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "web", "webview.css")).toString() });
+    }, { cspSource: panel.webview.cspSource, styleUri: panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "web", "webview.css")).toString(),
+      resultColorMode: vscode.workspace.getConfiguration("csvContract").get<ResultColorMode>("resultColorMode", "binary") });
   } catch (e) { void vscode.window.showErrorMessage(String(e)); }
 }
 export async function showSuiteSql(uri: vscode.Uri): Promise<void> {

@@ -17,6 +17,7 @@ import * as vscode from "vscode";
 import { createContractFromCsv, parseContract, serializeContract, validateCsv } from "./core/contract";
 import type { CsvContract, SqlServerObjectInfo, SqlServerTableTarget, ValidationResult } from "./core/model";
 import type { ValidationProgress } from "./core/run-progress";
+import type { ResultColorMode } from "./core/result-health";
 import {
   configuredTargets,
   openTargetExternally,
@@ -612,6 +613,7 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         await panel.webview.postMessage({
           type: "state",
           stale, live: scheduler.enabled, watchInputs, runNotice, resultsSource, importedResultsName,
+          resultColorMode: vscode.workspace.getConfiguration("csvContract").get<ResultColorMode>("resultColorMode", "binary"),
           documentVersion: document.version, dirty: document.isDirty,
           contract,
           contractName: vscode.workspace.asRelativePath(document.uri, false) + (memberId ? ` / ${memberId} (inline; saved in suite)` : ""),
@@ -661,6 +663,10 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
       } else if (message.type === "useConfiguredTargets") {
         manualTargets = undefined;
         refreshRevision();
+        await postState();
+      } else if (message.type === "setResultColorMode") {
+        const mode: ResultColorMode = message.mode === "graded" ? "graded" : "binary";
+        await vscode.workspace.getConfiguration("csvContract").update("resultColorMode", mode, vscode.ConfigurationTarget.Global);
         await postState();
       } else if (message.type === "addTargetFiles") {
         const uris = await pickFiles({ "CSV files": ["csv"] });

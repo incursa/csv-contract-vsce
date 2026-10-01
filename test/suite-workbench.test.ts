@@ -131,3 +131,14 @@ test("suite Workbench renders execution failures, escapes content and disables d
   assert.equal(invalid.window.document.querySelector<HTMLButtonElement>('[data-action="yaml"]')!.disabled, false);
   dom.window.close(); invalid.window.close();
 });
+
+test("suite Workbench shows graded health without changing failure status", async () => {
+  const report = await runSuite(suite, async () => ({ valid: false, rowCount: 1000, columnCount: 1, testCount: 10,
+    issueCount: 1, errorCount: 1, warningCount: 0, truncated: false,
+    issues: [{ level: "row", code: "VALUE_INVALID", testId: "value-valid", message: "Review this value." }] }));
+  const dom = new JSDOM(renderSuiteWorkbench({ suite, runs: report.runs, resultColorMode: "graded" }, "test"));
+  assert.match(dom.window.document.querySelector(".overview .badge")!.textContent!, /FAIL · \d+\/100/);
+  assert.equal(dom.window.document.querySelectorAll(".health-perfect").length, 0);
+  assert.match(dom.window.document.body.textContent!, /FAIL · \d+\/100 health/);
+  dom.window.close();
+});

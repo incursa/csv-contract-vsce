@@ -1,4 +1,5 @@
 import type { ValidationIssue, ValidationResult } from "./core/model";
+import { aggregateResultHealth, resultHealth, type ResultColorMode } from "./core/result-health";
 
 export interface WorkspaceReportEntryView {
   status?: string;
@@ -22,6 +23,7 @@ export interface WorkspaceReportHtmlOptions {
   cspSource: string;
   styleUri: string;
   selectedEntryIndex?: number;
+  resultColorMode?: ResultColorMode;
 }
 
 export function renderWorkspaceReportHtml(
@@ -35,6 +37,10 @@ export function renderWorkspaceReportHtml(
     : report.entries[options.selectedEntryIndex];
   const status = report.entries.some((entry) => entry.status === "ERROR" || (entry.error && !entry.status)) ? "ERROR"
     : report.entries.some(e => e.status === "CANCELED") ? "CANCELED" : report.entries.some(e => e.status === "SKIPPED") ? "SKIPPED" : report.valid && report.entries.length > 0 ? "PASS" : "FAIL";
+  const colorMode = options.resultColorMode ?? "binary";
+  const overallHealth = aggregateResultHealth(report.entries, colorMode);
+  const overallTone = colorMode === "graded" ? overallHealth.band : report.valid ? "pass" : "fail";
+  const overallLabel = colorMode === "graded" ? `${status} · ${overallHealth.score}/100` : status;
 
   return `<!doctype html>
 <html lang="en">
@@ -52,7 +58,7 @@ export function renderWorkspaceReportHtml(
       <h1>CSV Contract Test Report</h1>
       <p>Completed ${escapeHtml(report.completedAt.toLocaleString())}</p>
     </div>
-    <span class="report-status report-status--${report.valid ? "pass" : "fail"}">${status}</span>
+    <span class="report-status report-status--${overallTone}">${overallLabel}</span>
   </header>
   <main class="workspace-report">
     <section class="report-metrics" aria-label="Run summary">
@@ -63,7 +69,7 @@ export function renderWorkspaceReportHtml(
       ${metric("Failed", failed, failed > 0 ? "fail" : undefined)}
       ${metric("Duration", formatDuration(report.durationMs))}
     </section>
-    ${selected ? renderSelectedEntry(selected, options.selectedEntryIndex!) : ""}
+    ${selected ? renderSelectedEntry(selected, options.selectedEntryIndex!, colorMode) : ""}
     <section class="inc-card report-runs">
       <div class="report-section-heading">
         <div>
@@ -74,7 +80,7 @@ export function renderWorkspaceReportHtml(
       </div>
       <div class="report-run-list">
         ${report.entries.map((entry, index) =>
-          renderEntry(entry, index, index === options.selectedEntryIndex || entry.result?.valid !== true || (entry.result?.warningCount ?? 0) > 0)
+          renderEntry(entry, index, index === options.selectedEntryIndex || entry.result?.valid !== true || (entry.result?.warningCount ?? 0) > 0, colorMode)
         ).join("")}
       </div>
     </section>
@@ -83,15 +89,18 @@ export function renderWorkspaceReportHtml(
 </html>`;
 }
 
-function renderSelectedEntry(entry: WorkspaceReportEntryView, index: number): string {
+function renderSelectedEntry(entry: WorkspaceReportEntryView, index: number, colorMode: ResultColorMode): string {
   const valid = entry.result?.valid === true;
-  return `<section class="inc-card report-selected report-selected--${valid ? "pass" : "fail"}" aria-labelledby="selected-run-title">
+  const health = resultHealth(entry.result, entry.status ?? (entry.error ? "ERROR" : undefined), colorMode);
+  const tone = colorMode === "graded" ? health.band : valid ? "pass" : "fail";
+  const label = `${entry.status ?? (entry.error ? "ERROR" : valid ? "PASS" : "FAIL")}${colorMode === "graded" ? ` · ${health.score}/100` : ""}`;
+  return `<section class="inc-card report-selected report-selected--${tone}" aria-labelledby="selected-run-title">
     <div class="report-section-heading">
       <div>
         <span class="report-eyebrow">Selected run</span>
         <h2 id="selected-run-title">${escapeHtml(fileName(entry.contractLabel))}</h2>
       </div>
-      <span class="report-status report-status--${valid ? "pass" : "fail"}">${entry.status ?? (entry.error ? "ERROR" : valid ? "PASS" : "FAIL")}</span>
+      <span class="report-status report-status--${tone}">${label}</span>
     </div>
     <dl class="report-run-metrics">
       ${runMetric("Contract", entry.contractLabel)}
@@ -106,12 +115,15 @@ function renderSelectedEntry(entry: WorkspaceReportEntryView, index: number): st
   </section>`;
 }
 
-function renderEntry(entry: WorkspaceReportEntryView, index: number, open: boolean): string {
+function renderEntry(entry: WorkspaceReportEntryView, index: number, open: boolean, colorMode: ResultColorMode): string {
   const valid = entry.result?.valid === true;
   const result = entry.result;
-  return `<details id="run-${index + 1}" class="report-run report-run--${valid ? "pass" : "fail"}"${open ? " open" : ""}>
+  const health = resultHealth(result, entry.status ?? (entry.error ? "ERROR" : undefined), colorMode);
+  const tone = colorMode === "graded" ? health.band : valid ? "pass" : "fail";
+  const label = `${entry.status ?? (entry.error ? "ERROR" : valid ? "PASS" : "FAIL")}${colorMode === "graded" ? ` · ${health.score}/100` : ""}`;
+  return `<details id="run-${index + 1}" class="report-run report-run--${tone}"${open ? " open" : ""}>
     <summary>
-      <span class="report-run-status">${entry.status ?? (entry.error ? "ERROR" : valid ? "PASS" : "FAIL")}</span>
+      <span class="report-run-status">${label}</span>
       <span class="report-run-name">
         <strong>${escapeHtml(fileName(entry.contractLabel))}</strong>
         <small>${escapeHtml(entry.target)}</small>

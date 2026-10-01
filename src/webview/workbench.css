@@ -39,6 +39,8 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .workbench-tools__group { display: grid; align-content: start; gap: .4rem; min-width: 0; }
 .workbench-tools__group h3 { margin: 0 0 .2rem; color: var(--inc-text-secondary); font-size: .72rem; letter-spacing: .04em; text-transform: uppercase; }
 .workbench-tools__group .inc-btn { width: 100%; min-height: 2rem; text-align: left; }
+.compact-setting { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: .4rem; margin: 0; color: var(--inc-text-secondary); font-size: .72rem; }
+.compact-setting select { min-width: 0; padding-block: .25rem; }
 .run-button { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; min-width: 6.5rem; }
 .run-button:disabled { cursor: wait; opacity: .82; }
 .run-view { min-height: 100vh; padding: clamp(1rem, 4vw, 2rem); background: #f6f7fb; }
@@ -193,11 +195,19 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .result--warning { color: #725200; border-color: #c58a00; background: #fff8df; }
 .target-result { display: grid; gap: .5rem; min-width: 0; padding-bottom: .75rem; border-bottom: 1px solid #dbdcdc; }
 .target-result:last-child { padding-bottom: 0; border-bottom: 0; }
-.target-result__heading { display: grid; grid-template-columns: 3.5rem minmax(0, 1fr); gap: .2rem .5rem; align-items: center; }
+.target-result__heading { display: grid; grid-template-columns: minmax(3.5rem, auto) minmax(0, 1fr); gap: .2rem .5rem; align-items: center; }
 .target-result__heading code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .target-result__heading small { grid-column: 2; color: #656668; }
 .target-result__pass { color: #00833a; font-weight: 600; }
 .target-result__fail { color: #b01524; font-weight: 600; }
+.result-health__status { width: fit-content; padding: .18rem .4rem; border-radius: 3px; font-weight: 700; white-space: nowrap; }
+.result-health--perfect .result-health__status { color: #007b37; background: #e6fbef; }
+.result-health--attention .result-health__status { color: #806000; background: #fff4ce; }
+.result-health--concerning .result-health__status { color: #a64b00; background: #fff0df; }
+.result-health--critical .result-health__status { color: #b01524; background: #fff0f1; }
+.report-status--attention { color: #6f5200; border-color: #c49412; background: #fff4ce; }
+.report-status--concerning { color: #8e3d00; border-color: #df7b2c; background: #fff0df; }
+.report-status--critical { color: #a01120; border-color: #df5966; background: #fff0f1; }
 .report-body { min-width: 20rem; }
 .report-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-block: 1.35rem; }
 .report-header > div { min-width: 0; }
@@ -217,6 +227,10 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .report-selected { padding: 1rem; border-left-width: 4px; }
 .report-selected--pass { border-left-color: #009743; }
 .report-selected--fail { border-left-color: #d11a2a; }
+.report-selected--perfect { border-left-color: #009743; }
+.report-selected--attention { border-left-color: #c49412; }
+.report-selected--concerning { border-left-color: #df7b2c; }
+.report-selected--critical { border-left-color: #d11a2a; }
 .report-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; }
 .report-selected .report-section-heading { padding: 0 0 .85rem; }
 .report-section-heading h2 { margin: 0; font-size: 1rem; }
@@ -231,6 +245,10 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .report-run-status { font-size: .72rem; font-weight: 700; letter-spacing: .035em; }
 .report-run--pass .report-run-status { color: #007b37; }
 .report-run--fail .report-run-status { color: #b01524; }
+.report-run--perfect .report-run-status { color: #007b37; }
+.report-run--attention .report-run-status { color: #806000; }
+.report-run--concerning .report-run-status { color: #a64b00; }
+.report-run--critical .report-run-status { color: #b01524; }
 .report-run-name { display: grid; min-width: 0; gap: .12rem; }
 .report-run-name strong, .report-run-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .report-run-name strong { font-size: .82rem; }

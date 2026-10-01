@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Keep CSV and SQL Server targets configured while disabling them from execution, with compact Workbench actions to enable, disable, edit, open, or remove each target.
+- Optionally grade result colors on a 0–100 health scale across contracts, suites, and workspace reports while preserving exact PASS/FAIL semantics and a distinct perfect-green state.
 
 ## 0.20.1
 
