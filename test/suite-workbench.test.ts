@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { renderSuiteWorkbench } from "../src/suite-workbench";
+import { renderSuiteWorkbench, type SuiteRunProgress } from "../src/suite-workbench";
 import type { LoadedSuite } from "../src/core/suite";
 import { runSuite, yamlDocument } from "../src/core/suite";
 import { errorDetails } from "../src/core/error-details";
@@ -35,9 +35,9 @@ test("suite Workbench shows independent members, filters, and sends actions only
   dom.window.close();
 });
 
-test("suite run view rolls up every test file and keeps target progress compact", () => {
+test("suite run view rolls up a 17-file suite and keeps target progress compact", () => {
   const messages: unknown[] = [];
-  const members = Array.from({ length: 4 }, (_, memberIndex) => ({
+  const members = Array.from({ length: 17 }, (_, memberIndex) => ({
     id: `catalog-${memberIndex + 1}`,
     source: `file:///catalog-${memberIndex + 1}.csvtest.yaml`,
     status: memberIndex === 0 ? "running" as const : "queued" as const,
@@ -52,13 +52,20 @@ test("suite run view rolls up every test file and keeps target progress compact"
     beforeParse(window) { Object.assign(window, { acquireVsCodeApi: () => ({ postMessage: (message: unknown) => messages.push(message) }) }); }
   });
   const document = dom.window.document;
-  assert.equal(document.querySelectorAll("[data-run-member]").length, 4);
-  assert.equal(document.querySelectorAll("[data-run-target]").length, 24);
-  assert.equal(document.querySelectorAll("progress").length, 29, "one suite bar, four member bars, and one bar per target");
-  assert.match(document.body.textContent!, /0 of 4 test files complete/);
+  assert.equal(document.querySelectorAll("[data-run-member]").length, 17);
+  assert.equal(document.querySelectorAll("[data-run-target]").length, 102);
+  assert.equal(document.querySelectorAll("progress").length, 120, "one suite bar, 17 member bars, and one bar per target");
+  assert.match(document.body.textContent!, /0 of 17 test files complete/);
   assert.match(document.body.textContent!, /250 rows read of 1,000/);
+  assert.deepEqual(JSON.parse(JSON.stringify(messages)), [{ type: "suiteRunReady" }]);
+  const update = structuredClone({ running: true, members }) as SuiteRunProgress;
+  update.members[0].targets[0] = { label: "staging.Dataset1_1", status: "PASS", rows: 1000 };
+  update.members[0].status = "running";
+  dom.window.dispatchEvent(new dom.window.MessageEvent("message", { data: { type: "suiteRunProgress", run: update } }));
+  assert.equal(document.querySelector('[data-run-target="catalog-1:0"] [data-target-phase]')!.textContent, "PASS");
+  assert.equal(document.querySelector('[data-run-member="catalog-1"] [data-member-count]')!.textContent, "1 / 6 targets");
   document.querySelector<HTMLButtonElement>('[data-action="show-results"]')!.click();
-  assert.deepEqual(JSON.parse(JSON.stringify(messages)), [{ type: "show-results" }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(messages)), [{ type: "suiteRunReady" }, { type: "show-results" }]);
   dom.window.close();
 });
 
@@ -74,7 +81,7 @@ test("completed suite runs can rerun only failed test files", () => {
   const button = dom.window.document.querySelector<HTMLButtonElement>('[data-action="failed"]')!;
   assert.match(button.textContent!, /Rerun 1 failed/);
   button.click();
-  assert.deepEqual(JSON.parse(JSON.stringify(messages)), [{ type: "failed" }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(messages)), [{ type: "suiteRunReady" }, { type: "failed" }]);
   dom.window.close();
 });
 

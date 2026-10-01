@@ -558,6 +558,13 @@ if (await page.title() !== "Suite run") throw new Error("Suite run page identity
 if (await page.locator("[data-run-member]").count() !== 4 || await page.locator("[data-run-target]").count() !== 24) throw new Error("Suite run did not render every member and target.");
 if (await page.locator("progress").count() !== 29) throw new Error("Suite rollup, member, and target progress bars are incomplete.");
 if (!(await page.locator('[data-run-target="dataset-2:0"] [data-target-detail]').textContent()).includes("420 groups validated")) throw new Error("Suite target validation progress did not render.");
+const suiteProgressUpdate = structuredClone(suiteRunState.runProgress);
+suiteProgressUpdate.members[0].targets[0] = { label: "reporting.Dataset1_1", status: "PASS", rows: 3750 };
+await page.evaluate(update => window.dispatchEvent(new MessageEvent("message", { data: { type: "suiteRunProgress", run: update } })), suiteProgressUpdate);
+if ((await page.locator('[data-run-target="dataset-1:0"] [data-target-phase]').textContent()) !== "PASS"
+  || (await page.locator('[data-run-member="dataset-1"] [data-member-count]').textContent()) !== "1 / 6 targets") {
+  throw new Error("Suite progress messages did not repaint target and member progress before completion.");
+}
 await page.screenshot({ path: join(qaScreenshotDir, "suite-run-progress.png"), fullPage: true });
 await page.setViewportSize({ width: 600, height: 900 });
 if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)) throw new Error("Suite run has mobile page overflow.");

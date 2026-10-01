@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.20.6
+
+- Open the suite progress screen immediately from the loaded suite snapshot instead of rereading every referenced contract before the run becomes visible.
+- Coalesce live suite progress updates and synchronize once the progress webview is ready, so member and target bars update throughout long runs.
+- Bound concurrent suite files to four by default, configurable with `csvContract.suiteParallelMembers`, while keeping remaining files visibly queued.
+
 ## 0.20.5
 
 - Replace visible numeric health scores with **Clean**, **Limited impact**, **Moderate impact**, and **High impact** categories; keep the numeric heuristic in hover details.

@@ -2,7 +2,7 @@
   "name": "csv-contract-vsce",
   "displayName": "CSV Contract Workbench",
   "description": "Design and run reusable YAML contracts for CSV files and SQL Server tables.",
-  "version": "0.20.5",
+  "version": "0.20.6",
   "publisher": "incursa",
   "license": "Apache-2.0",
   "engines": {
@@ -229,6 +229,13 @@
           "minimum": 0,
           "default": 0,
           "description": "Maximum issue details retained for Workbench runs and exports. Use 0 to retain all details. SQL aggregate rules report counts rather than one detail per matching row."
+        },
+        "csvContract.suiteParallelMembers": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32,
+          "default": 4,
+          "description": "Maximum suite test files executed at the same time. Additional files remain queued on the suite progress screen."
         },
         "csvContract.resultColorMode": {
           "type": "string",

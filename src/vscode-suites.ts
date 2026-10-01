@@ -173,12 +173,24 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
   let mergeMembers: string[] | undefined;
   let runView = false;
   let runProgress: SuiteRunProgress | undefined;
+  let currentSuite: LoadedSuite | undefined;
+  let progressTimer: ReturnType<typeof setTimeout> | undefined;
+  const publishRunProgress = (immediate = false): void => {
+    if (!runProgress || disposed) return;
+    if (immediate) {
+      clearTimeout(progressTimer); progressTimer = undefined;
+      void panel.webview.postMessage({ type: "suiteRunProgress", run: runProgress });
+    } else if (!progressTimer) progressTimer = setTimeout(() => {
+      progressTimer = undefined;
+      if (runProgress && !disposed) void panel.webview.postMessage({ type: "suiteRunProgress", run: runProgress });
+    }, 100);
+  };
   const render = async (): Promise<void> => {
     const version = ++renderVersion;
     const nonce = globalThis.crypto.randomUUID().replaceAll("-", "");
     try {
       const parsed = parseSuite(document.getText());
-      const suite = await loadSuite(document.uri.toString(), vscodeSuiteIO);
+      const suite = currentSuite ?? await loadSuite(document.uri.toString(), vscodeSuiteIO);
       if (disposed || version !== renderVersion) return;
       panel.webview.html = renderSuiteWorkbench({ suite, name: parsed.name, description: parsed.description,
         references: parsed.members.map((m) => m.ref), running, runs: report?.runs, notice, stale, live: scheduler.enabled, watchInputs,
@@ -192,14 +204,13 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
     const lastProgress = new Map<string, number>();
     const memberTarget = (target: Pick<import("./core/suite").SuiteRun, "member">, index: number): SuiteTargetProgress | undefined =>
       runProgress?.members.find(member => member.id === target.member)?.targets[index];
-    const publish = (): void => { if (runProgress) void panel.webview.postMessage({ type: "suiteRunProgress", run: runProgress }); };
     try {
       return await executeLoadedSuite(snapshot.suite, runner, {
         signal, members: snapshot.members, crossExecutor,
         onTargetStart: (identity, index) => {
           const target = memberTarget(identity, index); if (target) target.status = "running";
           const member = runProgress?.members.find(item => item.id === identity.member); if (member) updateMemberProgress(member);
-          publish();
+          publishRunProgress();
         },
         onTargetProgress: (identity, progress, index) => {
           const key = `${identity.member}:${index}`;
@@ -207,14 +218,14 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
           if (progress.phase === "reading" && now - (lastProgress.get(key) ?? 0) < 100) return;
           lastProgress.set(key, now);
           const target = memberTarget(identity, index); if (target) target.progress = { ...target.progress, ...progress };
-          publish();
+          publishRunProgress();
         },
         onProgress: (completed, index) => {
           if (index === undefined) return;
           const target = memberTarget(completed, index);
           if (target) { target.status = completed.status; target.rows = completed.result?.rowCount; target.error = completed.error; }
           const member = runProgress?.members.find(item => item.id === completed.member); if (member) updateMemberProgress(member);
-          publish();
+          publishRunProgress();
         }
       });
     } finally { running = false; if (runProgress) runProgress.running = false; }
@@ -247,10 +258,11 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
         } else updateMemberProgress(member);
       }
     }
+    clearTimeout(progressTimer); progressTimer = undefined;
     consecutiveErrors = result.runs.some(r => r.status === "ERROR") ? consecutiveErrors + 1 : 0;
     if (consecutiveErrors >= 3) { scheduler.pause(); notice += " · Live tests paused after three consecutive execution errors."; }
     void render(); },
-  error => { mergeMembers = undefined; notice = errorDetails(error); stale = true; running = false; if (runProgress) { runProgress.running = false; runProgress.status = "ERROR"; } void render(); });
+  error => { mergeMembers = undefined; notice = errorDetails(error); stale = true; running = false; clearTimeout(progressTimer); progressTimer = undefined; if (runProgress) { runProgress.running = false; runProgress.status = "ERROR"; } void render(); });
   const refresh = async (uri?: vscode.Uri, selection?: string[]): Promise<void> => {
     if (uri && !dependencies.has(uri.toString())) return;
     // Invalidate before asynchronous dependency reads; an old query may finish during those reads.
@@ -274,6 +286,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
         fingerprints.set(member.id, JSON.stringify([member, inputRevisions]));
       }
       if (revision !== refreshGeneration) return;
+      currentSuite = suite;
       dependencies = nextDependencies;
       dependencyWatchers.set(dependencies);
       for (const [id, value] of fingerprints) if (previous.get(id) !== value) affected.add(id);
@@ -290,7 +303,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
       if (affected.size) stale = !!report;
       if (suite.members.some(m => m.error)) { scheduler.change(); notice = "Invalid member definitions; live execution waits for valid edits."; }
       else scheduler.change({ key: JSON.stringify([suite, selection, [...fingerprints]]), value: { suite, members: selection ?? (scheduler.enabled && report ? [...affected] : undefined) } });
-    } catch (error) { if (revision === refreshGeneration) { dependencies = nextDependencies; dependencyWatchers.set(dependencies); scheduler.change(); stale = !!report; notice = errorDetails(error); } }
+    } catch (error) { if (revision === refreshGeneration) { currentSuite = undefined; dependencies = nextDependencies; dependencyWatchers.set(dependencies); scheduler.change(); stale = !!report; notice = errorDetails(error); } }
     await render();
   };
   const dependencyWatchers = new DependencyWatchers(uri => { void refresh(uri); });
@@ -318,7 +331,13 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
             if (!selected?.length) return;
             members = selected;
           }
-          await refresh(undefined, members); scheduler.request();
+          if (!currentSuite) await refresh(undefined, members);
+          if (!currentSuite) throw new Error("The suite has not finished loading.");
+          scheduler.change({ key: JSON.stringify([currentSuite, members, [...previous]]), value: { suite: currentSuite, members } });
+          running = true; runView = true; runProgress = suiteProgressPlan(currentSuite, members); notice = "Starting suite run…";
+          await render();
+          scheduler.request();
+        } else if (message.type === "suiteRunReady") { publishRunProgress(true);
         } else if (message.type === "show-results") { runView = false; await render();
         } else if (message.type === "color-mode") {
           const current = vscode.workspace.getConfiguration("csvContract").get<ResultColorMode>("resultColorMode", "binary");
@@ -397,7 +416,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
         void vscode.window.showErrorMessage(notice);
       }
     })];
-  panel.onDidDispose(() => { disposed = true; scheduler.dispose(); dependencyWatchers.dispose(); subscriptions.forEach((s) => s.dispose()); });
+  panel.onDidDispose(() => { disposed = true; clearTimeout(progressTimer); scheduler.dispose(); dependencyWatchers.dispose(); subscriptions.forEach((s) => s.dispose()); });
   await refresh();
 }
 
@@ -417,6 +436,8 @@ export async function executeVscodeSuite(uri: vscode.Uri, runner?: DesktopSqlSer
   return executeLoadedSuite(suite, runner, { crossExecutor });
 }
 async function executeLoadedSuite(suite: LoadedSuite, runner?: DesktopSqlServerRunner, controls: Parameters<typeof runSuite>[4] = {}) {
+  const configuredConcurrency = vscode.workspace.getConfiguration("csvContract").get<number>("suiteParallelMembers", 4);
+  const parallelMembers = Number.isFinite(configuredConcurrency) ? Math.min(32, Math.max(1, Math.floor(configuredConcurrency))) : 4;
   return runSuite(suite, async (contract, target, source, _index, onProgress) => {
     if (!runner) throw new Error("Database suite execution requires the desktop extension host.");
     return runner(await resolveBaseline(contract, source, vscodeSuiteIO), await resolveTargetBaseline(target, source, vscodeSuiteIO), controls.signal, undefined, onProgress);
@@ -426,7 +447,7 @@ async function executeLoadedSuite(suite: LoadedSuite, runner?: DesktopSqlServerR
     const csv = await readTargetText(resolved);
     onProgress?.({ phase: "validating", bytesRead: csv.length, totalBytes: csv.length });
     return validateCsv(await resolveBaseline(contract, source, vscodeSuiteIO), csv);
-  }, { parallelTargets: Number.MAX_SAFE_INTEGER, ...controls });
+  }, { parallelTargets: Number.MAX_SAFE_INTEGER, parallelMembers, ...controls });
 }
 export async function showSuiteRun(context: vscode.ExtensionContext, uri: vscode.Uri, runner?: DesktopSqlServerRunner, crossExecutor?: CrossExecutor): Promise<void> {
   try {

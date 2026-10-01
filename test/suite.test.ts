@@ -157,6 +157,26 @@ test("suite member files run concurrently by default and keep declaration order"
   assert.equal(maximum, 3);
   assert.deepEqual(report.runs.map(run => run.member), members.map(member => member.id));
 });
+test("large suites honor bounded member concurrency and still run every file", async () => {
+  const definition: CsvContract = { version: 1, schema: { columns: { Id: { presence: "required" } } },
+    sqlServer: { connection: "test", schema: "stage", table: "Dataset" } };
+  const members = Array.from({ length: 17 }, (_, index) => ({
+    id: `dataset-${index + 1}`, source: `dataset-${index + 1}.csvtest.yaml`, contract: definition
+  }));
+  let active = 0;
+  let maximum = 0;
+  const report = await runSuite({ id: "large-suite", source: "large.csvsuite.yaml", isSuite: true, members }, async contract => {
+    active++;
+    maximum = Math.max(maximum, active);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    active--;
+    return validateCsv(contract, "Id\nvalue\n");
+  }, false, undefined, { parallelMembers: 4 });
+  assert.equal(maximum, 4);
+  assert.equal(report.runs.length, 17);
+  assert.deepEqual(report.runs.map(run => run.member), members.map(member => member.id));
+  assert(report.runs.every(run => run.status === "PASS"));
+});
 test("external paths retain meaning after relocation and are reported as nonportable", async (t) => {
   const { root, master } = await fixture(t);
   const c = contract(); c.targets = [{ path: "../data/people.csv" }];
