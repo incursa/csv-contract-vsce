@@ -11,11 +11,13 @@
   ],
   "properties": {
     "crossChecks": {"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","kind","from","to"],"properties":{
-      "id":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]*$"},"kind":{"enum":["foreignKey","equalPopulation","equalTotal","rowReconciliation"]},
+      "id":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]*$"},"kind":{"enum":["foreignKey","equalPopulation","equalTotal","rowReconciliation","relationship"]},
       "tolerance":{"type":"string","pattern":"^(?:0|[1-9]\\d{0,17})(?:\\.\\d{1,10})?$"},
       "valueColumns":{"type":"object","additionalProperties":false,"required":["from","to"],"properties":{"from":{"type":"string"},"to":{"type":"string"}}},
       "valueMappings":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["from","to"],"anyOf":[{"required":["blankTo"]},{"required":["otherwise"]}],"properties":{"from":{"type":"string"},"to":{"type":"string"},"blankTo":{"type":"string"},"otherwise":{"const":"preserve"}}}},
-      "from":{"type":"string"},"to":{"type":"string"},"nulls":{"enum":["ignore","fail"]},"severity":{"enum":["error","warning"]},
+      "from":{"type":"string"},"to":{"type":"string"},"nulls":{"enum":["ignore","fail"]},"severity":{"enum":["error","warning"]},"missing":{"enum":["fail","ignore"]},
+      "lookup":{"type":"object","additionalProperties":false,"required":["orderBy"],"properties":{"orderBy":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["column","type"],"properties":{"column":{"type":"string","minLength":1},"type":{"enum":["date","number","string"]},"direction":{"enum":["asc","desc"]}}}}}},
+      "when":{"$ref":"#/$defs/crossPredicate"},"expect":{"$ref":"#/$defs/crossPredicate"},
       "keys":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["from","to"],"properties":{"from":{"type":"string"},"to":{"type":"string"}}}}
     }}},
     "suiteVersion": {
@@ -84,6 +86,13 @@
     }
   },
   "$defs": {
+    "crossPredicate": {
+      "oneOf": [
+        {"type":"object","additionalProperties":false,"required":["side","column","operator"],"properties":{"side":{"enum":["from","to"]},"column":{"type":"string","minLength":1},"operator":{"enum":["equals","notEquals","in","notIn","isNull","notNull","isBlank","notBlank","equalsColumn","notEqualsColumn","greaterThan","greaterThanOrEqual","lessThan","lessThanOrEqual","dateOnOrAfter","dateOnOrBefore","dateAfter","dateBefore"]},"value":{"type":["string","number"]},"values":{"type":"array","minItems":1,"items":{"type":"string"}},"valueType":{"enum":["string","number"]},"other":{"type":"object","additionalProperties":false,"required":["side","column"],"properties":{"side":{"enum":["from","to"]},"column":{"type":"string","minLength":1}}}}},
+        {"type":"object","additionalProperties":false,"required":["all"],"properties":{"all":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/crossPredicate"}}}},
+        {"type":"object","additionalProperties":false,"required":["any"],"properties":{"any":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/crossPredicate"}}}}
+      ]
+    },
     "connection": {
       "type": "object",
       "additionalProperties": false,

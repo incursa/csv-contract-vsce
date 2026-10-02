@@ -75,6 +75,42 @@ function connectionSettings(value: SuiteConnection, context: string): void {
     if (!value.integratedConnection.server?.trim() || !value.integratedConnection.database?.trim()) throw new Error(`${context}: integratedConnection requires server and database.`);
   }
 }
+const crossPredicateOperators = new Set(["equals", "notEquals", "in", "notIn", "isNull", "notNull", "isBlank", "notBlank", "equalsColumn", "notEqualsColumn",
+  "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual", "dateOnOrAfter", "dateOnOrBefore", "dateAfter", "dateBefore"]);
+function crossPredicate(value: unknown, context: string): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${context}: predicate must be an object.`);
+  const predicate = value as Record<string, unknown>;
+  if ("all" in predicate || "any" in predicate) {
+    keys(predicate, ["all", "any"], context);
+    if (("all" in predicate) === ("any" in predicate)) throw new Error(`${context}: use exactly one of all or any.`);
+    const children = (predicate.all ?? predicate.any) as unknown;
+    if (!Array.isArray(children) || !children.length) throw new Error(`${context}: predicate group cannot be empty.`);
+    children.forEach((child, index) => crossPredicate(child, `${context}[${index}]`));
+    return;
+  }
+  keys(predicate, ["side", "column", "operator", "value", "values", "valueType", "other"], context);
+  if (!(["from", "to"] as unknown[]).includes(predicate.side) || typeof predicate.column !== "string" || !predicate.column || typeof predicate.operator !== "string" || !crossPredicateOperators.has(predicate.operator)) throw new Error(`${context}: invalid predicate side, column, or operator.`);
+  if (predicate.value !== undefined && typeof predicate.value !== "string" && typeof predicate.value !== "number") throw new Error(`${context}: value must be a string or number.`);
+  if (predicate.values !== undefined && (!Array.isArray(predicate.values) || !predicate.values.length || predicate.values.some(item => typeof item !== "string"))) throw new Error(`${context}: values must be a non-empty string array.`);
+  if (predicate.valueType !== undefined && !["string", "number"].includes(String(predicate.valueType))) throw new Error(`${context}: valueType must be string or number.`);
+  if (predicate.valueType === "number" && !["equals", "notEquals", "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual"].includes(String(predicate.operator))) throw new Error(`${context}: numeric valueType requires a numeric comparison operator.`);
+  if (predicate.other !== undefined) {
+    if (!predicate.other || typeof predicate.other !== "object" || Array.isArray(predicate.other)) throw new Error(`${context}: other must identify a side and column.`);
+    const other = predicate.other as Record<string, unknown>;
+    keys(other, ["side", "column"], `${context}.other`);
+    if (!(["from", "to"] as unknown[]).includes(other.side) || typeof other.column !== "string" || !other.column) throw new Error(`${context}: other must identify a side and column.`);
+  }
+  const operator = predicate.operator;
+  const noOperand = ["isNull", "notNull", "isBlank", "notBlank"].includes(operator);
+  const valuesOperand = ["in", "notIn"].includes(operator);
+  const columnOperand = ["equalsColumn", "notEqualsColumn"].includes(operator);
+  if (noOperand && (predicate.value !== undefined || predicate.values !== undefined || predicate.other !== undefined) ||
+      valuesOperand && (predicate.values === undefined || predicate.value !== undefined || predicate.other !== undefined) ||
+      columnOperand && (predicate.other === undefined || predicate.value !== undefined || predicate.values !== undefined) ||
+      !noOperand && !valuesOperand && !columnOperand && (Number(predicate.value !== undefined) + Number(predicate.other !== undefined) !== 1 || predicate.values !== undefined)) {
+    throw new Error(`${context}: operator operands are invalid or ambiguous.`);
+  }
+}
 export function parseSuite(text: string): ContractSuite {
   const suite = yamlDocument(text).toJS({ maxAliasCount: 100 }) as ContractSuite;
   if (!suite || suite.suiteVersion !== 1 || typeof suite.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(suite.id)) throw new Error("Suite requires suiteVersion: 1 and a non-empty id using letters, numbers, dots, underscores or hyphens.");
@@ -93,15 +129,25 @@ export function parseSuite(text: string): ContractSuite {
   const checks = new Set<string>();
   if (suite.crossChecks !== undefined && !Array.isArray(suite.crossChecks)) throw new Error("crossChecks must be an array.");
   for (const check of suite.crossChecks ?? []) {
-    if (!check || !/^[a-z0-9][a-z0-9._-]*$/.test(check.id) || checks.has(check.id) || !ids.has(check.from) || !ids.has(check.to) || !["foreignKey", "equalPopulation", "equalTotal", "rowReconciliation"].includes(check.kind)) throw new Error("Invalid cross-check identity, kind or member dependency.");
-    keys(check, ["id", "kind", "from", "to", "keys", "valueColumns", "valueMappings", "tolerance", "nulls", "severity"], `Cross-check ${check.id}`);
+    if (!check || !/^[a-z0-9][a-z0-9._-]*$/.test(check.id) || checks.has(check.id) || !ids.has(check.from) || !ids.has(check.to) || !["foreignKey", "equalPopulation", "equalTotal", "rowReconciliation", "relationship"].includes(check.kind)) throw new Error("Invalid cross-check identity, kind or member dependency.");
+    keys(check, ["id", "kind", "from", "to", "keys", "valueColumns", "valueMappings", "tolerance", "nulls", "severity", "lookup", "when", "expect", "missing"], `Cross-check ${check.id}`);
     if (check.keys !== undefined && (!Array.isArray(check.keys) || !check.keys.length || check.keys.some(k => !k || typeof k.from !== "string" || typeof k.to !== "string" || Object.keys(k).some(p => !["from", "to"].includes(p))))) throw new Error("Invalid cross-check key mappings.");
     if (check.valueColumns !== undefined && (!check.valueColumns || typeof check.valueColumns.from !== "string" || typeof check.valueColumns.to !== "string" || Object.keys(check.valueColumns).some(p => !["from", "to"].includes(p)))) throw new Error("Invalid total value columns.");
     if (check.valueMappings !== undefined && (!Array.isArray(check.valueMappings) || !check.valueMappings.length || check.valueMappings.some(mapping => !mapping || typeof mapping.from !== "string" || typeof mapping.to !== "string" || mapping.blankTo !== undefined && typeof mapping.blankTo !== "string" || mapping.otherwise !== undefined && mapping.otherwise !== "preserve" || mapping.blankTo === undefined && mapping.otherwise === undefined || Object.keys(mapping).some(p => !["from", "to", "blankTo", "otherwise"].includes(p))))) throw new Error("Invalid reconciliation value mappings.");
     if (check.tolerance !== undefined && (typeof check.tolerance !== "string" || !/^(?:0|[1-9]\d{0,17})(?:\.\d{1,10})?$/.test(check.tolerance))) throw new Error("Invalid total tolerance.");
-    if (check.kind === "foreignKey" && !check.keys?.length || check.kind === "equalTotal" && !check.valueColumns || check.kind === "rowReconciliation" && (!check.keys?.length || !check.valueMappings?.length)) throw new Error("Cross-check requires keys, total value columns, or reconciliation value mappings.");
+    if (check.kind === "foreignKey" && !check.keys?.length || check.kind === "equalTotal" && !check.valueColumns || check.kind === "rowReconciliation" && (!check.keys?.length || !check.valueMappings?.length) || check.kind === "relationship" && (!check.keys?.length || !check.lookup?.orderBy?.length || !check.expect)) throw new Error("Cross-check requires keys, total value columns, reconciliation mappings, or a relationship lookup and expectation.");
     if (check.nulls !== undefined && !["ignore", "fail"].includes(check.nulls)) throw new Error("Invalid cross-check null policy.");
     if (check.severity !== undefined && !["warning", "error"].includes(check.severity)) throw new Error("Invalid cross-check severity.");
+    if (check.missing !== undefined && !["fail", "ignore"].includes(check.missing)) throw new Error("Invalid relationship missing-row policy.");
+    if (check.kind !== "relationship" && (check.lookup !== undefined || check.when !== undefined || check.expect !== undefined || check.missing !== undefined)) throw new Error("lookup, when, expect, and missing are only valid for relationship cross-checks.");
+    if (check.kind === "relationship" && (check.valueColumns !== undefined || check.valueMappings !== undefined || check.tolerance !== undefined)) throw new Error("Relationship cross-checks cannot declare total or reconciliation fields.");
+    if (check.lookup !== undefined) {
+      if (!check.lookup || typeof check.lookup !== "object") throw new Error("Invalid relationship lookup.");
+      keys(check.lookup, ["orderBy"], `Cross-check ${check.id} lookup`);
+      if (!Array.isArray(check.lookup.orderBy) || !check.lookup.orderBy.length || check.lookup.orderBy.some(order => !order || typeof order.column !== "string" || !order.column || !["date", "number", "string"].includes(order.type) || order.direction !== undefined && !["asc", "desc"].includes(order.direction) || Object.keys(order).some(key => !["column", "type", "direction"].includes(key)))) throw new Error("Invalid relationship lookup ordering.");
+    }
+    if (check.when !== undefined) crossPredicate(check.when, `Cross-check ${check.id} when`);
+    if (check.expect !== undefined) crossPredicate(check.expect, `Cross-check ${check.id} expect`);
     checks.add(check.id);
   }
   return suite;
@@ -326,6 +372,7 @@ export function generateSuiteSql(suite: LoadedSuite) {
   });
   for (const check of suite.crossChecks ?? []) {
     const plan = planCrossCheck(check, suite.members);
+    if (plan.mode !== "sql") throw new Error(`Standalone SQL generation cannot include CSV cross-check ${check.id}; run the suite instead.`);
     const parameters = [plan.from, plan.to].flatMap(target => target.scope ? [`DECLARE @${target.scope.parameter} nvarchar(max) = NULL; -- Set this participant's runtime scope value.\nIF @${target.scope.parameter} IS NULL THROW 50001, 'Set @${target.scope.parameter} before running this cross-check.', 1;`] : []).join("\n");
     batches.push({ member: `cross:${check.id}`, table: `${check.from} → ${check.to}`, connection: plan.from.connection, integratedConnection: plan.from.integratedConnection,
       sql: parameters ? `${parameters}\n${plan.sql}` : plan.sql, ruleCount: 1, warnings: [], rules: [{ id: check.id, name: check.id, severity: check.severity ?? "error", code: "CROSS_CHECK_FAILED" }] });

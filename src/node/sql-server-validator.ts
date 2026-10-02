@@ -1,7 +1,7 @@
 import { errorDetails } from "../core/error-details";
 import { resolveEvaluation } from "../core/evaluation";
 import { validatePreviewOptions, type PreviewOptions } from "../core/preview";
-import { crossResult, type CrossPlan } from "../core/cross-checks";
+import { crossResult, type SqlCrossPlan } from "../core/cross-checks";
 import { baselineIssues, type BaselineColumn, type SchemaBaseline } from "../core/baseline";
 import sql from "mssql";
 import { assertCompleteSqlSummaries } from "../core/sql-server-results";
@@ -123,7 +123,7 @@ function runtimeInteger(name: string, fallback: number, maximum: number): number
 }
 
 export class SqlServerValidationSession {
-  public async validateCross(plan: CrossPlan, signal?: AbortSignal): Promise<ValidationResult> {
+  public async validateCross(plan: SqlCrossPlan, signal?: AbortSignal): Promise<ValidationResult> {
     const fromValue = resolveScopeValue(plan.from), toValue = resolveScopeValue(plan.to);
     const handle = await this.getPool(plan.from.connection, plan.from.integratedConnection);
     const request = handle.pool.request();

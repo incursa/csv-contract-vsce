@@ -1,6 +1,6 @@
 import { LiveTests } from "./core/live-tests";
 import { DependencyWatchers } from "./vscode-dependencies";
-import type { CrossExecutor } from "./core/cross-checks";
+import { evaluateCsvCrossCheck, type CrossExecutor } from "./core/cross-checks";
 import { manageHistory } from "./vscode-history";
 import { contractPath, readEditorContract, ruleOffset } from "./core/editor-document";
 import type { LoadedSuite } from "./core/suite";
@@ -12,7 +12,7 @@ import type { DesktopSqlServerRunner } from "./extension";
 import { renderWorkspaceReportHtml } from "./workspace-report";
 import { configuredTargets, readTargetText } from "./vscode-targets";
 import { resolveSqlServerTargets } from "./core/sql-server-targets";
-import { validateCsv } from "./core/contract";
+import { parseCsv, validateCsv } from "./core/contract";
 import { renderSuiteWorkbench, type SuiteMemberProgress, type SuiteRunProgress, type SuiteTargetProgress } from "./suite-workbench";
 import { suiteErrorsCsv, updateSuiteConnection } from "./suite-actions";
 import { filterResultRuns } from "./results-view";
@@ -438,6 +438,20 @@ export async function executeVscodeSuite(uri: vscode.Uri, runner?: DesktopSqlSer
 async function executeLoadedSuite(suite: LoadedSuite, runner?: DesktopSqlServerRunner, controls: Parameters<typeof runSuite>[4] = {}) {
   const configuredConcurrency = vscode.workspace.getConfiguration("csvContract").get<number>("suiteParallelMembers", 4);
   const parallelMembers = Number.isFinite(configuredConcurrency) ? Math.min(32, Math.max(1, Math.floor(configuredConcurrency))) : 4;
+  const executeCross: CrossExecutor = async (plan, signal) => {
+    signal?.throwIfAborted();
+    if (plan.mode === "sql") {
+      if (!controls.crossExecutor) throw new Error("SQL cross-table execution is unavailable in this host.");
+      return controls.crossExecutor(plan, signal);
+    }
+    const read = async (participant: typeof plan.from) => {
+      const resolved = configuredTargets(vscode.Uri.parse(participant.source), { ...participant.contract, targets: [participant.target] })[0];
+      return parseCsv(await readTargetText(resolved), participant.contract.csv);
+    };
+    const [from, to] = await Promise.all([read(plan.from), read(plan.to)]);
+    signal?.throwIfAborted();
+    return evaluateCsvCrossCheck(plan, from, to);
+  };
   return runSuite(suite, async (contract, target, source, _index, onProgress) => {
     if (!runner) throw new Error("Database suite execution requires the desktop extension host.");
     return runner(await resolveBaseline(contract, source, vscodeSuiteIO), await resolveTargetBaseline(target, source, vscodeSuiteIO), controls.signal, undefined, onProgress);
@@ -447,7 +461,7 @@ async function executeLoadedSuite(suite: LoadedSuite, runner?: DesktopSqlServerR
     const csv = await readTargetText(resolved);
     onProgress?.({ phase: "validating", bytesRead: csv.length, totalBytes: csv.length });
     return validateCsv(await resolveBaseline(contract, source, vscodeSuiteIO), csv);
-  }, { parallelTargets: Number.MAX_SAFE_INTEGER, parallelMembers, ...controls });
+  }, { parallelTargets: Number.MAX_SAFE_INTEGER, parallelMembers, ...controls, crossExecutor: executeCross });
 }
 export async function showSuiteRun(context: vscode.ExtensionContext, uri: vscode.Uri, runner?: DesktopSqlServerRunner, crossExecutor?: CrossExecutor): Promise<void> {
   try {

@@ -3,14 +3,14 @@ import { join } from "node:path";
 import type { CsvContract, ValidationResult } from "../core/model";
 import type { SchemaBaseline } from "../core/baseline";
 import type { ResolvedSqlServerTarget } from "../core/sql-server-targets";
-import type { CrossPlan } from "../core/cross-checks";
+import type { SqlCrossPlan } from "../core/cross-checks";
 import type { SqlServerValidationOptions } from "./sql-server-validator";
 import type { ValidationProgress } from "../core/run-progress";
 
 export type SqlWorkerOperation =
   | { kind: "validate"; contract: CsvContract; target: ResolvedSqlServerTarget; options: Omit<SqlServerValidationOptions, "signal" | "onProgress"> }
   | { kind: "schema"; target: ResolvedSqlServerTarget }
-  | { kind: "cross"; plan: CrossPlan };
+  | { kind: "cross"; plan: SqlCrossPlan };
 export interface SqlWorkerReply { ok: boolean; result?: ValidationResult | SchemaBaseline; error?: string }
 export interface SqlWorkerProgress { kind: "progress"; progress: ValidationProgress }
 

@@ -212,16 +212,40 @@ crossChecks:
     valueMappings:
       - {from: TRI, to: TRI, blankTo: PX0000, otherwise: preserve}
     nulls: fail
+  - id: latest-category-amount
+    kind: relationship
+    from: payments
+    to: classifications
+    keys: [{from: RecordId, to: RecordId}]
+    lookup:
+      orderBy:
+        - {column: ChangedAt, type: date, direction: desc}
+        - {column: Sequence, type: number, direction: desc}
+    when: {side: to, column: Category, operator: equals, value: Special}
+    expect: {side: from, column: Amount, operator: equals, value: 1, valueType: number}
+    missing: fail
+    nulls: fail
 ```
 
-Each participating member must resolve to exactly one SQL object on the
-same connection/database. Foreign-key equality uses SQL's native typed equality
+Each participating member must resolve to exactly one enabled source: either both
+members have one CSV target, or both have one SQL object on the same
+connection/database. Mixed CSV/SQL pairs and multiple enabled targets are rejected
+as ambiguous. Foreign-key equality uses the source's native equality
 and collation; `nulls: ignore` excludes rows with any SQL-null source key and
 `nulls: fail` fails them. CSV normalization markers do not redefine native SQL
 NULL for these relational checks. Canonical key names use each target's column map.
 Equal population compares `COUNT_BIG` totals. Queries are read-only aggregates
 and retrieve no employee/example records. Each scoped participant binds its own `scope.valueEnvironment` to an independent query parameter. Missing runtime values fail before connecting; values are never written into reports or generated SQL. Cross-connection comparisons are rejected. Generated scripts declare separate required parameters for both sides. Selective/live changes to either participant invalidate
 the cross-check. The Workbench, CLI dbtest and SQL generation share the same plan.
+
+`relationship` joins `from` rows to `to` rows by declared keys, then selects one
+lookup row using the complete `lookup.orderBy` list. Include enough ordering fields
+to break ties deterministically. Predicates identify their `from` or `to` side and
+may compare with a literal or an `other: {side, column}` value. Numeric and date
+comparisons are typed; arbitrary SQL is not accepted. `when` limits where the
+expectation applies, `expect` defines the required relationship, `missing` controls
+unmatched source rows, and `nulls` controls blank/null source keys. CSV and SQL use
+the same YAML. Results contain only a failure count and never matching row values.
 
 `rowReconciliation` joins source (`from`) to output (`to`) by the declared keys.
 Every source row must have a matching output row. Each value mapping can require a
@@ -276,7 +300,7 @@ Current boundaries:
 - Linked templates remain an optional future design; inserted rules are independent.
 - In-flight pool acquisition and synchronous CSV work cannot be interrupted. Completion is discarded when stale.
 - CSV targets share their contract baseline; heterogeneous schemas belong in independent suite members. SQL targets support baseline overrides.
-- SQL cross-checks require one target per participant on the same connection. Scopes require environment values.
+- Cross-checks require one target per participant. SQL pairs must share a connection; CSV/SQL pairs are not supported. SQL scopes require environment values.
 - Unique-key metadata records index names and ordinals, not foreign-key definitions or filtered-index expressions. Type/key impact still requires review.
 
 Remote database verification remains separately unperformed because it requires the owner's approval.

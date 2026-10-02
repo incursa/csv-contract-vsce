@@ -132,7 +132,8 @@ node ./dist/cli/csv-contract.cjs dbtest --spec ./hcm.portable.csvsuite.yaml --fa
 node ./dist/cli/csv-contract.cjs sql --spec ./hcm.csvsuite.yaml --out ./hcm.sql
 ```
 
-`dbtest` applies each member's schema/rules to its database targets. A single
+`dbtest` applies each member's schema/rules to its configured SQL Server or CSV
+targets and evaluates suite cross-checks after both participants finish. A single
 in-process session reuses connection pools across members. Collect-all is the
 default: failed assertions and member execution errors do not prevent subsequent
 members from running. `--fail-fast` stops after the first failure/error within

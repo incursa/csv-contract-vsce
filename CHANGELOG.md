@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.21.0
+
+- Add generic suite-level `relationship` checks with deterministic ordered lookups and side-qualified predicates.
+- Use the same relationship YAML for two CSV files or two SQL Server tables, while rejecting mixed and ambiguous source combinations explicitly.
+- Keep cross-source results aggregate-only and support typed numeric and date comparisons without embedding client-specific SQL or schema assumptions.
+
 ## 0.20.6
 
 - Open the suite progress screen immediately from the loaded suite snapshot instead of rereading every referenced contract before the run becomes visible.

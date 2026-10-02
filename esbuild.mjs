@@ -70,6 +70,7 @@ const builds = [
     ...shared,
     entryPoints: [
       "test/core.test.ts",
+      "test/cross-relationship.test.ts",
       "test/validator-roadmap.test.ts",
       "test/sql-session.test.ts",
       "test/sql-lifecycle.test.ts",
