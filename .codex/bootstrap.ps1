@@ -18,6 +18,8 @@ if ([string]::IsNullOrWhiteSpace($workerEntry)) { throw "Worker user '$WorkerUse
 $workerHome = $workerEntry.Split(':')[5]
 $workerPath = "$workerHome/.local/bin:$workerHome/bin:/usr/local/bin:/usr/bin:/bin"
 $playwrightPath = [string]$config.dependencies.playwright.browserPath
+$env:PLAYWRIGHT_BROWSERS_PATH = $playwrightPath
+$env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '1'
 
 function Invoke-Checked {
     param(
@@ -34,7 +36,7 @@ function Invoke-Checked {
     if ($AsWorker -and $currentUser -ne $WorkerUser) {
         if ((& id -u | Out-String).Trim() -ne '0') { throw "Root is required to run commands as '$WorkerUser'." }
         $command = 'runuser'
-        $commandArguments = @('-u', $WorkerUser, '--', 'env', "HOME=$workerHome", "PATH=$workerPath", "PLAYWRIGHT_BROWSERS_PATH=$playwrightPath", $File) + $Arguments
+        $commandArguments = @('-u', $WorkerUser, '--', 'env', "HOME=$workerHome", "PATH=$workerPath", "PLAYWRIGHT_BROWSERS_PATH=$playwrightPath", 'PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1', $File) + $Arguments
     }
     elseif ($AsRoot -and ((& id -u | Out-String).Trim() -ne '0')) {
         if (-not (Get-Command sudo -ErrorAction SilentlyContinue)) { throw 'Root privileges are required.' }
@@ -112,7 +114,7 @@ if (-not $VerifyOnly) {
     Invoke-Checked apt-get (@('install', '-y', '--no-install-recommends') + @($config.dependencies.aptPackages)) -AsRoot
     if ((Get-NodeMajor) -lt [int]$config.dependencies.node.minimumMajorVersion) { Install-Node22 }
     Invoke-Checked npm @('ci') -AsWorker
-    Invoke-Checked env @("PLAYWRIGHT_BROWSERS_PATH=$playwrightPath", 'npx', 'playwright', 'install', '--with-deps', [string]$config.dependencies.playwright.browser) -AsRoot
+    Invoke-Checked env @('-u', 'PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD', "PLAYWRIGHT_BROWSERS_PATH=$playwrightPath", 'npx', 'playwright', 'install', '--with-deps', [string]$config.dependencies.playwright.browser) -AsRoot
     Invoke-Checked chmod @('-R', 'a+rX', $playwrightPath) -AsRoot
 
     $codexInstalled = Test-WorkerCommand 'codex'
