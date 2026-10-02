@@ -108,21 +108,21 @@ function countIssues(
   expectation: CountExpectation | undefined,
   level: "file" | "row",
   testId?: string,
-  presentation?: { id: string; name?: string; message?: string }
+  presentation?: { id: string; name?: string; message?: string; importance?: number }
 ): ValidationIssue[] {
   if (!expectation) return [];
   const issues: ValidationIssue[] = [];
   if (expectation.exact !== undefined && actual !== expectation.exact) {
     const diagnostic = `${name} is ${actual}; expected exactly ${expectation.exact}.`;
-    issues.push({ level, code: `${name.toUpperCase()}_EXACT`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.exact, testId });
+    issues.push({ level, code: `${name.toUpperCase()}_EXACT`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.exact, testId, ...(presentation?.importance === undefined ? {} : { importance: presentation.importance }) });
   }
   if (expectation.min !== undefined && actual < expectation.min) {
     const diagnostic = `${name} is ${actual}; expected at least ${expectation.min}.`;
-    issues.push({ level, code: `${name.toUpperCase()}_MIN`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.min, testId });
+    issues.push({ level, code: `${name.toUpperCase()}_MIN`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.min, testId, ...(presentation?.importance === undefined ? {} : { importance: presentation.importance }) });
   }
   if (expectation.max !== undefined && actual > expectation.max) {
     const diagnostic = `${name} is ${actual}; expected at most ${expectation.max}.`;
-    issues.push({ level, code: `${name.toUpperCase()}_MAX`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.max, testId });
+    issues.push({ level, code: `${name.toUpperCase()}_MAX`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.max, testId, ...(presentation?.importance === undefined ? {} : { importance: presentation.importance }) });
   }
   return issues;
 }
@@ -273,7 +273,7 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
         const actual = match.row[headerIndex.get(column)!] ?? "";
         if (normalized(actual, options) !== normalized(expectation.equals, options)) {
           const diagnostic = `Test "${test.name ?? test.id}" expected "${column}" to equal "${expectation.equals}", found "${actual}".`;
-          issues.push({ level: "cell", code: "CELL_NOT_EQUAL", ...rulePresentation(test, diagnostic), column, row: parsed.sourceRowNumbers[match.index], testId: test.id, actual, expected: expectation.equals });
+          issues.push({ level: "cell", code: "CELL_NOT_EQUAL", ...rulePresentation(test, diagnostic), column, row: parsed.sourceRowNumbers[match.index], testId: test.id, actual, expected: expectation.equals, ...(test.importance === undefined ? {} : { importance: test.importance }) });
         }
       }
     }
@@ -319,7 +319,7 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
         ...rulePresentation(rule, diagnostic),
         row: parsed.sourceRowNumbers[rowIndex],
         testId: rule.id,
-        severity: rule.severity ?? "error"
+        severity: rule.severity ?? "error", ...(rule.importance === undefined ? {} : { importance: rule.importance })
       });
     });
   }
@@ -371,7 +371,7 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
           group: groupValues,
           testId: rule.id,
           expected: missing,
-          severity: rule.severity ?? "error"
+          severity: rule.severity ?? "error", ...(rule.importance === undefined ? {} : { importance: rule.importance })
         });
       }
     }

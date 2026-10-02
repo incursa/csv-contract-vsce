@@ -32,7 +32,7 @@ export function validateOrderedDefinition(rule: OrderedRule, declared: Set<strin
     ids.add(check.id);
   }
   const strictKeys = (check: OrderedCheck, extra: string[] = []): void => {
-    const unknown = Object.keys(check).filter(key => !["id", "message", ...extra].includes(key));
+    const unknown = Object.keys(check).filter(key => !["id", "message", "importance", ...extra].includes(key));
     if (unknown.length) throw new Error(`Ordered check ${check.id} has unknown fields ${unknown.join(", ")}. Quote YAML messages that contain commas.`);
   };
   if (rule.duplicateOrder) strictKeys(rule.duplicateOrder);
@@ -136,7 +136,7 @@ export class OrderedRuleEvaluator {
     outcome.failed++;
     this.issue({ level: "row", code: "ORDERED_RULE_FAILED", testId: check.id, row: row.row, relatedRows,
       actual: JSON.stringify(Object.fromEntries(orderedColumns(this.rule).map(c => [c, row.values[c] ?? ""]))).slice(0, 240),
-      message: `${check.message}${detail ? ` ${detail}` : ""}` });
+      message: `${check.message}${detail ? ` ${detail}` : ""}`, ...(check.importance === undefined ? {} : { importance: check.importance }) });
   }
 
   private eventFor(row: OrderedRow): string | undefined {

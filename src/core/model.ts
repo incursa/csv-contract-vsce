@@ -43,6 +43,7 @@ export interface RowTest {
   name?: string;
   /** User-facing explanation shown when this test fails. */
   message?: string;
+  importance?: number;
   select: Record<string, string>;
   expect: RowExpectation;
 }
@@ -116,6 +117,7 @@ export interface ConditionalRule {
   /** User-facing explanation shown when this rule fails. */
   message?: string;
   severity?: RuleSeverity;
+  importance?: number;
   when?: Predicate;
   expect: Predicate;
 }
@@ -132,6 +134,7 @@ export interface GroupRule {
   /** User-facing explanation shown when this rule fails. */
   message?: string;
   severity?: RuleSeverity;
+  importance?: number;
   when?: Predicate;
   groupBy: string[];
   require: GroupValueRequirement;
@@ -140,6 +143,7 @@ export interface GroupRule {
 export interface OrderedCheck {
   id: string;
   message: string;
+  importance?: number;
 }
 
 export interface OrderedRelation extends OrderedCheck {
@@ -340,13 +344,14 @@ export interface ValidationIssue {
   actual?: string | number;
   expected?: string | number;
   severity?: RuleSeverity;
+  importance?: number;
 }
 
 export interface ValidationResult {
   preview?: { scope: "sample" | "complete"; rowLimit?: number; exampleLimit: number };
   examples?: { id: string; outcome: "passed" | "failed"; row: number; values: Record<string, string> }[];
   evaluatedAt?: string;
-  ruleOutcomes?: { id: string; name?: string; selected: number; passed: number; failed: number }[];
+  ruleOutcomes?: { id: string; name?: string; selected: number; passed: number; failed: number; importance?: number }[];
   groupOutcomes?: { id: string; name?: string; groups: number; passed: number; failed: number }[];
   valid: boolean;
   rowCount: number;
