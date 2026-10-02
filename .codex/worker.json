@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "name": "csv-contract-vsce",
+  "platform": {
+    "os": "debian",
+    "majorVersion": 13
+  },
+  "workingDirectory": ".",
+  "dependencies": {
+    "aptPackages": [
+      "ca-certificates",
+      "curl",
+      "git"
+    ],
+    "node": {
+      "minimumMajorVersion": 22
+    },
+    "powershell": {
+      "minimumMajorVersion": 7
+    },
+    "playwright": {
+      "browser": "chromium",
+      "browserPath": "/opt/ms-playwright"
+    },
+    "codexCli": {
+      "install": true,
+      "updateOnBootstrap": true
+    },
+    "requiredCommands": [
+      {
+        "file": "node",
+        "versionArgs": ["--version"]
+      },
+      {
+        "file": "npm",
+        "versionArgs": ["--version"]
+      },
+      {
+        "file": "pwsh",
+        "versionArgs": ["-NoLogo", "-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"]
+      },
+      {
+        "file": "git",
+        "versionArgs": ["--version"]
+      },
+      {
+        "file": "codex",
+        "versionArgs": ["--version"]
+      }
+    ]
+  },
+  "commands": {
+    "bootstrap": [
+      {
+        "file": "npm",
+        "args": ["ci"]
+      }
+    ],
+    "test": [
+      {
+        "file": "npm",
+        "args": ["run", "test:all"]
+      }
+    ]
+  },
+  "environment": {
+    "PLAYWRIGHT_BROWSERS_PATH": "/opt/ms-playwright"
+  },
+  "readiness": {
+    "codexAuthenticationRequired": true,
+    "sqlServerIntegrationScope": "Live SQL Server validation requires separately supplied non-production connection configuration."
+  }
+}
