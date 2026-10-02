@@ -87,7 +87,8 @@ const builds = [
       "test/semantic-comparison.test.ts",
       "test/comparison-definition.test.ts",
       "test/sql-server-generator.test.ts",
-      "test/sql-schema-import.test.ts"
+      "test/sql-schema-import.test.ts",
+      "test/result-health.test.ts"
     ],
     outdir: "dist/test",
     entryNames: "[name]",

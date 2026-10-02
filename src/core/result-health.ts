@@ -45,9 +45,14 @@ export function resultHealth(result?: ValidationResult, status?: string, mode: R
   for (const outcome of result.groupOutcomes ?? []) if (outcome.failed > 0 && !warningChecks.has(outcome.id)) errorChecks.add(outcome.id);
   for (const id of errorChecks) warningChecks.delete(id);
 
-  const weightedChecks = Math.max(result.errorCount > 0 ? 1 : 0, errorChecks.size) + warningChecks.size * 0.25;
+  const importanceFor = (id: string): number => {
+    const weights = result.issues.filter(issue => (issue.testId ?? issue.code) === id).map(issue => issue.importance ?? 1);
+    return weights.length ? Math.max(...weights) : 1;
+  };
+  const weightedChecks = [...errorChecks].reduce((total, id) => total + importanceFor(id), 0) +
+    [...warningChecks].reduce((total, id) => total + importanceFor(id) * 0.25, 0);
   const checkRate = Math.min(1, weightedChecks / Math.max(1, result.testCount, errorChecks.size + warningChecks.size));
-  const weightedEvents = result.errorCount + result.warningCount * 0.25;
+  const weightedEvents = result.issues.reduce((total, issue) => total + (issue.importance ?? 1) * (issue.severity === "warning" ? 0.25 : 1), 0);
   const eventRate = Math.min(1, weightedEvents / Math.max(1, result.rowCount, result.issueCount));
   const impact = 0.65 * Math.sqrt(checkRate) + 0.35 * Math.sqrt(eventRate);
   const score = Math.max(0, Math.min(85, Math.round(100 * (1 - impact))));

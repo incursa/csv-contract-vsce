@@ -28,3 +28,17 @@ test("graded health distinguishes warnings, widespread failures, and execution e
   assert.deepEqual(resultHealth(undefined, "ERROR", "graded"), { score: 0, band: "critical", label: "ERROR" });
   assert.equal(aggregateResultHealth([{ result: result() }, { result: widespreadResult }], "binary").score, 0);
 });
+
+test("importance changes graded impact without changing validation semantics", () => {
+  const issue = (testId: string, importance?: number) => ({
+    level: "row" as const, code: "RULE_FAILED", testId, message: "failed", ...(importance === undefined ? {} : { importance })
+  });
+  const minor = result({ valid: false, issueCount: 1, errorCount: 1, issues: [issue("email-lowercase", 0.25)] });
+  const major = result({ valid: false, issueCount: 1, errorCount: 1, issues: [issue("required-email", 1)] });
+  assert.equal(minor.valid, major.valid);
+  assert.ok(resultHealth(minor, "FAIL", "graded").score > resultHealth(major, "FAIL", "graded").score);
+  assert.equal(resultHealth(result({ valid: false, issueCount: 1, errorCount: 1, issues: [issue("default-weight")] }), "FAIL", "graded").score,
+    resultHealth(major, "FAIL", "graded").score);
+  const combined = result({ valid: false, issueCount: 2, errorCount: 2, issues: [issue("email-lowercase", 0.25), issue("required-email", 1)] });
+  assert.ok(resultHealth(combined, "FAIL", "graded").score < resultHealth(minor, "FAIL", "graded").score);
+});
