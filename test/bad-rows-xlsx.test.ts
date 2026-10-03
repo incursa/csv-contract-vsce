@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { strFromU8, unzipSync } from "fflate";
-import { badRowsXlsx, contractCheckCatalog } from "../src/bad-rows-xlsx";
+import { badRowsXlsx, badRowsXlsxAsync, contractCheckCatalog, estimateBadRowsWorkbook } from "../src/bad-rows-xlsx";
 import type { CsvContract, ValidationResult } from "../src/core/model";
 
 const contract: CsvContract = {
@@ -98,4 +98,27 @@ test("validation package maps aggregate count findings to the configured rule", 
   assert.equal((rules.match(/row-count-min/g) ?? []).length, 1);
   assert.match(rules, /FAILED/);
   assert.match(aggregate, /row-count-min/);
+});
+
+test("validation package shards rows and columns deterministically with repeated identity columns", () => {
+  const files = unzipSync(badRowsXlsx([{ member: "wide-test", target: "source.csv", status: "FAIL", result }], {
+    title: "Sharded package", maxRowsPerSheet: 30, maxColumnsPerSheet: 13,
+    checkIds: () => Array.from({ length: 20 }, (_, index) => `check-${index}`)
+  }));
+  const workbook = strFromU8(files["xl/workbook.xml"]);
+  const sheetNames = [...workbook.matchAll(/<sheet name="([^"]+)"/g)].map(match => match[1]);
+  assert.ok(sheetNames.some(name => name.includes(" 1")));
+  const sheetXml = Object.entries(files).filter(([name]) => name.startsWith("xl/worksheets/sheet") && name.endsWith(".xml"))
+    .map(([, bytes]) => strFromU8(bytes)).join("\n");
+  assert.ok((sheetXml.match(/Test files/g) ?? []).length >= 2, "each shard repeats identity headers");
+  assert.ok((sheetXml.match(/Source row/g) ?? []).length >= 2, "each shard repeats source-row identity");
+});
+
+test("validation package exposes a preflight estimate and honors cancellation", async () => {
+  const controller = new AbortController();
+  const estimate = estimateBadRowsWorkbook([{ target: "source.csv", result }], { title: "Estimate" });
+  assert.equal(estimate.runs, 1);
+  assert.ok(estimate.estimatedBytes > 0);
+  controller.abort();
+  await assert.rejects(() => badRowsXlsxAsync([{ target: "source.csv", result }], { title: "Canceled", signal: controller.signal }), /canceled/i);
 });

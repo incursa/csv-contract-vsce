@@ -36,7 +36,7 @@ import { mergeImportedSchema, parseSqlSchemaSource, type ImportedSqlTable } from
 import { hasSqlServerConnection, resolveSqlServerTargets, sqlServerTargetLabel, type ResolvedSqlServerTarget } from "./core/sql-server-targets";
 import { suggestSqlColumnMappings } from "./core/sql-server-column-mapping";
 import { issueRunsToCsv, parseValidationRunExport, validationRunExportJson } from "./issue-export";
-import { badRowsXlsx, contractCheckCatalog } from "./bad-rows-xlsx";
+import { badRowsXlsxAsync, contractCheckCatalog } from "./bad-rows-xlsx";
 
 const viewType = "csv-contract-vsce.contractEditor";
 
@@ -56,6 +56,16 @@ export type DesktopSqlServerBrowser = (profile: string) => Promise<SqlServerObje
 const sqlConnectionProfilesKey = "csvContract.sqlServer.connectionProfiles";
 const sqlConnectionSecretPrefix = "csvContract.sqlServer.connection.";
 export const sqlConnectionSecretKey = (profile: string): string => `${sqlConnectionSecretPrefix}${profile}`;
+
+async function writeExportAtomically(uri: vscode.Uri, data: Uint8Array): Promise<void> {
+  const temporary = uri.with({ path: `${uri.path}.partial-${Date.now()}-${Math.random().toString(36).slice(2)}` });
+  try {
+    await vscode.workspace.fs.writeFile(temporary, data);
+    await vscode.workspace.fs.rename(temporary, uri, { overwrite: true });
+  } finally {
+    try { await vscode.workspace.fs.delete(temporary, { useTrash: false }); } catch { /* renamed successfully or already absent */ }
+  }
+}
 
 export function activate(
   context: vscode.ExtensionContext,
@@ -740,11 +750,16 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         if (!outputUri) return;
         const exportRuns = format.label === "Excel validation package" ? latestRuns : filterResultRuns(latestRuns, String(message.filter ?? ""), message.selectedIssues);
         const exportContext = { filter: message.filter ?? "", selectedIssues: message.selectedIssues ?? [], stale, runNotice, totals: "original target scope; exported details may be selected or filtered" };
-        const content = format.label === "JSON"
-          ? JSON.stringify({ ...JSON.parse(validationRunExportJson(vscode.workspace.asRelativePath(document.uri, false), exportRuns)), exportScope: exportContext }, null, 2)
-          : format.label === "CSV" ? issueRunsToCsv(exportRuns, exportContext)
-          : badRowsXlsx(exportRuns, { title: `${contractFilename} validation results`, testLabel: contractFilename, checkCatalog: () => contractCheckCatalog(read()) });
-        await vscode.workspace.fs.writeFile(outputUri, typeof content === "string" ? new TextEncoder().encode(content) : content);
+        let content: string | Uint8Array;
+        if (format.label === "JSON") content = JSON.stringify({ ...JSON.parse(validationRunExportJson(vscode.workspace.asRelativePath(document.uri, false), exportRuns)), exportScope: exportContext }, null, 2);
+        else if (format.label === "CSV") content = issueRunsToCsv(exportRuns, exportContext);
+        else content = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Exporting Excel validation package", cancellable: true }, async (uiProgress, token) => {
+          const controller = new AbortController();
+          token.onCancellationRequested(() => controller.abort());
+          return badRowsXlsxAsync(exportRuns, { title: `${contractFilename} validation results`, testLabel: contractFilename, signal: controller.signal,
+            checkCatalog: () => contractCheckCatalog(read()), onProgress: update => uiProgress.report({ message: update.message }) });
+        });
+        await writeExportAtomically(outputUri, typeof content === "string" ? new TextEncoder().encode(content) : content);
         const totalIssueCount = latestRuns.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
         if (totalIssueCount > retainedIssueCount) {
           void vscode.window.showWarningMessage(

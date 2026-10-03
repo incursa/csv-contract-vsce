@@ -26,6 +26,28 @@ export interface BadRowsWorkbookOptions {
   testLabel?: string;
   checkIds?: (run: BadRowsRun, index: number) => string[];
   checkCatalog?: (run: BadRowsRun, index: number) => WorkbookCheck[];
+  /** Optional test limits; production values are Excel's hard limits. */
+  maxRowsPerSheet?: number;
+  maxColumnsPerSheet?: number;
+  signal?: AbortSignal;
+  onProgress?: (progress: BadRowsWorkbookProgress) => void;
+}
+
+export interface BadRowsWorkbookProgress {
+  phase: "estimate" | "build" | "package";
+  completed: number;
+  total: number;
+  message: string;
+}
+
+export interface BadRowsWorkbookEstimate {
+  runs: number;
+  retainedRows: number;
+  aggregateFindings: number;
+  estimatedCells: number;
+  estimatedBytes: number;
+  targetSheets: number;
+  warnings: string[];
 }
 
 interface MatrixRow {
@@ -54,6 +76,22 @@ interface SheetDefinition {
 const maximumRows = 1_048_576;
 const maximumColumns = 16_384;
 const textLimit = 32_767;
+
+function cancelled(options: BadRowsWorkbookOptions): void {
+  if (options.signal?.aborted) throw new Error("Excel validation package export canceled.");
+}
+
+function limits(options: BadRowsWorkbookOptions): { rows: number; columns: number } {
+  const rows = options.maxRowsPerSheet ?? maximumRows;
+  const columns = options.maxColumnsPerSheet ?? maximumColumns;
+  if (!Number.isInteger(rows) || rows < 2 || rows > maximumRows) throw new Error(`maxRowsPerSheet must be between 2 and ${maximumRows.toLocaleString()}.`);
+  if (!Number.isInteger(columns) || columns < 4 || columns > maximumColumns) throw new Error(`maxColumnsPerSheet must be between 4 and ${maximumColumns.toLocaleString()}.`);
+  return { rows, columns };
+}
+
+function progress(options: BadRowsWorkbookOptions, value: BadRowsWorkbookProgress): void {
+  options.onProgress?.(value);
+}
 
 function unique(values: string[]): string[] { return [...new Set(values.filter(Boolean))]; }
 
@@ -291,28 +329,34 @@ function columnName(index: number): string {
   return value;
 }
 
-function cell(value: EvidenceValue | undefined, row: number, column: number, style = 0): string {
+function cell(value: EvidenceValue | undefined, row: number, column: number, style = 0, truncated?: { count: number }): string {
   if (value === undefined || value === null) return "";
   const reference = `${columnName(column)}${row}`;
   const effectiveStyle = style || (typeof value === "string" ? 6 : 0);
   const styleAttribute = effectiveStyle ? ` s="${effectiveStyle}"` : "";
   if (typeof value === "boolean") return `<c r="${reference}" t="b"${styleAttribute}><v>${value ? 1 : 0}</v></c>`;
   if (typeof value === "number" && Number.isFinite(value)) return `<c r="${reference}"${styleAttribute}><v>${value}</v></c>`;
-  const text = String(value).slice(0, textLimit);
+  const original = String(value);
+  const text = original.slice(0, textLimit);
+  if (truncated && original.length > textLimit) truncated.count++;
   const preserve = /^\s|\s$/.test(text) ? ' xml:space="preserve"' : "";
   return `<c r="${reference}" t="inlineStr"${styleAttribute}><is><t${preserve}>${xml(text)}</t></is></c>`;
 }
 
-function worksheet(sheet: SheetDefinition): string {
-  if (!sheet.headers.length || sheet.headers.length > maximumColumns) throw new Error(`Excel sheet '${sheet.name}' has an invalid column count.`);
-  if (sheet.rows.length + 1 > maximumRows) throw new Error(`Excel sheet '${sheet.name}' exceeds ${maximumRows.toLocaleString()} rows.`);
+function worksheet(sheet: SheetDefinition, options: BadRowsWorkbookOptions, truncated: { count: number }): string {
+  const { rows: maxRows, columns: maxColumns } = limits(options);
+  if (!sheet.headers.length || sheet.headers.length > maxColumns) throw new Error(`Excel sheet '${sheet.name}' has an invalid column count (${sheet.headers.length}; limit ${maxColumns.toLocaleString()}).`);
+  if (sheet.rows.length + 1 > maxRows) throw new Error(`Excel sheet '${sheet.name}' exceeds ${maxRows.toLocaleString()} rows.`);
   const widths = sheet.headers.map((header, column) => {
     const longest = sheet.rows.slice(0, 500).reduce((length, row) => Math.max(length, String(row[column] ?? "").length), header.length);
     return Math.min(sheet.checkStart !== undefined && column >= sheet.checkStart ? 28 : 42, Math.max(10, longest + 2));
   });
-  const rows = [`<row r="1">${sheet.headers.map((header, column) => cell(header, 1, column, sheet.readme ? 5 : sheet.checkStart !== undefined && column >= sheet.checkStart ? 2 : 1)).join("")}</row>`];
-  for (const [rowIndex, values] of sheet.rows.entries()) rows.push(`<row r="${rowIndex + 2}">${values.map((value, column) => cell(value, rowIndex + 2, column,
-    sheet.styles?.[rowIndex]?.[column] ?? (sheet.checkStart !== undefined && column >= sheet.checkStart && value === false ? 3 : sheet.checkStart !== undefined && column >= sheet.checkStart && value === true ? 4 : sheet.wrapColumns?.includes(column) ? 13 : 0))).join("")}</row>`);
+  const rows = [`<row r="1">${sheet.headers.map((header, column) => cell(header, 1, column, sheet.readme ? 5 : sheet.checkStart !== undefined && column >= sheet.checkStart ? 2 : 1, truncated)).join("")}</row>`];
+  for (const [rowIndex, values] of sheet.rows.entries()) {
+    if ((rowIndex & 1023) === 0) cancelled(options);
+    rows.push(`<row r="${rowIndex + 2}">${values.map((value, column) => cell(value, rowIndex + 2, column,
+    sheet.styles?.[rowIndex]?.[column] ?? (sheet.checkStart !== undefined && column >= sheet.checkStart && value === false ? 3 : sheet.checkStart !== undefined && column >= sheet.checkStart && value === true ? 4 : sheet.wrapColumns?.includes(column) ? 13 : 0), truncated)).join("")}</row>`);
+  }
   const last = `${columnName(sheet.headers.length - 1)}${sheet.rows.length + 1}`;
   const frozenPane = sheet.freezeColumns
     ? `<pane xSplit="${sheet.freezeColumns}" ySplit="1" topLeftCell="${columnName(sheet.freezeColumns)}2" activePane="bottomRight" state="frozen"/>`
@@ -324,7 +368,7 @@ function styles(): string {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="4"><font><sz val="11"/><name val="Aptos"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Aptos"/></font><font><b/><color rgb="FF9C0006"/><name val="Aptos"/></font><font><b/><color rgb="FF006100"/><name val="Aptos"/></font></fonts><fills count="10"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF26344A"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FF5B3F8C"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFC7CE"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFC6EFCE"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF4CE"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFE4C7"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFBE8EA"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE8EBF2"/></patternFill></fill></fills><borders count="2"><border/><border><left style="thin"><color rgb="FFD9DEE7"/></left><right style="thin"><color rgb="FFD9DEE7"/></right><top style="thin"><color rgb="FFD9DEE7"/></top><bottom style="thin"><color rgb="FFD9DEE7"/></bottom></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="14"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/><xf numFmtId="0" fontId="1" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/><xf numFmtId="0" fontId="2" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/><xf numFmtId="0" fontId="3" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" quotePrefix="1"/><xf numFmtId="0" fontId="3" fillId="5" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="0" fillId="6" borderId="0" xfId="0" applyFill="1"/><xf numFmtId="0" fontId="0" fillId="7" borderId="0" xfId="0" applyFill="1"/><xf numFmtId="0" fontId="2" fillId="8" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="0" fillId="9" borderId="0" xfId="0" applyFill="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" quotePrefix="1"><alignment wrapText="1" vertical="top"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
 }
 
-function workbookPackage(sheets: SheetDefinition[], title: string): Uint8Array {
+function workbookPackage(sheets: SheetDefinition[], title: string, options: BadRowsWorkbookOptions): Uint8Array {
   const files: Record<string, Uint8Array> = {};
   const overrides = sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("");
   files["[Content_Types].xml"] = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>${overrides}</Types>`);
@@ -332,15 +376,75 @@ function workbookPackage(sheets: SheetDefinition[], title: string): Uint8Array {
   files["xl/workbook.xml"] = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView activeTab="0"/></bookViews><sheets>${sheets.map((sheet, index) => `<sheet name="${xml(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("")}</sheets><calcPr calcId="0" fullCalcOnLoad="1"/></workbook>`);
   files["xl/_rels/workbook.xml.rels"] = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`);
   files["xl/styles.xml"] = strToU8(styles());
-  sheets.forEach((sheet, index) => { files[`xl/worksheets/sheet${index + 1}.xml`] = strToU8(worksheet(sheet)); });
+  const truncated = { count: 0 };
+  sheets.forEach((sheet, index) => { files[`xl/worksheets/sheet${index + 1}.xml`] = strToU8(worksheet(sheet, options, truncated)); });
   const timestamp = new Date().toISOString();
   files["docProps/core.xml"] = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${xml(title)}</dc:title><dc:creator>CSV Contract Workbench</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${timestamp}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${timestamp}</dcterms:modified></cp:coreProperties>`);
   files["docProps/app.xml"] = strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>CSV Contract Workbench</Application><AppVersion>1.0</AppVersion></Properties>');
-  return zipSync(files, { level: 6 });
+  const result = zipSync(files, { level: 6 });
+  if (truncated.count) options.onProgress?.({ phase: "package", completed: 1, total: 1, message: `${truncated.count.toLocaleString()} text cells were truncated to Excel's 32,767-character limit.` });
+  return result;
+}
+
+/** A cheap preflight used by the UI before it starts serializing XML. */
+export function estimateBadRowsWorkbook(runs: BadRowsRun[], options: BadRowsWorkbookOptions): BadRowsWorkbookEstimate {
+  limits(options);
+  let retainedRows = 0;
+  let aggregateFindings = 0;
+  const targets = new Set<string>();
+  let estimatedCells = 0;
+  for (const [index, run] of runs.entries()) {
+    cancelled(options);
+    const target = targetLabel(run, index);
+    targets.add(target.trim().toLocaleLowerCase());
+    const matrix = matrixRows(run);
+    retainedRows += matrix.rows.length;
+    aggregateFindings += matrix.aggregateIssues.length;
+    estimatedCells += matrix.rows.reduce((total, row) => total + Object.keys(row.values).length + Object.keys(row.related).length + row.failed.size + 3, 0);
+  }
+  const estimatedBytes = Math.max(4096, estimatedCells * 18);
+  const warnings: string[] = [];
+  if (estimatedBytes > 50 * 1024 * 1024) warnings.push("The estimated package is larger than 50 MiB; export may take a while.");
+  if (retainedRows > maximumRows - 1) warnings.push("Rows will be split into deterministic Excel sheets.");
+  progress(options, { phase: "estimate", completed: runs.length, total: runs.length, message: `Estimated ${estimatedBytes.toLocaleString()} bytes across ${targets.size.toLocaleString()} targets.` });
+  return { runs: runs.length, retainedRows, aggregateFindings, estimatedCells, estimatedBytes, targetSheets: targets.size, warnings };
+}
+
+function shardSheets(sheet: SheetDefinition, options: BadRowsWorkbookOptions, used: Set<string>): SheetDefinition[] {
+  const { rows: maxRows, columns: maxColumns } = limits(options);
+  const rowSize = maxRows - 1;
+  const identityCount = Math.min(3, sheet.headers.length);
+  const payloadSize = Math.max(1, maxColumns - identityCount);
+  const payloadHeaders = sheet.headers.slice(identityCount);
+  const columnParts: Array<{ headers: string[]; indexes: number[] }> = [];
+  for (let start = 0; start < payloadHeaders.length; start += payloadSize) {
+    const indexes = payloadHeaders.slice(start, start + payloadSize).map((_, offset) => identityCount + start + offset);
+    columnParts.push({ headers: payloadHeaders.slice(start, start + payloadSize), indexes });
+  }
+  if (!columnParts.length) columnParts.push({ headers: [], indexes: [] });
+  const rowParts = [];
+  for (let start = 0; start < sheet.rows.length; start += rowSize) rowParts.push(sheet.rows.slice(start, start + rowSize));
+  if (!rowParts.length) rowParts.push([]);
+  const total = rowParts.length * columnParts.length;
+  if (total === 1) return [sheet];
+  const result: SheetDefinition[] = [];
+  let part = 0;
+  for (const rows of rowParts) for (const columns of columnParts) {
+    part++;
+    const headers = [...sheet.headers.slice(0, identityCount), ...columns.headers];
+    const indexes = [...Array(identityCount).keys(), ...columns.indexes];
+    result.push({ ...sheet, name: safeSheetName(`${sheet.name} ${part}`, used), headers,
+      checkStart: sheet.checkStart === undefined ? undefined : Math.max(identityCount, sheet.checkStart - (columns.indexes[0] ?? identityCount) + identityCount),
+      rows: rows.map(row => indexes.map(index => row[index])) });
+  }
+  return result;
 }
 
 /** Build a workbook from retained evidence without querying the source again. */
 export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions): Uint8Array {
+  limits(options);
+  cancelled(options);
+  progress(options, { phase: "build", completed: 0, total: runs.length, message: "Preparing validation package sheets." });
   const used = new Set<string>();
   const readmeName = safeSheetName("Read Me", used);
   const sheets: SheetDefinition[] = [overviewSheet(runs, options, used)];
@@ -363,6 +467,7 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
   });
   const sortedTargets = [...groupedTargets.values()].sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }));
   for (const target of sortedTargets) {
+    cancelled(options);
     const entries = [...target.entries].sort((left, right) => testLabel(left.run, left.index, options).localeCompare(testLabel(right.run, right.index, options), undefined, { sensitivity: "base" }) || left.index - right.index);
     const rows = new Map<string, ConsolidatedMatrixRow>();
     const checkIds: string[] = [];
@@ -405,11 +510,23 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
     ["Merged rows", "A source row is merged across test files only when its source label, row number, and source values match. Check columns include the test file name so repeated rule IDs remain separate."],
     ["Data handling", "Sheets can contain every retained source and joined value. Protect this workbook like the source data."],
     ["Evidence boundary", "The workbook uses retained run evidence and does not query the source again. Limited evidence remains limited."],
-    ["Excel limits", "At most 1,048,575 data rows and 16,384 columns per sheet. Text cells are limited to 32,767 characters."]
+    ["Excel limits", "At most 1,048,575 data rows and 16,384 columns per sheet. Oversized target matrices are split deterministically by rows and columns; every shard repeats Test files, Source, and Source row. Text cells are limited to 32,767 characters and truncated cells are reported in export progress."],
+    ["Export estimate", `${estimateBadRowsWorkbook(runs, { ...options, onProgress: undefined }).estimatedBytes.toLocaleString()} bytes estimated before XML generation.`]
   ];
-  sheets.push(...targetSheets);
+  const shardedTargets = targetSheets.flatMap(sheet => shardSheets(sheet, options, used));
+  sheets.push(...shardedTargets);
   if (aggregates.length) sheets.push({ name: safeSheetName("Aggregate Findings", used), headers: ["Member", "Target", "Check", "Message", "Actual", "Expected"], rows: aggregates });
   if (!targetSheets.length && !aggregates.length) sheets.push({ name: safeSheetName("No bad rows", used), headers: ["Status"], rows: [["No retained bad-row evidence was available in the selected results."]] });
   sheets.push({ name: readmeName, headers: ["Item", "Details"], rows: readmeRows, readme: true });
-  return workbookPackage(sheets, options.title);
+  progress(options, { phase: "build", completed: runs.length, total: runs.length, message: `Prepared ${sheets.length.toLocaleString()} workbook sheets.` });
+  return workbookPackage(sheets, options.title, options);
+}
+
+/** Yield once before the synchronous serializer so UI callers can render preflight progress and cancellation. */
+export async function badRowsXlsxAsync(runs: BadRowsRun[], options: BadRowsWorkbookOptions): Promise<Uint8Array> {
+  const estimate = estimateBadRowsWorkbook(runs, options);
+  if (estimate.warnings.length) progress(options, { phase: "estimate", completed: runs.length, total: runs.length, message: estimate.warnings.join(" ") });
+  await Promise.resolve();
+  cancelled(options);
+  return badRowsXlsx(runs, options);
 }

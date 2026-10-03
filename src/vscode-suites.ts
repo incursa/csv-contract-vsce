@@ -15,11 +15,21 @@ import { resolveSqlServerTargets } from "./core/sql-server-targets";
 import { parseCsv, validateCsv } from "./core/contract";
 import { renderSuiteWorkbench, type SuiteMemberProgress, type SuiteRunProgress, type SuiteTargetProgress } from "./suite-workbench";
 import { suiteErrorsCsv, updateSuiteConnection } from "./suite-actions";
-import { badRowsXlsx, contractCheckCatalog } from "./bad-rows-xlsx";
+import { badRowsXlsxAsync, contractCheckCatalog } from "./bad-rows-xlsx";
 import { filterResultRuns } from "./results-view";
 import { errorDetails } from "./core/error-details";
 import type { SuiteConnection } from "./core/suite";
 import type { ResultColorMode } from "./core/result-health";
+
+async function writeSuiteExportAtomically(uri: vscode.Uri, data: Uint8Array): Promise<void> {
+  const temporary = uri.with({ path: `${uri.path}.partial-${Date.now()}-${Math.random().toString(36).slice(2)}` });
+  try {
+    await vscode.workspace.fs.writeFile(temporary, data);
+    await vscode.workspace.fs.rename(temporary, uri, { overwrite: true });
+  } finally {
+    try { await vscode.workspace.fs.delete(temporary, { useTrash: false }); } catch { /* renamed successfully or already absent */ }
+  }
+}
 
 export async function editSuiteConnection(document: vscode.TextDocument, index?: number, standalone = false, memberId?: string, targetIndex?: number): Promise<void> {
   const suite = standalone ? { members: [] } : parseSuite(document.getText());
@@ -380,16 +390,23 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
           const extension = format === "CSV" ? "csv" : format === "JSON" ? "json" : "validation-package.xlsx";
           const destination = await vscode.window.showSaveDialog({ title: "Export suite results", defaultUri: vscode.Uri.joinPath(document.uri, "..", `${snapshot.suite}.results.${extension}`), filters: format === "CSV" ? { CSV: ["csv"] } : format === "JSON" ? { JSON: ["json"] } : { "Excel workbooks": ["xlsx"] } });
           if (!destination) return;
-          const content = format === "CSV" ? suiteErrorsCsv(snapshot.runs, exportScope) : format === "JSON" ? JSON.stringify({ schema: "incursa.csv-suite-results/v1", ...snapshot }, null, 2) + "\n"
-            : badRowsXlsx(scoped, { title: `${snapshot.suite} validation results`, checkCatalog: run => {
-              if (run.member?.startsWith("cross:")) {
-                const id = run.member.slice("cross:".length);
-                return [{ id, category: "Cross-source check", description: `Validate the configured relationship or reconciliation between ${run.table ?? "suite sources"}.` }];
-              }
-              const member = currentSuite?.members.find(candidate => candidate.id === run.member);
-              return member?.contract ? contractCheckCatalog(member.contract) : [];
-            } });
-          await vscode.workspace.fs.writeFile(destination, typeof content === "string" ? new TextEncoder().encode(content) : content);
+          let content: string | Uint8Array;
+          if (format === "CSV") content = suiteErrorsCsv(snapshot.runs, exportScope);
+          else if (format === "JSON") content = JSON.stringify({ schema: "incursa.csv-suite-results/v1", ...snapshot }, null, 2) + "\n";
+          else content = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Exporting Excel validation package", cancellable: true }, async (uiProgress, token) => {
+            const controller = new AbortController();
+            token.onCancellationRequested(() => controller.abort());
+            return badRowsXlsxAsync(scoped, { title: `${snapshot.suite} validation results`, signal: controller.signal,
+              checkCatalog: run => {
+                if (run.member?.startsWith("cross:")) {
+                  const id = run.member.slice("cross:".length);
+                  return [{ id, category: "Cross-source check", description: `Validate the configured relationship or reconciliation between ${run.table ?? "suite sources"}.` }];
+                }
+                const member = currentSuite?.members.find(candidate => candidate.id === run.member);
+                return member?.contract ? contractCheckCatalog(member.contract) : [];
+              }, onProgress: update => uiProgress.report({ message: update.message }) });
+          });
+          await writeSuiteExportAtomically(destination, typeof content === "string" ? new TextEncoder().encode(content) : content);
           notice = `Exported results to ${destination.fsPath}`;
           await render();
         }
