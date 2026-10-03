@@ -84,6 +84,29 @@ export function resolveSqlServerTargetPolicies(contract: CsvContract, requireCon
     const override = target.id === undefined ? undefined : overrideMap.get(target.id);
     const policyEnabled = target.environment === undefined ? undefined : policy?.environments?.[target.environment];
     const enabled = override ?? policyEnabled ?? target.enabled ?? true;
+    const enabledSource: SqlTargetEnabledSource = override !== undefined ? "member-override" : policyEnabled !== undefined ? "suite-policy" : target.enabled !== undefined ? "contract" : "default";
+    if (!enabled) {
+      // Disabled targets remain visible to policy consumers, but retain the
+      // standalone behavior of not validating execution-only details until
+      // the target is enabled.
+      return {
+        target: {
+          baseline: target.baseline,
+          name: target.name,
+          id: target.id,
+          environment: target.environment,
+          connection: target.connection ?? "",
+          integratedConnection: target.integratedConnection,
+          schema: target.schema ?? "",
+          table: target.table ?? "",
+          objectType: target.objectType,
+          columnMap: target.columnMap,
+          scope: target.scope ?? sqlServer.scope
+        },
+        enabled,
+        enabledSource
+      };
+    }
     if (!target.schema?.trim() || !target.table?.trim()) {
       throw new Error(`SQL Server target ${index + 1} must declare non-empty schema and table names.`);
     }
@@ -127,8 +150,7 @@ export function resolveSqlServerTargetPolicies(contract: CsvContract, requireCon
       columnMap: Object.keys(columnMap).length ? Object.fromEntries(Object.entries(columnMap).map(([column, physical]) => [column, physical.trim()])) : undefined,
       scope: target.scope ?? sqlServer.scope
     };
-    return { target: resolvedTarget, enabled,
-      enabledSource: override !== undefined ? "member-override" : policyEnabled !== undefined ? "suite-policy" : target.enabled !== undefined ? "contract" : "default" };
+    return { target: resolvedTarget, enabled, enabledSource };
   });
 }
 

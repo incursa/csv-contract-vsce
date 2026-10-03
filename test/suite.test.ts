@@ -11,7 +11,7 @@ import type { CsvContract } from "../src/core/model";
 import { assertCompleteSqlSummaries } from "../src/core/sql-server-results";
 import { spawnSync } from "node:child_process";
 import { resolveBaseline, resolveTargetBaseline, baselineReferences } from "../src/core/baseline";
-import { resolveSqlServerTargetPolicies } from "../src/core/sql-server-targets";
+import { resolveSqlServerTargetPolicies, resolveSqlServerTargets } from "../src/core/sql-server-targets";
 import { parseContract } from "../src/core/contract";
 
 test("suite SQL target policies resolve precedence without mutating contracts", () => {
@@ -43,6 +43,15 @@ test("target policy resolution returns disabled targets and direct contracts rej
     { id: "same", connection: "test", schema: "dbo", table: "A" },
     { id: "same", connection: "test", schema: "dbo", table: "B" }
   ] } })), /duplicate SQL target id/);
+});
+
+test("disabled SQL targets do not require valid execution details", () => {
+  const c = contract();
+  c.sqlServer = { targets: [{ id: "paused", enabled: false, schema: "", table: "", connection: "", columnMap: { Missing: "" } }] };
+  assert.deepEqual(resolveSqlServerTargetPolicies(c).map(entry => [entry.target.id, entry.enabled, entry.enabledSource]), [
+    ["paused", false, "contract"]
+  ]);
+  assert.deepEqual(resolveSqlServerTargets(c), []);
 });
 
 test("target baseline dependencies retain relative meaning through combine and split", async (t) => {
