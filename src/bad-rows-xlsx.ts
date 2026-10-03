@@ -459,21 +459,26 @@ async function workbookPackageAsync(sheets: SheetDefinition[], title: string, op
     };
     let finished = false;
     const cancelError = () => new Error("Excel validation package export canceled.");
+    let abort: (error?: unknown) => void = () => undefined;
+    const cleanup = (): void => options.signal?.removeEventListener("abort", abort);
     const archive = new Zip((error, chunk, final) => {
       if (error) {
         finished = true;
+        cleanup();
         reject(error);
         return;
       }
       append(chunk);
       if (final && !finished) {
         finished = true;
+        cleanup();
         resolve(output.subarray(0, outputLength));
       }
     });
-    const abort = (error: unknown = cancelError()) => {
+    abort = (error: unknown = cancelError()) => {
       if (finished) return;
       finished = true;
+      cleanup();
       archive.terminate();
       reject(error);
     };
