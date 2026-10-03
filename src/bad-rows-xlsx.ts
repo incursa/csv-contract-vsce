@@ -154,7 +154,10 @@ function issueCheckId(issue: ValidationIssue): string {
 
 /** One reviewer-facing label for every location in the validation package. */
 export function targetDisplayLabel(run: BadRowsRun, index: number): string {
-  return run.displayTarget ?? run.target ?? run.table ?? run.member ?? `Target ${index + 1}`;
+  // `displayTarget` is populated by the executor from the resolved SQL
+  // endpoint. Do not replace it with `table` (or a connection profile name)
+  // merely because a legacy result also carries those fields.
+  return (run.displayTarget || run.target || run.table || run.member || `Target ${index + 1}`).trim();
 }
 
 function runLabel(run: BadRowsRun, index: number): string {
@@ -297,8 +300,8 @@ function matrixRows(run: BadRowsRun): { rows: MatrixRow[]; aggregateIssues: Vali
 function safeSheetName(value: string, used: Set<string>): string {
   const base = value.replace(/[\\/?*:[\]]/g, " ").replace(/\s+/g, " ").trim().slice(0, 31) || "Bad rows";
   let candidate = base;
-  for (let suffix = 2; used.has(candidate.toLocaleLowerCase()); suffix++) candidate = `${base.slice(0, Math.max(1, 31 - String(suffix).length - 1))} ${suffix}`;
-  used.add(candidate.toLocaleLowerCase());
+  for (let suffix = 2; used.has(candidate.toLowerCase()); suffix++) candidate = `${base.slice(0, Math.max(1, 31 - String(suffix).length - 1))} ${suffix}`;
+  used.add(candidate.toLowerCase());
   return candidate;
 }
 
@@ -389,9 +392,9 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
     for (const issue of matrix.aggregateIssues) aggregates.push([run.member ?? "", targetDisplayLabel(run, runIndex), issueCheckId(issue), issue.message, issue.actual, issue.expected]);
   });
   const sortedTargets = [...groupedTargets.values()].sort((left, right) =>
-    left.label.localeCompare(right.label, undefined, { sensitivity: "base" }) || (left.label < right.label ? -1 : left.label > right.label ? 1 : 0));
+    compareText(left.label, right.label));
   for (const target of sortedTargets) {
-    const entries = [...target.entries].sort((left, right) => testLabel(left.run, left.index, options).localeCompare(testLabel(right.run, right.index, options), undefined, { sensitivity: "base" }) || left.index - right.index);
+    const entries = [...target.entries].sort((left, right) => compareText(testLabel(left.run, left.index, options), testLabel(right.run, right.index, options)) || left.index - right.index);
     const rows = new Map<string, ConsolidatedMatrixRow>();
     const checkIds: string[] = [];
     for (const { run, index } of entries) {

@@ -139,3 +139,19 @@ test("validation package keeps explicit CSV labels and distinct case-sensitive t
   assert.match(overview, new RegExp(longB));
   assert.doesNotMatch(overview, /alice|secret|sql01|Sales/);
 });
+
+test("bad sheets retain full SQL labels when tab names collide", () => {
+  const first = "sql01.Sales.dbo." + "Orders".repeat(8);
+  const second = "sql01.Sales.dbo." + "Orders".repeat(7) + "Archive";
+  const files = unzipSync(badRowsXlsx([
+    { member: "first", target: first, displayTarget: first, status: "FAIL", result },
+    { member: "second", target: second, displayTarget: second, status: "FAIL", result }
+  ], { title: "Collision package" }));
+  const workbook = strFromU8(files["xl/workbook.xml"]);
+  const sheets = Object.keys(files).filter(file => /^xl\/worksheets\/sheet\d+\.xml$/.test(file));
+  const sheetText = sheets.map(file => strFromU8(files[file])).join("\n");
+  assert.match(workbook, /Bad - sql01\.Sales\.dbo\./);
+  assert.match(workbook, / 2/);
+  assert.match(sheetText, new RegExp(first));
+  assert.match(sheetText, new RegExp(second));
+});
