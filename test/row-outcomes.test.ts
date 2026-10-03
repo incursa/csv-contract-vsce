@@ -49,13 +49,11 @@ test("memory validation distinguishes conditional, unsupported, and evaluated ch
   }, "Status\nWaiting\nReady\n");
   assert.deepEqual(result.rowOutcomes?.map(row => row.checks), [
     {
-      "schema.Status": { state: "pass" },
       "schema.Value": { state: "not-evaluated", reason: "unsupported" },
       "row.ready": { state: "not-applicable", reason: "condition-false" },
       "rule.missing-column": { state: "not-evaluated", reason: "unsupported" }
     },
     {
-      "schema.Status": { state: "pass" },
       "schema.Value": { state: "not-evaluated", reason: "unsupported" },
       "row.ready": { state: "pass" },
       "rule.missing-column": { state: "not-evaluated", reason: "unsupported" }

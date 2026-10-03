@@ -106,6 +106,12 @@ interface PreparedColumn {
   uniqueTargetId?: number;
 }
 
+function hasRowSchemaConstraints(constraints: ColumnConstraints): boolean {
+  return constraints.notNull === true || constraints.minLength !== undefined ||
+    constraints.maxLength !== undefined || constraints.allowedValues !== undefined ||
+    constraints.matches !== undefined;
+}
+
 interface PreparedRowTest {
   test: RowTest;
   valid: boolean;
@@ -430,6 +436,9 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
   }
 
   for (const column of state.columns) {
+    // Presence and uniqueness are not per-row schema evaluations. Do not
+    // represent an unconstrained column as passing merely because it exists.
+    if (!hasRowSchemaConstraints(column.constraints)) continue;
     let columnPassed = true;
     const raw = fields[column.index] ?? "";
     const value = state.options.trimValues ? raw.trim() : raw;

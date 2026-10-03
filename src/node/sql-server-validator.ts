@@ -20,6 +20,8 @@ export interface SqlServerValidationOptions {
   evaluatedAt?: string;
   signal?: AbortSignal;
   maxIssues?: number;
+  /** Maximum source rows retained in row-outcome evidence. */
+  maxRowOutcomes?: number;
   scopeValue?: string;
   onProgress?: (progress: ValidationProgress) => void;
 }
@@ -202,7 +204,10 @@ export class SqlServerValidationSession {
       options.maxIssues ?? 1000, options.signal, options.onProgress) : undefined;
     options.onProgress?.({ phase: "summarizing" });
     if (mustFallback || options.preview) {
-      const fallback = await validateClientSide(handle, { ...contract, baseline: undefined, orderedRules: undefined, groupTests: undefined }, target, metadata, scopeValue, options.signal, options.preview);
+      const fallback = limitRowEvidence(
+        await validateClientSide(handle, { ...contract, baseline: undefined, orderedRules: undefined, groupTests: undefined }, target, metadata, scopeValue, options.signal, options.preview),
+        options.maxRowOutcomes ?? 1000
+      );
       const reason = options.preview ? "Explicit preview uses the shared predicate engine to collect bounded examples." : generated.warnings.length
         ? generated.warnings.join(" ")
         : "One or more declared columns are absent, so rules that reference optional columns must preserve CSV-compatible behavior.";
@@ -223,7 +228,7 @@ export class SqlServerValidationSession {
 
     if (generated.rules.length === 0) {
       const rowCount = await readRowCount(handle, target, scopeValue, options.signal);
-      const rowEvidence = await sqlRowEvidence(handle, contract, target, metadata, scopeValue, rowCount, options.signal);
+      const rowEvidence = await sqlRowEvidence(handle, contract, target, metadata, scopeValue, rowCount, options.maxRowOutcomes, options.signal);
       const errors = metadataIssues.filter(issue => issue.severity !== "warning").length;
       const warnings = metadataIssues.length - errors;
       return mergeGroups(mergeSequence({ ...rowEvidence, valid: errors === 0, rowCount, columnCount: metadata.length,
@@ -290,7 +295,7 @@ export class SqlServerValidationSession {
       else errorCount += failures;
     }
     const rowCount = await readRowCount(handle, target, scopeValue, options.signal);
-    const rowEvidence = await sqlRowEvidence(handle, contract, target, metadata, scopeValue, rowCount, options.signal);
+    const rowEvidence = await sqlRowEvidence(handle, contract, target, metadata, scopeValue, rowCount, options.maxRowOutcomes, options.signal);
     const issueCount = errorCount + warningCount;
     return mergeGroups(mergeSequence({ ...rowEvidence,
       valid: errorCount === 0,
@@ -448,15 +453,33 @@ function contractTestCount(contract: CsvContract): number {
  * in the same projection as CSV/client-side validation instead of leaving
  * consumers to mistake an absent projection for complete evidence.
  */
-function sqlAggregateRowEvidence(rowCount: number): Pick<ValidationResult, "rowOutcomes" | "rowOutcomeSummary"> {
+function sqlAggregateRowEvidence(rowCount: number, retentionLimit: number): Pick<ValidationResult, "rowOutcomes" | "rowOutcomeSummary"> {
   return {
     rowOutcomes: [],
     rowOutcomeSummary: {
-      retentionLimit: 0,
+      retentionLimit,
       retainedRows: 0,
       omittedRows: rowCount,
       complete: false,
       incompleteBecause: "not-evaluated"
+    }
+  };
+}
+
+function limitRowEvidence(result: ValidationResult, retentionLimit: number): ValidationResult {
+  if (!Number.isInteger(retentionLimit) || retentionLimit < 0) throw new Error("maxRowOutcomes must be a non-negative integer.");
+  const rows = result.rowOutcomes ?? [];
+  const retained = rows.slice(0, retentionLimit);
+  const omitted = Math.max(0, result.rowCount - retained.length);
+  return {
+    ...result,
+    rowOutcomes: retained,
+    rowOutcomeSummary: {
+      retentionLimit,
+      retainedRows: retained.length,
+      omittedRows: omitted,
+      complete: omitted === 0,
+      ...(omitted ? { incompleteBecause: "truncated" as const } : {})
     }
   };
 }
@@ -473,18 +496,20 @@ async function sqlRowEvidence(
   metadata: MetadataRow[],
   scopeValue: string | undefined,
   rowCount: number,
+  configuredLimit: number | undefined,
   signal?: AbortSignal
 ): Promise<Pick<ValidationResult, "rowOutcomes" | "rowOutcomeSummary">> {
-  const limit = 1000;
+  const limit = configuredLimit ?? 1000;
+  if (!Number.isInteger(limit) || limit < 0) throw new Error("maxRowOutcomes must be a non-negative integer.");
   const columns = Object.keys(contract.schema.columns).filter(column => metadata.some(item => item.name === physicalSqlServerColumn(target, column)));
-  if (!columns.length) return sqlAggregateRowEvidence(rowCount);
+  if (!columns.length) return sqlAggregateRowEvidence(rowCount, limit);
   const projection = columns.map(column => `CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, column))}) AS ${sqlIdentifier(column)}`).join(", ");
   const request = handle.pool.request();
   bindScope(request, handle.api, target, scopeValue);
   const result = await queryWithCancellation<Record<string, string | null>>(request,
     `/* Bounded row-outcome projection. */ SELECT TOP (${limit}) ${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scopeWhere(target)};`, signal);
   const rows = result.recordset ?? [];
-  if (!rows.length || !columns.some(column => Object.prototype.hasOwnProperty.call(rows[0], column))) return sqlAggregateRowEvidence(rowCount);
+  if (!rows.length || !columns.some(column => Object.prototype.hasOwnProperty.call(rows[0], column))) return sqlAggregateRowEvidence(rowCount, limit);
   const fallbackContract: CsvContract = {
     ...contract,
     schema: { ...contract.schema, allowAdditionalColumns: true, columnCount: undefined, columnOrder: undefined },

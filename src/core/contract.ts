@@ -487,6 +487,9 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       if (index === undefined) { rowCollector.set(`schema.${column}`, "not-evaluated", "unsupported"); continue; }
       const value = row[index] ?? "";
       const constraints = definition.constraints ?? {};
+      const hasRowSchemaConstraints = constraints.notNull === true || constraints.minLength !== undefined ||
+        constraints.maxLength !== undefined || constraints.allowedValues !== undefined || constraints.matches !== undefined;
+      if (!hasRowSchemaConstraints) continue;
       const nullValue = isNull(value, options);
       if (nullValue) {
         const passed = !constraints.notNull;
