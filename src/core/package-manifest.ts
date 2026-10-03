@@ -28,6 +28,7 @@ export interface PackageManifest {
   identity: { kind: "contract" | "suite"; id: string; definitionFingerprint: string };
   run: { id: string; evaluatedAt?: string };
   selectedScope: string | string[];
+  sourceLabels: string[];
   targets: Array<{ id: string; source?: string }>;
   evidence: {
     retention: Record<string, unknown>;
@@ -43,11 +44,15 @@ function safe(value: unknown): unknown {
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(Object.entries(value as Record<string, unknown>)
     .filter(([key]) => !/(password|secret|credential|connection|string|token|apiKey|accessKey|privateKey)/i.test(key))
-    .sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, safe(item)]));
+    .sort(([a], [b]) => compareStable(a, b)).map(([key, item]) => [key, safe(item)]));
 }
 
 function stable(value: unknown): string {
   return JSON.stringify(safe(value));
+}
+
+function compareStable(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 // A deterministic, non-secret-bearing content fingerprint suitable for package identity.
@@ -76,9 +81,12 @@ export function createPackageManifest(options: PackageManifestOptions = {}): Pac
   const truncated = options.truncated ?? false;
   const reported = options.reportedIssues ?? 0;
   const retained = options.retainedIssueDetails ?? reported;
-  const targetSources = options.targetSources ? [...options.targetSources].sort((a, b) => a.id.localeCompare(b.id)) : undefined;
-  const targets = [...new Set(options.targetIdentities ?? [])].sort((a, b) => a.localeCompare(b));
-  const sources = [...new Set(options.sourceLabels ?? [])].sort((a, b) => a.localeCompare(b));
+  const targetSources = options.targetSources
+    ? [...new Map(options.targetSources.map(target => [`${target.id}\u0000${target.source ?? ""}`, target])).values()]
+      .sort((a, b) => compareStable(a.id, b.id) || compareStable(a.source ?? "", b.source ?? ""))
+    : undefined;
+  const targets = [...new Set(options.targetIdentities ?? [])].sort(compareStable);
+  const sources = [...new Set((options.sourceLabels ?? []).filter(Boolean))].sort(compareStable);
   const identity = options.identity ?? "validation-package";
   const runId = options.runId ?? fingerprint({ identity, scope: options.scope ?? "all", targets, evaluatedAt: options.evaluatedAt });
   return {
@@ -87,6 +95,7 @@ export function createPackageManifest(options: PackageManifestOptions = {}): Pac
     identity: { kind: options.kind ?? "contract", id: identity, definitionFingerprint: fingerprint(options.definition ?? identity) },
     run: { id: runId, ...(options.evaluatedAt ? { evaluatedAt: options.evaluatedAt } : {}) },
     selectedScope: options.scope ?? "all",
+    sourceLabels: sources,
     targets: targetSources ?? targets.map((id, index) => ({ id, ...(sources[index] ? { source: sources[index] } : {}) })),
     evidence: { retention: { ...(options.evidenceSettings ?? {}), reportedIssueDetails: reported, retainedIssueDetails: retained }, sampled, truncated, complete: !sampled && !truncated && retained >= reported },
     completenessNotices: notice(options, sampled, truncated)

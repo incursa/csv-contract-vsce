@@ -407,7 +407,7 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
     ["Workbook", options.title], ["Exported UTC", new Date().toISOString()], ["Target results", runs.length], ["Targets with bad rows", targetSheets.length], ["Retained bad rows", badRowCount],
     ["Package schema version", manifest.packageSchemaVersion], ["Tool version", manifest.toolVersion], ["Identity", `${manifest.identity.kind}: ${manifest.identity.id}`], ["Definition fingerprint", manifest.identity.definitionFingerprint],
     ["Run identity", manifest.run.id], ["Evaluation time", manifest.run.evaluatedAt ?? "not supplied"], ["Selected scope", JSON.stringify(manifest.selectedScope)],
-    ["Targets", JSON.stringify(manifest.targets)], ["Evidence retention", JSON.stringify(manifest.evidence.retention)], ["Sampled", manifest.evidence.sampled], ["Truncated", manifest.evidence.truncated],
+    ["Source labels", JSON.stringify(manifest.sourceLabels)], ["Targets", JSON.stringify(manifest.targets)], ["Evidence retention", JSON.stringify(manifest.evidence.retention)], ["Sampled", manifest.evidence.sampled], ["Truncated", manifest.evidence.truncated],
     ["Evidence complete", manifest.evidence.complete], ["Completeness notices", manifest.completenessNotices.join(" ") || "None"],
     ["Package layout", "Overview summarizes every test and target. Rules explains configured checks. Each Bad sheet consolidates retained failing rows for one target across all test files. Aggregate Findings contains findings without a primary row."],
     ["Aggregate-only findings", aggregateCount], ["Matrix meaning", "FALSE (red) means this check failed the retained row. Blank means not failed in retained evidence, not applicable, or not provably evaluated for that row."],

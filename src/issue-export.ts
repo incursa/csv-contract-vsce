@@ -138,8 +138,8 @@ export function parseValidationRunExport(text: string): ValidationRunExport {
     exportedAt: typeof exportValue.exportedAt === "string" ? exportValue.exportedAt : undefined };
 }
 
-export function validationRunExportJson(contract: string, runs: IssueExportRun[]): string {
-  return `${JSON.stringify(createValidationRunExport(contract, runs), null, 2)}\n`;
+export function validationRunExportJson(contract: string, runs: IssueExportRun[], options: { definition?: unknown; kind?: "contract" | "suite"; identity?: string } = {}): string {
+  return `${JSON.stringify(createValidationRunExport(contract, runs, options), null, 2)}\n`;
 }
 
 export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown, options: { identity?: string; definition?: unknown; kind?: "contract" | "suite" } = {}): string {
@@ -182,8 +182,8 @@ export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown, option
     if (run.error) rows.push([run.target, run.status ?? "ERROR", "execution", "", "", "", "", run.error, "", "", "[]", "[]", "{}", "false", ...metadata(run)]);
     else if (extended && !run.result?.issues.length) rows.push([run.target, "", "summary", "", "", "", "", "No retained issue details in this scope.", "", "", "[]", "[]", "{}", "false", ...metadata(run)]);
   }
-  columns.push("PackageSchemaVersion", "DefinitionFingerprint", "PackageRunId", "SelectedScope", "EvidenceComplete", "CompletenessNotices");
-  const manifestValues = [manifest.packageSchemaVersion, manifest.identity.definitionFingerprint, manifest.run.id, JSON.stringify(manifest.selectedScope), String(manifest.evidence.complete), JSON.stringify(manifest.completenessNotices)];
+  columns.push("PackageSchemaVersion", "ToolVersion", "PackageKind", "PackageIdentity", "DefinitionFingerprint", "PackageRunId", "EvaluatedAt", "SelectedScope", "SourceLabels", "Targets", "EvidenceRetention", "Sampled", "Truncated", "EvidenceComplete", "CompletenessNotices");
+  const manifestValues = [manifest.packageSchemaVersion, manifest.toolVersion, manifest.identity.kind, manifest.identity.id, manifest.identity.definitionFingerprint, manifest.run.id, manifest.run.evaluatedAt ?? "", JSON.stringify(manifest.selectedScope), JSON.stringify(manifest.sourceLabels), JSON.stringify(manifest.targets), JSON.stringify(manifest.evidence.retention), String(manifest.evidence.sampled), String(manifest.evidence.truncated), String(manifest.evidence.complete), JSON.stringify(manifest.completenessNotices)];
   rows.forEach(row => row.push(...manifestValues));
   return rowsToCsv(columns, rows);
 }
