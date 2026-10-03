@@ -7,6 +7,7 @@ export interface BadRowsRun {
   suite?: string;
   member?: string;
   target?: string;
+  displayTarget?: string;
   table?: string;
   status?: string;
   durationMs?: number;
@@ -146,11 +147,11 @@ function issueCheckId(issue: ValidationIssue): string {
 }
 
 function runLabel(run: BadRowsRun, index: number): string {
-  return run.table ?? run.target ?? run.member ?? `Result ${index + 1}`;
+  return run.displayTarget ?? run.target ?? run.table ?? run.member ?? `Result ${index + 1}`;
 }
 
 function targetLabel(run: BadRowsRun, index: number): string {
-  return run.table ?? run.target ?? run.member ?? `Target ${index + 1}`;
+  return run.displayTarget ?? run.target ?? run.table ?? run.member ?? `Target ${index + 1}`;
 }
 
 function testLabel(run: BadRowsRun, index: number, options: BadRowsWorkbookOptions): string {
@@ -187,7 +188,7 @@ function overviewSheet(runs: BadRowsRun[], options: BadRowsWorkbookOptions, used
   const aggregate = aggregateResultHealth(runs.map(run => ({ result: run.result, status: run.status })), "graded");
   const aggregateStatus = overallStatus(runs);
   const aggregateSampled = aggregateStatus === "SAMPLED";
-  const headers = ["Test file", "Instance / target", "Status", "Impact", "Health score", "Rows", "Executed checks", "Findings", "Error findings", "Warning findings", "Duration (seconds)", "Evaluated UTC", "Notes"];
+  const headers = ["Test file", "Target", "Status", "Impact", "Health score", "Rows", "Executed checks", "Findings", "Error findings", "Warning findings", "Duration (seconds)", "Evaluated UTC", "Notes"];
   const totalDuration = runs.reduce((total, run) => total + (run.durationMs ?? 0), 0);
   const rows: SheetDefinition["rows"] = [["Overall", `${runs.length} target result${runs.length === 1 ? "" : "s"}`, aggregateStatus, aggregateSampled ? "Sample only" : resultHealthCategory(aggregate), aggregateSampled ? undefined : aggregate.score,
     runs.reduce((total, run) => total + (run.result?.rowCount ?? 0), 0), runs.reduce((total, run) => total + (run.result?.testCount ?? 0), 0),
@@ -387,14 +388,15 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
     const sourceColumns = unique(matrixRowsForTarget.flatMap(row => Object.keys(row.values)));
     const relatedColumns = unique(matrixRowsForTarget.flatMap(row => Object.keys(row.related)));
     const distinctCheckIds = unique(checkIds);
-    const headers = ["Test files", "Source", "Source row", ...sourceColumns, ...relatedColumns, ...distinctCheckIds.map(id => {
+    const headers = ["Test files", "Source", "Source row (SQL) / line (CSV)", ...sourceColumns, ...relatedColumns, ...distinctCheckIds.map(id => {
       const [test, check] = id.split("\u0000");
       return `Check - ${test} - ${check}`;
     })];
     const checkStart = 3 + sourceColumns.length + relatedColumns.length;
+    const targetHeaders = ["Target", ...headers];
     targetSheets.push({
-      name: safeSheetName(`Bad - ${target.label}`, used), headers, checkStart, freezeColumns: 3,
-      rows: matrixRowsForTarget.map(row => [[...row.tests].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" })).join(", "), row.source, row.row,
+      name: safeSheetName(`Bad - ${target.label}`, used), headers: targetHeaders, checkStart: checkStart + 1, freezeColumns: 4,
+      rows: matrixRowsForTarget.map(row => [target.label, [...row.tests].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" })).join(", "), row.source, row.row,
         ...sourceColumns.map(column => row.values[column]), ...relatedColumns.map(column => row.related[column]), ...distinctCheckIds.map(id => row.failed.has(id) ? false : undefined)])
     });
   }

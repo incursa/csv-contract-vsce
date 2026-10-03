@@ -10,6 +10,8 @@ export interface ResolvedSqlServerTarget {
   objectType?: "table" | "view";
   columnMap?: Record<string, string>;
   scope?: SqlServerScope;
+  /** Resolved execution endpoint, when a connection profile has been opened. */
+  resolvedConnection?: { server: string; database: string };
 }
 
 export function hasSqlServerConnection(target: ResolvedSqlServerTarget): boolean {
@@ -28,7 +30,9 @@ export function sqlServerConnectionKey(target: ResolvedSqlServerTarget): string 
 }
 
 export function sqlServerTargetLabel(target: ResolvedSqlServerTarget): string {
-  return target.name ?? `${sqlServerConnectionLabel(target)}:${target.schema}.${target.table}`;
+  const endpoint = target.resolvedConnection ?? target.integratedConnection;
+  if (endpoint) return `${endpoint.server}.${endpoint.database}.${target.schema}.${target.table}`;
+  return `${target.connection || "unconfigured"}.${target.schema}.${target.table}`;
 }
 
 export function resolveSqlServerTargets(contract: CsvContract, requireConnection = true): ResolvedSqlServerTarget[] {

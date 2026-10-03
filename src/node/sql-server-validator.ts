@@ -131,7 +131,7 @@ function runtimeInteger(name: string, fallback: number, maximum: number): number
 export class SqlServerValidationSession {
   public async validateCross(plan: SqlCrossPlan, signal?: AbortSignal): Promise<ValidationResult> {
     const fromValue = resolveScopeValue(plan.from), toValue = resolveScopeValue(plan.to);
-    const handle = await this.getPool(plan.from.connection, plan.from.integratedConnection);
+    const handle = await this.getPool(plan.from.connection, plan.from.integratedConnection, plan.from);
     const request = handle.pool.request();
     bindScope(request, handle.api, plan.from, fromValue);
     bindScope(request, handle.api, plan.to, toValue);
@@ -154,6 +154,7 @@ export class SqlServerValidationSession {
     return crossResult(plan.check, count, count ? { samples, aggregate: { failureCount: count }, totalSamples: count, limited: samples.length < count } : undefined);
   }
   private readonly pools = new Map<string, SqlPoolHandle>();
+  private readonly connectionEndpoints = new Map<string, { server: string; database: string }>();
   private closed = false;
 
   public constructor(private readonly resolveConnectionString: (profile: string) => Promise<string> | string) {}
@@ -162,6 +163,7 @@ export class SqlServerValidationSession {
     this.closed = true;
     const outcomes = await Promise.allSettled([...this.pools.values()].map(closePool));
     this.pools.clear();
+    this.connectionEndpoints.clear();
     const failures = outcomes.flatMap(outcome => outcome.status === "rejected" ? [outcome.reason] : []);
     if (failures.length) throw new AggregateError(failures, "One or more SQL connection pools failed to close.");
   }
@@ -182,7 +184,7 @@ export class SqlServerValidationSession {
       throw new Error("SQL preview does not support grouped or ordered rules; run the complete contract.");
     }
     options.onProgress?.({ phase: "connecting" });
-    const handle = await this.getPool(target.connection, target.integratedConnection);
+    const handle = await this.getPool(target.connection, target.integratedConnection, target);
     const metadata = await readMetadata(handle, target, options.signal);
     if (metadata.length === 0) throw new Error(`SQL Server object ${target.schema}.${target.table} does not exist or is not visible to this connection.`);
     const metadataIssues = validateMetadata(contract, target, metadata);
@@ -338,21 +340,26 @@ ORDER BY s.name, o.name, c.column_id;`);
   }
 
   public async captureSchema(target: ResolvedSqlServerTarget): Promise<SchemaBaseline> {
-    const columns = await readMetadata(await this.getPool(target.connection, target.integratedConnection), target);
+    const columns = await readMetadata(await this.getPool(target.connection, target.integratedConnection, target), target);
     if (!columns.length) throw new Error("Object metadata is empty: object missing or not visible to this connection.");
     return sqlSchemaSnapshot(target, columns);
   }
 
-  private async getPool(profile: string, integrated?: SqlServerIntegratedConnection): Promise<SqlPoolHandle> {
+  private async getPool(profile: string, integrated?: SqlServerIntegratedConnection, target?: ResolvedSqlServerTarget): Promise<SqlPoolHandle> {
     if (this.closed) throw new Error("SQL session is closed.");
     const requestTimeout = runtimeInteger("CSV_CONTRACT_SQL_TIMEOUT_MS", 15000, 600000);
     if (requestTimeout < 1) throw new Error("CSV_CONTRACT_SQL_TIMEOUT_MS must be at least 1; unbounded queries are not supported.");
     const key = integrated ? `integrated:${JSON.stringify(integrated)}` : `profile:${profile}`;
+    if (target) {
+      const endpoint = integrated ? { server: integrated.server, database: integrated.database } : this.connectionEndpoints.get(key);
+      if (endpoint) target.resolvedConnection = endpoint;
+    }
     const existing = this.pools.get(key);
     if (existing) return existing;
     const closeFailures: unknown[] = [];
     let handle: SqlPoolHandle;
     if (integrated) {
+      if (target) target.resolvedConnection = { server: integrated.server, database: integrated.database };
       if (process.platform !== "win32" || process.arch !== "x64") throw new Error("Bundled Windows integrated authentication requires Windows x64. Use a connection profile on other platforms.");
       const nativeSql = (await import("mssql/msnodesqlv8")).default;
       const nativeDriver = (await import("msnodesqlv8")).default;
@@ -395,7 +402,12 @@ ORDER BY s.name, o.name, c.column_id;`);
     } else {
       const connectionString = await this.resolveConnectionString(profile);
       if (!connectionString.trim()) throw new Error(`SQL Server connection profile '${profile}' is empty.`);
-      const pool = new sql.ConnectionPool({ ...sql.ConnectionPool.parseConnectionString(connectionString), requestTimeout });
+      const parsed = sql.ConnectionPool.parseConnectionString(connectionString);
+      if (target && typeof parsed.server === "string" && typeof parsed.database === "string" && parsed.server.trim() && parsed.database.trim()) {
+        target.resolvedConnection = { server: parsed.server.trim(), database: parsed.database.trim() };
+        this.connectionEndpoints.set(key, target.resolvedConnection);
+      }
+      const pool = new sql.ConnectionPool({ ...parsed, requestTimeout });
       handle = { api: sql, pool };
     }
     handle.closeFailures = closeFailures;

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { strFromU8, unzipSync } from "fflate";
 import { badRowsXlsx, contractCheckCatalog } from "../src/bad-rows-xlsx";
+import { sqlServerTargetLabel } from "../src/core/sql-server-targets";
 import type { CsvContract, ValidationResult } from "../src/core/model";
 
 const contract: CsvContract = {
@@ -28,6 +29,11 @@ const result: ValidationResult = {
     }] } }
   ]
 };
+
+test("SQL target labels use the resolved execution endpoint and ignore display names", () => {
+  assert.equal(sqlServerTargetLabel({ connection: "profile", resolvedConnection: { server: "sql01", database: "Sales" }, schema: "dbo", table: "Orders", name: "friendly name" }), "sql01.Sales.dbo.Orders");
+  assert.equal(sqlServerTargetLabel({ connection: "unused", integratedConnection: { server: "sql02", database: "Warehouse" }, schema: "stage", table: "Orders" }), "sql02.Warehouse.stage.Orders");
+});
 
 test("bad-row workbook consolidates one target across test files with qualified sparse checks", () => {
   const secondContract: CsvContract = {

@@ -6,7 +6,7 @@ import { isScalar, parseDocument, stringify, visit } from "yaml";
 import { parseContract } from "./contract";
 import { resolveGroupContracts } from "./group-contracts";
 import type { CsvContract, CsvTarget, SqlServerIntegratedConnection, ValidationResult } from "./model";
-import { resolveSqlServerTargets, type ResolvedSqlServerTarget } from "./sql-server-targets";
+import { resolveSqlServerTargets, sqlServerTargetLabel, type ResolvedSqlServerTarget } from "./sql-server-targets";
 import { generateSqlServerValidation } from "./sql-server-generator";
 import Ajv from "ajv/dist/2020";
 import contractSchema from "../../schemas/csvtest.schema.json";
@@ -212,6 +212,8 @@ export interface SuiteRun {
   member: string;
   spec: string;
   table?: string;
+  /** Reviewer-facing, credential-free canonical target label. */
+  displayTarget?: string;
   target?: string;
   status: SuiteStatus;
   result?: ValidationResult;
@@ -243,10 +245,10 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
       if (!targets.length && !fileTargets.length) throw new Error("No enabled targets configured for this member.");
       if (!failFast && controls.parallelTargets !== undefined && controls.parallelTargets >= 1) {
         const jobs = [
-          ...targets.map((target) => ({ identity: { ...base, table: `${target.schema}.${target.table}`, target: target.name ?? `${target.schema}.${target.table}` },
+          ...targets.map((target) => ({ sqlTarget: target, identity: { ...base, table: `${target.schema}.${target.table}`, target: sqlServerTargetLabel(target), displayTarget: sqlServerTargetLabel(target) },
             execute: (index: number) => validate(evaluatedContract, target, member.source, index,
-              progress => controls.onTargetProgress?.({ ...base, table: `${target.schema}.${target.table}`, target: target.name ?? `${target.schema}.${target.table}` }, progress, index)) })),
-          ...fileTargets.map((target) => ({ identity: { ...base, target: target.path ?? target.url },
+              progress => controls.onTargetProgress?.({ ...base, table: `${target.schema}.${target.table}`, target: sqlServerTargetLabel(target), displayTarget: sqlServerTargetLabel(target) }, progress, index)) })),
+          ...fileTargets.map((target) => ({ sqlTarget: undefined, identity: { ...base, target: target.path ?? target.url },
             execute: (index: number) => validateFile!(evaluatedContract, member.source, target, index,
               progress => controls.onTargetProgress?.({ ...base, target: target.path ?? target.url }, progress, index)) }))
         ];
@@ -266,9 +268,12 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
             try {
               const result = await job.execute(index);
               result.evaluatedAt = startedAt;
+              const completedIdentity = job.sqlTarget
+                ? { ...job.identity, target: sqlServerTargetLabel(job.sqlTarget), displayTarget: sqlServerTargetLabel(job.sqlTarget) }
+                : job.identity;
               outcomes[index] = controls.signal?.aborted
-                ? { ...job.identity, status: "CANCELED", error: "Canceled during execution; result discarded." }
-                : { ...job.identity, status: result.valid ? "PASS" : "FAIL", result, durationMs: Date.now() - started };
+                ? { ...completedIdentity, status: "CANCELED", error: "Canceled during execution; result discarded." }
+                : { ...completedIdentity, status: result.valid ? "PASS" : "FAIL", result, durationMs: Date.now() - started };
             } catch (error) {
               outcomes[index] = { ...job.identity, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) };
             }
@@ -279,7 +284,7 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
         return memberRuns;
       }
       for (const [targetIndex, target] of targets.entries()) {
-        const identity = { ...base, table: `${target.schema}.${target.table}`, target: target.name ?? `${target.schema}.${target.table}` };
+        const identity = { ...base, table: `${target.schema}.${target.table}`, target: sqlServerTargetLabel(target), displayTarget: sqlServerTargetLabel(target) };
         if (controls.signal?.aborted) { memberRuns.push({ ...identity, status: "CANCELED", error: "Canceled before target execution." }); continue; }
         if (stopped) { memberRuns.push({ ...identity, status: "SKIPPED", error: "Not executed after fail-fast." }); continue; }
         try {
@@ -288,12 +293,14 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
           const result = await validate(evaluatedContract, target, member.source, targetIndex,
             progress => controls.onTargetProgress?.(identity, progress, targetIndex));
           result.evaluatedAt = startedAt;
-          memberRuns.push(controls.signal?.aborted ? { ...identity, status: "CANCELED", error: "Canceled during execution; result discarded." }
-            : { ...identity, status: result.valid ? "PASS" : "FAIL", result, durationMs: Date.now() - started });
+          const completedIdentity = { ...identity, target: sqlServerTargetLabel(target), displayTarget: sqlServerTargetLabel(target) };
+          memberRuns.push(controls.signal?.aborted ? { ...completedIdentity, status: "CANCELED", error: "Canceled during execution; result discarded." }
+            : { ...completedIdentity, status: result.valid ? "PASS" : "FAIL", result, durationMs: Date.now() - started });
           controls.onProgress?.(memberRuns[memberRuns.length - 1]);
           if (failFast && !result.valid) stopped = true;
         } catch (error) {
-          memberRuns.push({ ...identity, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) });
+          const completedIdentity = { ...identity, target: sqlServerTargetLabel(target), displayTarget: sqlServerTargetLabel(target) };
+          memberRuns.push({ ...completedIdentity, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) });
           controls.onProgress?.(memberRuns[memberRuns.length - 1]);
           if (failFast) stopped = true;
         }
