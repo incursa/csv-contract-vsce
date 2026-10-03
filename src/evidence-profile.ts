@@ -72,6 +72,11 @@ export function previewEvidenceProfile(profile: EvidenceProfile | undefined, col
   return policy(profile, columns);
 }
 
+/** Whether a profile changes any of the supplied evidence columns. */
+export function evidenceProfileRedacts(profile: EvidenceProfile | undefined, columns: string[]): boolean {
+  return policy(profile, columns).redaction;
+}
+
 export function redactEvidenceRecord(record: FailureEvidenceRecord, profile: EvidenceProfile | undefined, seed = "default"): FailureEvidenceRecord {
   if (!profile) return record;
   const columns = Object.keys(record.values);
@@ -96,18 +101,21 @@ export function redactFailureEvidence(evidence: FailureEvidence | undefined, pro
 export function redactValidationResult(result: ValidationResult | undefined, profile: EvidenceProfile | undefined, seed = "default"): RedactedValidationResult | undefined {
   if (!result || !profile) return result;
   return { ...result, issues: result.issues.map((issue, index) => {
+    const issueColumns = [...Object.keys(issue.group ?? {}), ...(issue.column ? [issue.column] : [])];
+    const issuePolicy = policy(profile, issueColumns);
     const group = issue.group && Object.fromEntries(Object.entries(issue.group)
-      .filter(([column]) => policy(profile, Object.keys(issue.group!)).included.includes(column))
+      .filter(([column]) => issuePolicy.included.includes(column))
       .map(([column, value]) => {
         const strategy = profile.mask?.[column];
         return [column, strategy ? String(masked(value, strategy, profile.id ?? profile.name ?? "profile")) : value];
       }));
+    const actualIncluded = !issue.column || issuePolicy.included.includes(issue.column);
     const actualStrategy = issue.column ? profile.mask?.[issue.column] : undefined;
     return {
       ...issue,
       group,
       evidence: redactFailureEvidence(issue.evidence, profile, `${seed}:issue:${index}`),
-      actual: issue.actual === undefined || !actualStrategy ? issue.actual : masked(issue.actual, actualStrategy, profile.id ?? profile.name ?? "profile")
+      actual: !actualIncluded ? undefined : issue.actual === undefined || !actualStrategy ? issue.actual : masked(issue.actual, actualStrategy, profile.id ?? profile.name ?? "profile")
     };
   }) };
 }

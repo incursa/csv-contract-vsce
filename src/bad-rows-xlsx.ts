@@ -2,7 +2,7 @@ import { strToU8, zipSync } from "fflate";
 import { orderedChecks } from "./core/ordered-rule";
 import { aggregateResultHealth, resultHealth, resultHealthCategory, type ResultHealthBand } from "./core/result-health";
 import type { CsvContract, EvidenceValue, Predicate, SqlPredicate, ValidationIssue, ValidationResult } from "./core/model";
-import { redactValidationResult, type EvidenceProfile } from "./evidence-profile";
+import { evidenceProfileRedacts, redactValidationResult, type EvidenceProfile } from "./evidence-profile";
 
 export interface BadRowsRun {
   suite?: string;
@@ -343,6 +343,15 @@ function workbookPackage(sheets: SheetDefinition[], title: string): Uint8Array {
 
 /** Build a workbook from retained evidence without querying the source again. */
 export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions): Uint8Array {
+  const evidenceColumns = [...new Set(runs.flatMap(run => run.result?.issues.flatMap(issue => [
+    ...(issue.column ? [issue.column] : []), ...Object.keys(issue.group ?? {}),
+    ...Object.keys(issue.evidence?.aggregate ?? {}),
+    ...(issue.evidence?.samples.flatMap(sample => [
+      ...Object.keys(sample.primary?.values ?? {}),
+      ...(sample.related ?? []).flatMap(record => Object.keys(record.values))
+    ]) ?? [])
+  ]) ?? []))];
+  const redacted = evidenceProfileRedacts(options.evidenceProfile, evidenceColumns);
   const exportRuns = options.evidenceProfile
     ? runs.map((run, index) => ({ ...run, result: redactValidationResult(run.result, options.evidenceProfile, `${run.target ?? run.member ?? index}`) }))
     : runs;
@@ -410,7 +419,7 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
     ["Merged rows", "A source row is merged across test files only when its source label, row number, and source values match. Check columns include the test file name so repeated rule IDs remain separate."],
     ["Data handling", "Sheets can contain every retained source and joined value. Protect this workbook like the source data."],
     ["Evidence boundary", "The workbook uses retained run evidence and does not query the source again. Limited evidence remains limited."],
-    ["Evidence profile", options.evidenceProfile?.name ?? options.evidenceProfile?.id ?? "default"], ["Evidence redacted", Boolean(options.evidenceProfile)],
+    ["Evidence profile", options.evidenceProfile?.name ?? options.evidenceProfile?.id ?? "default"], ["Evidence redacted", redacted],
     ["Excel limits", "At most 1,048,575 data rows and 16,384 columns per sheet. Text cells are limited to 32,767 characters."]
   ];
   sheets.push(...targetSheets);

@@ -1,6 +1,6 @@
 import type { ValidationResult } from "./core/model";
 import { rowsToCsv } from "./comparison/evidence";
-import { redactValidationResult, type EvidenceProfile } from "./evidence-profile";
+import { evidenceProfileRedacts, redactValidationResult, type EvidenceProfile } from "./evidence-profile";
 
 export interface IssueExportRun {
   runId?: string;
@@ -31,8 +31,20 @@ export interface ValidationRunExport {
   evidence?: { profileId?: string; profileName?: string; redacted: boolean };
 }
 
+function evidenceColumns(runs: IssueExportRun[]): string[] {
+  return [...new Set(runs.flatMap(run => run.result?.issues.flatMap(issue => [
+    ...(issue.column ? [issue.column] : []), ...Object.keys(issue.group ?? {}),
+    ...Object.keys(issue.evidence?.aggregate ?? {}),
+    ...(issue.evidence?.samples.flatMap(sample => [
+      ...Object.keys(sample.primary?.values ?? {}),
+      ...(sample.related ?? []).flatMap(record => Object.keys(record.values))
+    ]) ?? [])
+  ]) ?? []))];
+}
+
 export function createValidationRunExport(contract: string, runs: IssueExportRun[], profile?: EvidenceProfile): ValidationRunExport {
   const exportedRuns = profile ? runs.map((run, index) => ({ ...run, result: redactValidationResult(run.result, profile, `${contract}:${index}`) })) : runs;
+  const redacted = evidenceProfileRedacts(profile, evidenceColumns(runs));
   const issues = exportedRuns.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
   const retainedIssueDetails = exportedRuns.reduce((total, run) => total + (run.result?.issues.length ?? 0), 0);
   return {
@@ -50,7 +62,7 @@ export function createValidationRunExport(contract: string, runs: IssueExportRun
       issueDetailsComplete: issues === retainedIssueDetails
     },
     runs: exportedRuns,
-    ...(profile ? { evidence: { profileId: profile.id, profileName: profile.name, redacted: true } } : {})
+    ...(profile ? { evidence: { profileId: profile.id, profileName: profile.name, redacted } } : {})
   };
 }
 
@@ -135,7 +147,16 @@ export function parseValidationRunExport(text: string): ValidationRunExport {
   });
   if (!runs.length) throw new Error("Results JSON contains no target runs to review.");
   const parsed = createValidationRunExport(exportValue.contract, runs);
-  return { ...parsed, exportedAt: typeof exportValue.exportedAt === "string" ? exportValue.exportedAt : undefined };
+  const metadata = exportValue.evidence;
+  if (metadata !== undefined && (!metadata || typeof metadata !== "object" || Array.isArray(metadata))) {
+    throw new Error("Results JSON has invalid evidence metadata.");
+  }
+  const evidence = metadata as Record<string, unknown> | undefined;
+  if (evidence && (evidence.profileId !== undefined && typeof evidence.profileId !== "string" || evidence.profileName !== undefined && typeof evidence.profileName !== "string" || typeof evidence.redacted !== "boolean")) {
+    throw new Error("Results JSON has invalid evidence metadata.");
+  }
+  return { ...parsed, exportedAt: typeof exportValue.exportedAt === "string" ? exportValue.exportedAt : undefined,
+    ...(evidence ? { evidence: { profileId: evidence.profileId as string | undefined, profileName: evidence.profileName as string | undefined, redacted: evidence.redacted as boolean } } : {}) };
 }
 
 export function validationRunExportJson(contract: string, runs: IssueExportRun[], profile?: EvidenceProfile): string {
@@ -144,6 +165,7 @@ export function validationRunExportJson(contract: string, runs: IssueExportRun[]
 
 export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown, profile?: EvidenceProfile): string {
   const exportRuns = profile ? runs.map((run, index) => ({ ...run, result: redactValidationResult(run.result, profile, `${run.target}:${index}`) })) : runs;
+  const redacted = evidenceProfileRedacts(profile, evidenceColumns(runs));
   const columns = [
     "Target",
     "Severity",
@@ -161,7 +183,7 @@ export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown, profil
     "EvidenceLimited"
   ];
   const extended = context !== undefined || exportRuns.some(run => run.runId) || Boolean(profile);
-  const metadata = (run: IssueExportRun) => extended ? [run.runId ?? "", run.workId ?? "", run.evaluatedAt ?? "", run.scope ?? "", run.status ?? (run.result?.valid ? "PASS" : "FAIL"), JSON.stringify(context ?? {}), String(run.result?.issueCount ?? 0), String(run.result?.issues.length ?? 0), String(run.result?.truncated ?? false), profile?.name ?? profile?.id ?? "", String(Boolean(profile))] : [];
+  const metadata = (run: IssueExportRun) => extended ? [run.runId ?? "", run.workId ?? "", run.evaluatedAt ?? "", run.scope ?? "", run.status ?? (run.result?.valid ? "PASS" : "FAIL"), JSON.stringify(context ?? {}), String(run.result?.issueCount ?? 0), String(run.result?.issues.length ?? 0), String(run.result?.truncated ?? false), profile?.name ?? profile?.id ?? "", String(redacted)] : [];
   const rows = exportRuns.flatMap((run) => (run.result?.issues ?? []).map((issue) => [
     run.target,
     issue.severity ?? "error",

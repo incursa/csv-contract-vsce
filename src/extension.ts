@@ -745,7 +745,8 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         const evidencePreview = previewEvidenceProfile(profile, evidenceColumns);
         if (profile && evidencePreview.warning) void vscode.window.showWarningMessage(evidencePreview.warning);
         if (profile) {
-          void vscode.window.showInformationMessage(`Evidence preview: ${evidencePreview.included.length} included, ${evidencePreview.excluded.length} excluded, ${evidencePreview.masked.length} masked${evidencePreview.profileName ? ` (${evidencePreview.profileName})` : ""}.`);
+          const previewDetail = `Included: ${evidencePreview.included.join(", ") || "none"}. Excluded: ${evidencePreview.excluded.join(", ") || "none"}. Masked: ${evidencePreview.masked.join(", ") || "none"}.`;
+          void vscode.window.showInformationMessage(`Evidence preview${evidencePreview.profileName ? ` (${evidencePreview.profileName})` : ""}: ${previewDetail}`);
         } else {
           void vscode.window.showWarningMessage("This export includes full row values. Add an evidenceProfile to the contract to limit or mask source columns.");
         }
@@ -757,7 +758,7 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         });
         if (!outputUri) return;
         const exportRuns = format.label === "Excel validation package" ? latestRuns : filterResultRuns(latestRuns, String(message.filter ?? ""), message.selectedIssues);
-        const exportContext = { filter: message.filter ?? "", selectedIssues: message.selectedIssues ?? [], stale, runNotice, totals: "original target scope; exported details may be selected or filtered", evidenceProfile: profile?.name ?? profile?.id ?? "default", evidenceRedacted: Boolean(profile) };
+        const exportContext = { filter: message.filter ?? "", selectedIssues: message.selectedIssues ?? [], stale, runNotice, totals: "original target scope; exported details may be selected or filtered", evidenceProfile: profile?.name ?? profile?.id ?? "default", evidenceRedacted: evidencePreview.redaction };
         const content = format.label === "JSON"
           ? JSON.stringify({ ...JSON.parse(validationRunExportJson(vscode.workspace.asRelativePath(document.uri, false), exportRuns, profile)), exportScope: exportContext }, null, 2)
           : format.label === "CSV" ? issueRunsToCsv(exportRuns, exportContext, profile)
