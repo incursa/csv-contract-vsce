@@ -35,8 +35,13 @@ test("SQL target labels use the resolved execution endpoint and ignore display n
   assert.equal(sqlServerTargetLabel({ connection: "unused", integratedConnection: { server: "sql02", database: "Warehouse" }, schema: "stage", table: "Orders" }), "sql02.Warehouse.stage.Orders");
 });
 
-test("unresolved SQL target labels do not expose connection profile names", () => {
-  assert.equal(sqlServerTargetLabel({ connection: "production-credentials", schema: "dbo", table: "Orders" }), "unresolved.dbo.Orders");
+test("unresolved SQL target labels remain canonical and distinguish profiles without exposing names", () => {
+  const production = sqlServerTargetLabel({ connection: "production-credentials", schema: "dbo", table: "Orders" });
+  const staging = sqlServerTargetLabel({ connection: "staging-credentials", schema: "dbo", table: "Orders" });
+  assert.match(production, /^unresolved\.[0-9a-f]{8}\.dbo\.Orders$/);
+  assert.match(staging, /^unresolved\.[0-9a-f]{8}\.dbo\.Orders$/);
+  assert.notEqual(production, staging);
+  assert.doesNotMatch(production, /production-credentials/);
 });
 
 test("validation package uses one canonical target label across reviewer sheets", () => {

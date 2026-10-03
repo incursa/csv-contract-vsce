@@ -35,7 +35,19 @@ export function sqlServerTargetLabel(target: ResolvedSqlServerTarget): string {
   if (endpoint) return `${endpoint.server}.${endpoint.database}.${target.schema}.${target.table}`;
   // A profile name is not an execution endpoint and may identify credentials,
   // so never use it as a reviewer-facing target label when resolution failed.
-  return `unresolved.${target.schema}.${target.table}`;
+  // Keep the four-part shape and distinguish profiles with a stable opaque token
+  // until the effective endpoint can be resolved.
+  return `unresolved.${opaqueConnectionToken(target.connection)}.${target.schema}.${target.table}`;
+}
+
+function opaqueConnectionToken(connection: string | undefined): string {
+  const value = connection?.trim() || "unconfigured";
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 export function resolveSqlServerTargets(contract: CsvContract, requireConnection = true): ResolvedSqlServerTarget[] {
