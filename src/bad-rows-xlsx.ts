@@ -377,7 +377,13 @@ function workbookPackage(sheets: SheetDefinition[], title: string, options: BadR
   files["xl/_rels/workbook.xml.rels"] = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`);
   files["xl/styles.xml"] = strToU8(styles());
   const truncated = { count: 0 };
-  sheets.forEach((sheet, index) => { files[`xl/worksheets/sheet${index + 1}.xml`] = strToU8(worksheet(sheet, options, truncated)); });
+  for (const [index, sheet] of sheets.entries()) {
+    cancelled(options);
+    files[`xl/worksheets/sheet${index + 1}.xml`] = strToU8(worksheet(sheet, options, truncated));
+    progress(options, { phase: "package", completed: index + 1, total: sheets.length,
+      message: `Packaged sheet ${(index + 1).toLocaleString()} of ${sheets.length.toLocaleString()}.` });
+  }
+  cancelled(options);
   const timestamp = new Date().toISOString();
   files["docProps/core.xml"] = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${xml(title)}</dc:title><dc:creator>CSV Contract Workbench</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${timestamp}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${timestamp}</dcterms:modified></cp:coreProperties>`);
   files["docProps/app.xml"] = strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>CSV Contract Workbench</Application><AppVersion>1.0</AppVersion></Properties>');
@@ -388,11 +394,12 @@ function workbookPackage(sheets: SheetDefinition[], title: string, options: BadR
 
 /** A cheap preflight used by the UI before it starts serializing XML. */
 export function estimateBadRowsWorkbook(runs: BadRowsRun[], options: BadRowsWorkbookOptions): BadRowsWorkbookEstimate {
-  limits(options);
+  const configuredLimits = limits(options);
   let retainedRows = 0;
   let aggregateFindings = 0;
   const targets = new Set<string>();
   let estimatedCells = 0;
+  let widestTarget = 0;
   for (const [index, run] of runs.entries()) {
     cancelled(options);
     const target = targetLabel(run, index);
@@ -400,12 +407,21 @@ export function estimateBadRowsWorkbook(runs: BadRowsRun[], options: BadRowsWork
     const matrix = matrixRows(run);
     retainedRows += matrix.rows.length;
     aggregateFindings += matrix.aggregateIssues.length;
-    estimatedCells += matrix.rows.reduce((total, row) => total + Object.keys(row.values).length + Object.keys(row.related).length + row.failed.size + 3, 0);
+    const configuredChecks = options.checkCatalog
+      ? options.checkCatalog(run, index).length
+      : options.checkIds ? options.checkIds(run, index).length : 0;
+    const columns = 3 + new Set(matrix.rows.flatMap(row => Object.keys(row.values))).size
+      + new Set(matrix.rows.flatMap(row => Object.keys(row.related))).size + configuredChecks;
+    widestTarget = Math.max(widestTarget, columns);
+    estimatedCells += matrix.rows.reduce((total, row) => total + Object.keys(row.values).length + Object.keys(row.related).length + row.failed.size + 3, 0) + columns;
+    progress(options, { phase: "estimate", completed: index + 1, total: runs.length,
+      message: `Estimated target ${(index + 1).toLocaleString()} of ${runs.length.toLocaleString()}.` });
   }
   const estimatedBytes = Math.max(4096, estimatedCells * 18);
   const warnings: string[] = [];
   if (estimatedBytes > 50 * 1024 * 1024) warnings.push("The estimated package is larger than 50 MiB; export may take a while.");
-  if (retainedRows > maximumRows - 1) warnings.push("Rows will be split into deterministic Excel sheets.");
+  if (retainedRows > configuredLimits.rows - 1) warnings.push(`Rows will be split into deterministic sheets at ${configuredLimits.rows.toLocaleString()} rows per sheet.`);
+  if (widestTarget > configuredLimits.columns) warnings.push(`Wide target matrices will be split into deterministic sheets at ${configuredLimits.columns.toLocaleString()} columns per sheet.`);
   progress(options, { phase: "estimate", completed: runs.length, total: runs.length, message: `Estimated ${estimatedBytes.toLocaleString()} bytes across ${targets.size.toLocaleString()} targets.` });
   return { runs: runs.length, retainedRows, aggregateFindings, estimatedCells, estimatedBytes, targetSheets: targets.size, warnings };
 }
@@ -433,8 +449,12 @@ function shardSheets(sheet: SheetDefinition, options: BadRowsWorkbookOptions, us
     part++;
     const headers = [...sheet.headers.slice(0, identityCount), ...columns.headers];
     const indexes = [...Array(identityCount).keys(), ...columns.indexes];
+    const checkIndex = sheet.checkStart === undefined ? -1 : columns.indexes.indexOf(sheet.checkStart);
     result.push({ ...sheet, name: safeSheetName(`${sheet.name} ${part}`, used), headers,
-      checkStart: sheet.checkStart === undefined ? undefined : Math.max(identityCount, sheet.checkStart - (columns.indexes[0] ?? identityCount) + identityCount),
+      // A check column is styled as a check only when this column shard contains
+      // it.  The old offset calculation marked source columns as checks on
+      // later shards, which made the repeated identity columns ambiguous.
+      checkStart: checkIndex < 0 ? undefined : identityCount + checkIndex,
       rows: rows.map(row => indexes.map(index => row[index])) });
   }
   return result;
@@ -468,6 +488,9 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
   const sortedTargets = [...groupedTargets.values()].sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }));
   for (const target of sortedTargets) {
     cancelled(options);
+    const targetNumber = sortedTargets.indexOf(target) + 1;
+    progress(options, { phase: "build", completed: targetNumber, total: sortedTargets.length,
+      message: `Preparing target ${targetNumber.toLocaleString()} of ${sortedTargets.length.toLocaleString()}: ${target.label}` });
     const entries = [...target.entries].sort((left, right) => testLabel(left.run, left.index, options).localeCompare(testLabel(right.run, right.index, options), undefined, { sensitivity: "base" }) || left.index - right.index);
     const rows = new Map<string, ConsolidatedMatrixRow>();
     const checkIds: string[] = [];
@@ -509,7 +532,7 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
     ["Aggregate-only findings", aggregateCount], ["Matrix meaning", "FALSE (red) means this check failed the retained row. Blank means not failed in retained evidence, not applicable, or not provably evaluated for that row."],
     ["Merged rows", "A source row is merged across test files only when its source label, row number, and source values match. Check columns include the test file name so repeated rule IDs remain separate."],
     ["Data handling", "Sheets can contain every retained source and joined value. Protect this workbook like the source data."],
-    ["Evidence boundary", "The workbook uses retained run evidence and does not query the source again. Limited evidence remains limited."],
+    ["Evidence boundary", "The workbook uses retained run evidence and does not query the source again. Limited or sampled evidence remains limited; omitted source rows and unretained findings cannot be reconstructed by this export."],
     ["Excel limits", "At most 1,048,575 data rows and 16,384 columns per sheet. Oversized target matrices are split deterministically by rows and columns; every shard repeats Test files, Source, and Source row. Text cells are limited to 32,767 characters and truncated cells are reported in export progress."],
     ["Export estimate", `${estimateBadRowsWorkbook(runs, { ...options, onProgress: undefined }).estimatedBytes.toLocaleString()} bytes estimated before XML generation.`]
   ];
