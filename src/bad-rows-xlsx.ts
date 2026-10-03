@@ -1,4 +1,4 @@
-import { strToU8, zipSync } from "fflate";
+import { AsyncZipDeflate, strToU8, Zip, zipSync } from "fflate";
 import { orderedChecks } from "./core/ordered-rule";
 import { aggregateResultHealth, resultHealth, resultHealthCategory, type ResultHealthBand } from "./core/result-health";
 import type { CsvContract, EvidenceValue, Predicate, SqlPredicate, ValidationIssue, ValidationResult } from "./core/model";
@@ -392,6 +392,105 @@ function workbookPackage(sheets: SheetDefinition[], title: string, options: BadR
   return result;
 }
 
+function yieldToHost(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+/**
+ * Async counterpart to worksheet(). It deliberately keeps only the current
+ * row fragment in the call stack and yields regularly so the extension host
+ * can deliver progress and AbortSignal events while large sheets are being
+ * serialized.
+ */
+async function worksheetAsync(sheet: SheetDefinition, options: BadRowsWorkbookOptions, truncated: { count: number }): Promise<string> {
+  const { rows: maxRows, columns: maxColumns } = limits(options);
+  if (!sheet.headers.length || sheet.headers.length > maxColumns) throw new Error(`Excel sheet '${sheet.name}' has an invalid column count (${sheet.headers.length}; limit ${maxColumns.toLocaleString()}).`);
+  if (sheet.rows.length + 1 > maxRows) throw new Error(`Excel sheet '${sheet.name}' exceeds ${maxRows.toLocaleString()} rows.`);
+  const widths = sheet.headers.map((header, column) => {
+    const longest = sheet.rows.slice(0, 500).reduce((length, row) => Math.max(length, String(row[column] ?? "").length), header.length);
+    return Math.min(sheet.checkStart !== undefined && column >= sheet.checkStart ? 28 : 42, Math.max(10, longest + 2));
+  });
+  const rows = [`<row r="1">${sheet.headers.map((header, column) => cell(header, 1, column, sheet.readme ? 5 : sheet.checkStart !== undefined && column >= sheet.checkStart ? 2 : 1, truncated)).join("")}</row>`];
+  for (const [rowIndex, values] of sheet.rows.entries()) {
+    cancelled(options);
+    rows.push(`<row r="${rowIndex + 2}">${values.map((value, column) => cell(value, rowIndex + 2, column,
+      sheet.styles?.[rowIndex]?.[column] ?? (sheet.checkStart !== undefined && column >= sheet.checkStart && value === false ? 3 : sheet.checkStart !== undefined && column >= sheet.checkStart && value === true ? 4 : sheet.wrapColumns?.includes(column) ? 13 : 0), truncated)).join("")}</row>`);
+    if ((rowIndex + 1) % 128 === 0) await yieldToHost();
+  }
+  const last = `${columnName(sheet.headers.length - 1)}${sheet.rows.length + 1}`;
+  const frozenPane = sheet.freezeColumns
+    ? `<pane xSplit="${sheet.freezeColumns}" ySplit="1" topLeftCell="${columnName(sheet.freezeColumns)}2" activePane="bottomRight" state="frozen"/>`
+    : '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>';
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0">${sheet.readme ? "" : frozenPane}</sheetView></sheetViews><cols>${widths.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join("")}</cols><sheetData>${rows.join("")}</sheetData>${sheet.readme ? "" : `<autoFilter ref="A1:${last}"/>`}</worksheet>`;
+}
+
+async function workbookPackageAsync(sheets: SheetDefinition[], title: string, options: BadRowsWorkbookOptions): Promise<Uint8Array> {
+  const files: Record<string, Uint8Array> = {};
+  const overrides = sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("");
+  files["[Content_Types].xml"] = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>${overrides}</Types>`);
+  files["_rels/.rels"] = strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>');
+  files["xl/workbook.xml"] = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView activeTab="0"/></bookViews><sheets>${sheets.map((sheet, index) => `<sheet name="${xml(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("")}</sheets><calcPr calcId="0" fullCalcOnLoad="1"/></workbook>`);
+  files["xl/_rels/workbook.xml.rels"] = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`);
+  files["xl/styles.xml"] = strToU8(styles());
+  const truncated = { count: 0 };
+  for (const [index, sheet] of sheets.entries()) {
+    cancelled(options);
+    files[`xl/worksheets/sheet${index + 1}.xml`] = strToU8(await worksheetAsync(sheet, options, truncated));
+    progress(options, { phase: "package", completed: index + 1, total: sheets.length, message: `Packaged sheet ${(index + 1).toLocaleString()} of ${sheets.length.toLocaleString()}.` });
+    await yieldToHost();
+  }
+  cancelled(options);
+  const timestamp = new Date().toISOString();
+  files["docProps/core.xml"] = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${xml(title)}</dc:title><dc:creator>CSV Contract Workbench</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${timestamp}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${timestamp}</dcterms:modified></cp:coreProperties>`);
+  files["docProps/app.xml"] = strToU8('<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>CSV Contract Workbench</Application><AppVersion>1.0</AppVersion></Properties>');
+  if (truncated.count) progress(options, { phase: "package", completed: sheets.length, total: sheets.length, message: `${truncated.count.toLocaleString()} text cells were truncated to Excel's 32,767-character limit.` });
+  return new Promise((resolve, reject) => {
+    cancelled(options);
+    const chunks: Uint8Array[] = [];
+    let finished = false;
+    const archive = new Zip((error, chunk, final) => {
+      if (error) {
+        finished = true;
+        reject(error);
+        return;
+      }
+      chunks.push(chunk);
+      if (final && !finished) {
+        finished = true;
+        const length = chunks.reduce((total, item) => total + item.length, 0);
+        const result = new Uint8Array(length);
+        let offset = 0;
+        for (const item of chunks) { result.set(item, offset); offset += item.length; }
+        resolve(result);
+      }
+    });
+    const abort = () => {
+      if (finished) return;
+      finished = true;
+      archive.terminate();
+      reject(new Error("Excel validation package export canceled."));
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
+    void (async () => {
+      try {
+        for (const [name, bytes] of Object.entries(files)) {
+          cancelled(options);
+          const entry = new AsyncZipDeflate(name, { level: 6 });
+          archive.add(entry);
+          entry.push(bytes, true);
+          delete files[name];
+          await yieldToHost();
+        }
+        cancelled(options);
+        archive.end();
+      } catch (error) {
+        abort();
+        if (!finished) reject(error);
+      }
+    })();
+  });
+}
+
 /** A cheap preflight used by the UI before it starts serializing XML. */
 export function estimateBadRowsWorkbook(runs: BadRowsRun[], options: BadRowsWorkbookOptions): BadRowsWorkbookEstimate {
   const configuredLimits = limits(options);
@@ -461,7 +560,7 @@ function shardSheets(sheet: SheetDefinition, options: BadRowsWorkbookOptions, us
 }
 
 /** Build a workbook from retained evidence without querying the source again. */
-export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions): Uint8Array {
+function buildWorkbookSheets(runs: BadRowsRun[], options: BadRowsWorkbookOptions): SheetDefinition[] {
   limits(options);
   cancelled(options);
   progress(options, { phase: "build", completed: 0, total: runs.length, message: "Preparing validation package sheets." });
@@ -542,14 +641,21 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
   if (!targetSheets.length && !aggregates.length) sheets.push({ name: safeSheetName("No bad rows", used), headers: ["Status"], rows: [["No retained bad-row evidence was available in the selected results."]] });
   sheets.push({ name: readmeName, headers: ["Item", "Details"], rows: readmeRows, readme: true });
   progress(options, { phase: "build", completed: runs.length, total: runs.length, message: `Prepared ${sheets.length.toLocaleString()} workbook sheets.` });
-  return workbookPackage(sheets, options.title, options);
+  return sheets;
 }
 
-/** Yield once before the synchronous serializer so UI callers can render preflight progress and cancellation. */
+export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions): Uint8Array {
+  return workbookPackage(buildWorkbookSheets(runs, options), options.title, options);
+}
+
+/** Build and package cooperatively so the extension host remains responsive. */
 export async function badRowsXlsxAsync(runs: BadRowsRun[], options: BadRowsWorkbookOptions): Promise<Uint8Array> {
   const estimate = estimateBadRowsWorkbook(runs, options);
   if (estimate.warnings.length) progress(options, { phase: "estimate", completed: runs.length, total: runs.length, message: estimate.warnings.join(" ") });
-  await Promise.resolve();
+  await yieldToHost();
   cancelled(options);
-  return badRowsXlsx(runs, options);
+  const sheets = buildWorkbookSheets(runs, options);
+  await yieldToHost();
+  cancelled(options);
+  return workbookPackageAsync(sheets, options.title, options);
 }
