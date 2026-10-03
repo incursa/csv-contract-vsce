@@ -122,3 +122,10 @@ test("validation package exposes a preflight estimate and honors cancellation", 
   controller.abort();
   await assert.rejects(() => badRowsXlsxAsync([{ target: "source.csv", result }], { title: "Canceled", signal: controller.signal }), /canceled/i);
 });
+
+test("async validation package streams worksheet XML into a valid archive", async () => {
+  const bytes = await badRowsXlsxAsync([{ member: "streamed-test", target: "source.csv", status: "FAIL", result }], { title: "Streamed package" });
+  assert.equal(String.fromCharCode(...bytes.slice(0, 2)), "PK");
+  const files = unzipSync(bytes);
+  assert.match(strFromU8(files["xl/worksheets/sheet2.xml"]), /00123/);
+});
