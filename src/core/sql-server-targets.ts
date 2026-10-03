@@ -80,11 +80,10 @@ export function resolveSqlServerTargetPolicies(contract: CsvContract, requireCon
   }
   for (const override of overrides ?? []) if (!ids.has(override.target)) throw new Error(`Unknown SQL Server target id '${override.target}'.`);
   const overrideMap = new Map((overrides ?? []).map(override => [override.target, override.enabled]));
-  const candidates = configured.map((target, index) => ({ target, index })).filter(({ target }) =>
-    (target.id !== undefined && overrideMap.has(target.id)) ||
-    (target.environment !== undefined && policy?.environments?.[target.environment] !== undefined) ||
-    target.enabled !== false);
-  return candidates.map(({ target, index }) => {
+  return configured.map((target, index) => {
+    const override = target.id === undefined ? undefined : overrideMap.get(target.id);
+    const policyEnabled = target.environment === undefined ? undefined : policy?.environments?.[target.environment];
+    const enabled = override ?? policyEnabled ?? target.enabled ?? true;
     if (!target.schema?.trim() || !target.table?.trim()) {
       throw new Error(`SQL Server target ${index + 1} must declare non-empty schema and table names.`);
     }
@@ -96,7 +95,7 @@ export function resolveSqlServerTargetPolicies(contract: CsvContract, requireCon
     if (integrated && (!integrated.server?.trim() || !integrated.database?.trim())) {
       throw new Error(`SQL Server target ${target.schema}.${target.table} must declare non-empty integratedConnection.server and integratedConnection.database values.`);
     }
-    if (requireConnection && !connection && !integrated) {
+    if (requireConnection && enabled && !connection && !integrated) {
       throw new Error(`SQL Server target ${target.schema}.${target.table} must declare a connection profile or integratedConnection.`);
     }
     const columnMap = target.columnMap ?? {};
@@ -128,9 +127,7 @@ export function resolveSqlServerTargetPolicies(contract: CsvContract, requireCon
       columnMap: Object.keys(columnMap).length ? Object.fromEntries(Object.entries(columnMap).map(([column, physical]) => [column, physical.trim()])) : undefined,
       scope: target.scope ?? sqlServer.scope
     };
-    const override = target.id === undefined ? undefined : overrideMap.get(target.id);
-    const policyEnabled = target.environment === undefined ? undefined : policy?.environments?.[target.environment];
-    return { target: resolvedTarget, enabled: override ?? policyEnabled ?? target.enabled ?? true,
+    return { target: resolvedTarget, enabled,
       enabledSource: override !== undefined ? "member-override" : policyEnabled !== undefined ? "suite-policy" : target.enabled !== undefined ? "contract" : "default" };
   });
 }

@@ -38,7 +38,19 @@ export function parseContract(text: string): CsvContract {
   }
   if (!validateShape(value)) throw new Error(`Invalid contract: ${JSON.stringify(validateShape.errors)}`);
   validateContractSemantics(value);
+  validateSqlServerTargetIds(value);
   return value;
+}
+
+/** Target IDs are local to a contract; suites resolve them in member scope. */
+export function validateSqlServerTargetIds(contract: CsvContract, context = "Contract"): void {
+  const ids = new Set<string>();
+  for (const target of contract.sqlServer?.targets ?? []) {
+    if (target.id === undefined) continue;
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(target.id)) throw new Error(`${context}: SQL target id '${target.id}' is invalid.`);
+    if (ids.has(target.id)) throw new Error(`${context}: duplicate SQL target id '${target.id}'.`);
+    ids.add(target.id);
+  }
 }
 
 function validateContractSemantics(contract: CsvContract, depth = 0): void {

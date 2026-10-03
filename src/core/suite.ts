@@ -3,7 +3,7 @@ import type { ValidationProgress } from "./run-progress";
 import { resolveEvaluation } from "./evaluation";
 import { planCrossCheck, type CrossCheck, type CrossExecutor } from "./cross-checks";
 import { isScalar, parseDocument, stringify, visit } from "yaml";
-import { parseContract } from "./contract";
+import { parseContract, validateSqlServerTargetIds } from "./contract";
 import { resolveGroupContracts } from "./group-contracts";
 import type { CsvContract, CsvTarget, SqlServerIntegratedConnection, ValidationResult } from "./model";
 import { resolveSqlServerTargetPolicies, type ResolvedSqlServerTarget } from "./sql-server-targets";
@@ -183,15 +183,6 @@ export function parseSuite(text: string): ContractSuite {
   return suite;
 }
 
-function validateTargetIds(contract: CsvContract, context: string): void {
-  const ids = new Set<string>();
-  for (const target of contract.sqlServer?.targets ?? []) if (target.id !== undefined) {
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(target.id)) throw new Error(`${context}: SQL target id '${target.id}' is invalid.`);
-    if (ids.has(target.id)) throw new Error(`${context}: duplicate SQL target id '${target.id}'.`);
-    ids.add(target.id);
-  }
-}
-
 /** Connection alternatives are atomic; a higher priority alternative replaces the lower one. */
 export function effectiveContract(contract: CsvContract, defaults?: SuiteConnection): CsvContract {
   const copy = structuredClone(contract);
@@ -228,7 +219,7 @@ export async function loadSuite(source: string, io: SuiteIO, ancestors: string[]
       }
       contract = parseContract(stringify(contract));
       if (!validateContractShape(contract)) throw new Error(`Invalid contract: ${JSON.stringify(validateContractShape.errors)}`);
-      validateTargetIds(contract, `Member ${member.id}`);
+      validateSqlServerTargetIds(contract, `Member ${member.id}`);
       for (const override of member.targetOverrides ?? []) if (!(contract.sqlServer?.targets ?? []).some(target => target.id === override.target)) throw new Error(`Member ${member.id}: target override references unknown target id '${override.target}'.`);
       const own = (value: SuiteConnection | undefined) => value?.connection !== undefined || value?.integratedConnection !== undefined;
       const connectionOrigins = contract.sqlServer?.targets?.map(target => own(target) ? "table override" : own(contract.sqlServer) ? "contract" : own(suite.defaults) ? "suite default" : "unconfigured")

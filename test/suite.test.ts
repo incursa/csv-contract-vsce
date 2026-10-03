@@ -12,6 +12,7 @@ import { assertCompleteSqlSummaries } from "../src/core/sql-server-results";
 import { spawnSync } from "node:child_process";
 import { resolveBaseline, resolveTargetBaseline, baselineReferences } from "../src/core/baseline";
 import { resolveSqlServerTargetPolicies } from "../src/core/sql-server-targets";
+import { parseContract } from "../src/core/contract";
 
 test("suite SQL target policies resolve precedence without mutating contracts", () => {
   const c = contract();
@@ -27,6 +28,21 @@ test("suite SQL target policies resolve precedence without mutating contracts", 
   ]);
   assert.deepEqual(c, before);
   assert.throws(() => resolveSqlServerTargetPolicies(c, true, undefined, [{ target: "missing", enabled: true }]), /Unknown SQL Server target id/);
+});
+
+test("target policy resolution returns disabled targets and direct contracts reject duplicate IDs", () => {
+  const c = contract();
+  c.sqlServer = { targets: [
+    { id: "paused", enabled: false, connection: "test", schema: "dbo", table: "Paused" },
+    { id: "active", connection: "test", schema: "dbo", table: "Active" }
+  ] };
+  assert.deepEqual(resolveSqlServerTargetPolicies(c).map(entry => [entry.target.id, entry.enabled, entry.enabledSource]), [
+    ["paused", false, "contract"], ["active", true, "default"]
+  ]);
+  assert.throws(() => parseContract(stringify({ ...c, sqlServer: { targets: [
+    { id: "same", connection: "test", schema: "dbo", table: "A" },
+    { id: "same", connection: "test", schema: "dbo", table: "B" }
+  ] } })), /duplicate SQL target id/);
 });
 
 test("target baseline dependencies retain relative meaning through combine and split", async (t) => {
