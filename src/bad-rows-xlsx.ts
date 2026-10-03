@@ -686,13 +686,139 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
   return workbookPackage(buildWorkbookSheets(runs, options), options.title, options);
 }
 
+async function estimateBadRowsWorkbookAsync(runs: BadRowsRun[], options: BadRowsWorkbookOptions): Promise<BadRowsWorkbookEstimate> {
+  // Keep the preflight cancellable as well as the XML writer.  matrixRows can
+  // be substantial for retained failures, so yield between runs instead of
+  // making the estimate a synchronous event-loop barrier.
+  const configuredLimits = limits(options);
+  let retainedRows = 0;
+  let aggregateFindings = 0;
+  let omittedEvidenceRuns = 0;
+  const targets = new Set<string>();
+  let estimatedCells = 0;
+  let widestTarget = 0;
+  for (const [index, run] of runs.entries()) {
+    cancelled(options);
+    if (run.result?.truncated || run.result?.preview?.scope === "sample") omittedEvidenceRuns++;
+    const target = targetLabel(run, index);
+    targets.add(target.trim().toLocaleLowerCase());
+    const matrix = matrixRows(run);
+    retainedRows += matrix.rows.length;
+    aggregateFindings += matrix.aggregateIssues.length;
+    const configuredChecks = unique([
+      ...(options.checkCatalog?.(run, index).map(check => check.id) ?? options.checkIds?.(run, index) ?? []),
+      ...matrix.rows.flatMap(row => [...row.failed])
+    ]).length;
+    const columns = 3 + new Set(matrix.rows.flatMap(row => Object.keys(row.values))).size
+      + new Set(matrix.rows.flatMap(row => Object.keys(row.related))).size + configuredChecks;
+    widestTarget = Math.max(widestTarget, columns);
+    estimatedCells += (matrix.rows.length + 1) * Math.min(columns, configuredLimits.columns);
+    if ((index + 1) % 8 === 0) {
+      progress(options, { phase: "estimate", completed: index + 1, total: runs.length, message: `Estimating result ${index + 1} of ${runs.length}.` });
+      await yieldToHost();
+    }
+  }
+  const warnings: string[] = [];
+  if (widestTarget > configuredLimits.columns) warnings.push(`Some target sheets exceed the configured ${configuredLimits.columns.toLocaleString()}-column limit and will be split.`);
+  if (omittedEvidenceRuns) warnings.push(`${omittedEvidenceRuns.toLocaleString()} result(s) contain sampled or truncated evidence.`);
+  const estimatedBytes = Math.max(1024, Math.round(estimatedCells * 18 + (runs.length + targets.size + 4) * 2048));
+  progress(options, { phase: "estimate", completed: runs.length, total: runs.length, message: `Estimated ${estimatedBytes.toLocaleString()} bytes for ${targets.size.toLocaleString()} target sheet group(s).` });
+  return { runs: runs.length, retainedRows, aggregateFindings, omittedEvidenceRuns, estimatedCells, estimatedBytes, targetSheets: targets.size, warnings };
+}
+
+/** Async counterpart of buildWorkbookSheets; every expensive suite phase yields. */
+async function buildWorkbookSheetsAsync(runs: BadRowsRun[], options: BadRowsWorkbookOptions, estimate: BadRowsWorkbookEstimate): Promise<SheetDefinition[]> {
+  limits(options);
+  cancelled(options);
+  progress(options, { phase: "build", completed: 0, total: runs.length, message: "Preparing validation package sheets." });
+  const used = new Set<string>();
+  const readmeName = safeSheetName("Read Me", used);
+  const sheets: SheetDefinition[] = [overviewSheet(runs, options, used)];
+  const ruleSummary = rulesSheet(runs, options, used);
+  if (ruleSummary) sheets.push(ruleSummary);
+  let badRowCount = 0;
+  let aggregateCount = 0;
+  const aggregates: Array<Array<EvidenceValue | undefined>> = [];
+  const targetSheets: SheetDefinition[] = [];
+  const groupedTargets = new Map<string, { label: string; entries: Array<{ run: BadRowsRun; index: number }> }>();
+  for (const [runIndex, run] of runs.entries()) {
+    cancelled(options);
+    const label = targetLabel(run, runIndex);
+    const key = label.trim().toLocaleLowerCase();
+    const group = groupedTargets.get(key) ?? { label, entries: [] };
+    group.entries.push({ run, index: runIndex });
+    groupedTargets.set(key, group);
+    const matrix = matrixRows(run);
+    aggregateCount += matrix.aggregateIssues.length;
+    for (const issue of matrix.aggregateIssues) aggregates.push([run.member ?? "", runLabel(run, runIndex), issueCheckId(issue), issue.message, issue.actual, issue.expected]);
+    if ((runIndex + 1) % 8 === 0) await yieldToHost();
+  }
+  const sortedTargets = [...groupedTargets.values()].sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }));
+  for (const [targetIndex, target] of sortedTargets.entries()) {
+    cancelled(options);
+    const targetNumber = targetIndex + 1;
+    progress(options, { phase: "build", completed: targetNumber, total: sortedTargets.length, message: `Preparing target ${targetNumber.toLocaleString()} of ${sortedTargets.length.toLocaleString()}: ${target.label}` });
+    const entries = [...target.entries].sort((left, right) => testLabel(left.run, left.index, options).localeCompare(testLabel(right.run, right.index, options), undefined, { sensitivity: "base" }) || left.index - right.index);
+    const rows = new Map<string, ConsolidatedMatrixRow>();
+    const checkIds: string[] = [];
+    for (const [entryIndex, { run, index }] of entries.entries()) {
+      cancelled(options);
+      const test = testLabel(run, index, options);
+      const matrix = matrixRows(run);
+      const configured = options.checkCatalog?.(run, index).map(check => check.id) ?? options.checkIds?.(run, index) ?? [];
+      for (const checkId of unique([...configured, ...matrix.rows.flatMap(row => [...row.failed])])) checkIds.push(`${test}\u0000${checkId}`);
+      for (const [itemIndex, item] of matrix.rows.entries()) {
+        if ((itemIndex & 255) === 0) cancelled(options);
+        const valuesKey = Object.entries(item.values).sort(([left], [right]) => left.localeCompare(right)).map(([column, value]) => [column, value]);
+        const key = JSON.stringify([item.source, item.row ?? null, valuesKey]);
+        const row = rows.get(key) ?? { source: item.source, row: item.row, values: item.values, related: {}, failed: new Set<string>(), tests: new Set<string>() };
+        row.tests.add(test);
+        for (const [column, value] of Object.entries(item.related)) row.related[`${test} - ${column}`] = value;
+        for (const failed of item.failed) row.failed.add(`${test}\u0000${failed}`);
+        rows.set(key, row);
+        if ((itemIndex + 1) % 256 === 0) await yieldToHost();
+      }
+      if ((entryIndex + 1) % 8 === 0) await yieldToHost();
+    }
+    const matrixRowsForTarget = [...rows.values()];
+    if (!matrixRowsForTarget.length) continue;
+    badRowCount += matrixRowsForTarget.length;
+    const sourceColumns = unique(matrixRowsForTarget.flatMap(row => Object.keys(row.values)));
+    const relatedColumns = unique(matrixRowsForTarget.flatMap(row => Object.keys(row.related)));
+    const distinctCheckIds = unique(checkIds);
+    const headers = ["Test files", "Source", "Source row", ...sourceColumns, ...relatedColumns, ...distinctCheckIds.map(id => { const [test, check] = id.split("\u0000"); return `Check - ${test} - ${check}`; })];
+    const checkStart = 3 + sourceColumns.length + relatedColumns.length;
+    targetSheets.push({ name: safeSheetName(`Bad - ${target.label}`, used), headers, checkStart, freezeColumns: 3,
+      rows: matrixRowsForTarget.map(row => [[...row.tests].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" })).join(", "), row.source, row.row,
+        ...sourceColumns.map(column => row.values[column]), ...relatedColumns.map(column => row.related[column]), ...distinctCheckIds.map(id => row.failed.has(id) ? false : undefined)]) });
+    await yieldToHost();
+  }
+  const readmeRows: Array<Array<EvidenceValue | undefined>> = [
+    ["Workbook", options.title], ["Exported UTC", new Date().toISOString()], ["Target results", runs.length], ["Targets with bad rows", targetSheets.length], ["Retained bad rows", badRowCount],
+    ["Package layout", "Overview summarizes every test and target. Rules explains configured checks. Each Bad sheet consolidates retained failing rows for one target across all test files. Aggregate Findings contains findings without a primary row."],
+    ["Aggregate-only findings", aggregateCount], ["Matrix meaning", "FALSE (red) means this check failed the retained row. Blank means not failed in retained evidence, not applicable, or not provably evaluated for that row."],
+    ["Merged rows", "A source row is merged across test files only when its source label, row number, and source values match. Check columns include the test file name so repeated rule IDs remain separate."],
+    ["Data handling", "Sheets can contain every retained source and joined value. Protect this workbook like the source data."],
+    ["Evidence boundary", estimate.omittedEvidenceRuns ? `${estimate.omittedEvidenceRuns.toLocaleString()} result(s) contain sampled or truncated evidence. The workbook uses retained run evidence and cannot reconstruct omitted source rows or unretained findings.` : "The workbook uses retained run evidence and does not query the source again. Omitted source rows and unretained findings cannot be reconstructed by this export."],
+    ["Excel limits", "At most 1,048,575 data rows and 16,384 columns per sheet. Oversized target matrices are split deterministically by rows and columns; every shard repeats Test files, Source, and Source row. Text cells are limited to 32,767 characters and truncated cells are reported in export progress."],
+    ["Export estimate", `${estimate.estimatedBytes.toLocaleString()} bytes estimated before XML generation.`]
+  ];
+  const shardedTargets = targetSheets.flatMap(sheet => shardSheets(sheet, options, used));
+  sheets.push(...shardedTargets);
+  if (aggregates.length) sheets.push({ name: safeSheetName("Aggregate Findings", used), headers: ["Member", "Target", "Check", "Message", "Actual", "Expected"], rows: aggregates });
+  if (!targetSheets.length && !aggregates.length) sheets.push({ name: safeSheetName("No bad rows", used), headers: ["Status"], rows: [["No retained bad-row evidence was available in the selected results."]] });
+  sheets.push({ name: readmeName, headers: ["Item", "Details"], rows: readmeRows, readme: true });
+  progress(options, { phase: "build", completed: runs.length, total: runs.length, message: `Prepared ${sheets.length.toLocaleString()} workbook sheets.` });
+  return sheets;
+}
+
 /** Build and package cooperatively so the extension host remains responsive. */
 export async function badRowsXlsxAsync(runs: BadRowsRun[], options: BadRowsWorkbookOptions): Promise<Uint8Array> {
-  const estimate = estimateBadRowsWorkbook(runs, options);
+  const estimate = await estimateBadRowsWorkbookAsync(runs, options);
   if (estimate.warnings.length) progress(options, { phase: "estimate", completed: runs.length, total: runs.length, message: estimate.warnings.join(" ") });
   await yieldToHost();
   cancelled(options);
-  const sheets = buildWorkbookSheets(runs, options);
+  const sheets = await buildWorkbookSheetsAsync(runs, options, estimate);
   await yieldToHost();
   cancelled(options);
   return workbookPackageAsync(sheets, options.title, options);

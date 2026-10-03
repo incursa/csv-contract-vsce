@@ -59,14 +59,29 @@ export const sqlConnectionSecretKey = (profile: string): string => `${sqlConnect
 
 async function writeExportAtomically(uri: vscode.Uri, data: Uint8Array, signal?: AbortSignal): Promise<void> {
   const temporary = uri.with({ path: `${uri.path}.partial-${Date.now()}-${Math.random().toString(36).slice(2)}` });
+  let operationError: unknown;
   try {
     if (signal?.aborted) throw new Error("Excel validation package export canceled.");
     await vscode.workspace.fs.writeFile(temporary, data);
     if (signal?.aborted) throw new Error("Excel validation package export canceled.");
     await vscode.workspace.fs.rename(temporary, uri, { overwrite: true });
-  } finally {
-    try { await vscode.workspace.fs.delete(temporary, { useTrash: false }); } catch { /* renamed successfully or already absent */ }
+  } catch (error) {
+    operationError = error;
   }
+  let cleanupError: unknown;
+  try {
+    await vscode.workspace.fs.delete(temporary, { useTrash: false });
+  } catch (error) {
+    cleanupError = error;
+  }
+  // A successful rename removes the source path; that expected race is the
+  // only cleanup failure that may be ignored. Any other failure must be
+  // visible because it can leave a partial export behind.
+  if (cleanupError !== undefined && !(cleanupError instanceof vscode.FileSystemError && cleanupError.code === "FileNotFound")) {
+    if (operationError !== undefined) throw new AggregateError([operationError, cleanupError], "Excel export failed and its temporary file could not be cleaned up.");
+    throw new Error(`Excel export completed, but its temporary file could not be cleaned up: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+  }
+  if (operationError !== undefined) throw operationError;
 }
 
 export function activate(
