@@ -33,7 +33,16 @@ export class RowOutcomeCollector {
     this.current.checks[checkId] = reason ? { state, reason } : { state };
   }
 
+  /** Update a retained row after a deferred/streaming check is finalized. */
+  public update(row: number, checkId: string, state: RowCheckOutcomeState, reason?: RowCheckOutcome["reason"]): void {
+    const record = this.records.find(candidate => candidate.row === row);
+    if (!record) return;
+    record.checks[checkId] = reason ? { state, reason } : { state };
+  }
+
   public endRow(): void { this.current = undefined; }
+
+  public has(row: number): boolean { return this.records.some(record => record.row === row); }
 
   public result(): { rowOutcomes: RowOutcomeEvidence[]; rowOutcomeSummary: RowOutcomeSummary } {
     const sampled = this.retention.sampled === true;

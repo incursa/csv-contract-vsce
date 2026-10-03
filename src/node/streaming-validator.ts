@@ -159,6 +159,7 @@ interface ContractState {
   initialized: boolean;
   nullValues: Set<string>;
   rowOutcomes: RowOutcomeCollector;
+  retainedGroupRows: Map<number, Map<string, number[]>>;
 }
 
 function resolveOptions(contract: CsvContract): Required<CsvOptions> {
@@ -229,7 +230,8 @@ function createState(input: ContractRunInput, maxIssues: number, options: Stream
     rowCount: 0,
     initialized: false,
     nullValues: new Set(csvOptions.nullValues.map((value) => normalize(value, csvOptions))),
-    rowOutcomes: new RowOutcomeCollector({ maxRows: options.maxRowOutcomes ?? 1000, sampled: options.rowOutcomesSampled })
+    rowOutcomes: new RowOutcomeCollector({ maxRows: options.maxRowOutcomes ?? 1000, sampled: options.rowOutcomesSampled }),
+    retainedGroupRows: new Map()
   };
 }
 
@@ -400,6 +402,7 @@ function initializeState(
     if (valid) {
       prepared.targetId = nextGroupTarget();
       groupChecks.set(prepared.targetId, { targetId: prepared.targetId, prepared, state });
+      state.retainedGroupRows.set(prepared.targetId, new Map());
     }
     state.groupRules.push(prepared);
   }
@@ -435,7 +438,13 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
       columnPassed = false;
       state.collector.add({ level: "cell", code: "NULL_VALUE", message: `"${column.name}" contains a configured null value.`, column: column.name, row: recordNumber });
     }
-    if (nullValue) { state.rowOutcomes.set(`schema.${column.name}`, columnPassed ? "pass" : "fail"); continue; }
+    if (nullValue) {
+      const skipped = column.constraints.minLength !== undefined || column.constraints.maxLength !== undefined ||
+        column.constraints.allowedValues !== undefined || column.constraints.matches !== undefined;
+      state.rowOutcomes.set(`schema.${column.name}`, columnPassed ? (skipped ? "not-evaluated" : "pass") : "fail",
+        columnPassed && skipped ? "unsupported" : undefined);
+      continue;
+    }
     if (column.constraints.minLength !== undefined && value.length < column.constraints.minLength) {
       columnPassed = false;
       state.collector.add({ level: "cell", code: "MIN_LENGTH", message: `"${column.name}" is shorter than ${column.constraints.minLength} characters.`, column: column.name, row: recordNumber, actual: value.length, expected: column.constraints.minLength });
@@ -526,13 +535,19 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
       continue;
     }
     // Group requirements are finalized after streaming; this row participated in evaluation.
-    state.rowOutcomes.set(`group.${prepared.rule.id}`, "not-evaluated", "not-retained");
     const labels = prepared.rule.groupBy.map((column) => fields[state.headerIndex.get(column)!] ?? "");
     const normalizedLabels = labels.map((value) => normalize(value, state.options));
     const key = normalizedLabels.map((value) => `${value.length}:${value}`).join("");
     const display = JSON.stringify(Object.fromEntries(prepared.rule.groupBy.map((column, index) => [column, displayValue(labels[index])])));
     const observed = normalize(fields[state.headerIndex.get(prepared.rule.require.column)!] ?? "", state.options);
     groups?.add(prepared.targetId, key, display, observed, recordNumber);
+    // Only retain row numbers already admitted by the bounded evidence collector.
+    const retainedGroups = state.retainedGroupRows.get(prepared.targetId);
+    if (retainedGroups && state.rowOutcomes.has(recordNumber)) {
+      const rows = retainedGroups.get(key) ?? [];
+      rows.push(recordNumber);
+      retainedGroups.set(key, rows);
+    }
   }
   state.collector.leaveRow();
   state.rowOutcomes.endRow();
@@ -576,6 +591,10 @@ function addGroupIssues(group: GroupValues, checks: Map<number, GroupCheck>): vo
     const fragment = normalize(required, check.state.options);
     return ![...group.values].some((value) => value.includes(fragment));
   });
+  const outcome = missingValues.length || missingFragments.length ? "fail" : "pass";
+  for (const row of check.state.retainedGroupRows.get(group.targetId)?.get(group.groupKey) ?? []) {
+    check.state.rowOutcomes.update(row, `group.${rule.id}`, outcome);
+  }
   const groupValues = JSON.parse(group.display) as Record<string, string>;
   const groupLabel = Object.entries(groupValues).map(([column, value]) => `${column}=${value}`).join(", ");
   for (const missing of [...missingValues, ...missingFragments]) {

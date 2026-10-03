@@ -223,9 +223,10 @@ export class SqlServerValidationSession {
 
     if (generated.rules.length === 0) {
       const rowCount = await readRowCount(handle, target, scopeValue, options.signal);
+      const rowEvidence = await sqlRowEvidence(handle, contract, target, metadata, scopeValue, rowCount, options.signal);
       const errors = metadataIssues.filter(issue => issue.severity !== "warning").length;
       const warnings = metadataIssues.length - errors;
-      return mergeGroups(mergeSequence({ ...sqlAggregateRowEvidence(rowCount), valid: errors === 0, rowCount, columnCount: metadata.length,
+      return mergeGroups(mergeSequence({ ...rowEvidence, valid: errors === 0, rowCount, columnCount: metadata.length,
         testCount: contractTestCount(contract), issueCount: metadataIssues.length, errorCount: errors,
         warningCount: warnings, truncated: metadataIssues.length > (options.maxIssues ?? 1000),
         issues: metadataIssues.slice(0, options.maxIssues ?? 1000) }, sequence, options.maxIssues ?? 1000), grouped, options.maxIssues ?? 1000);
@@ -289,8 +290,9 @@ export class SqlServerValidationSession {
       else errorCount += failures;
     }
     const rowCount = await readRowCount(handle, target, scopeValue, options.signal);
+    const rowEvidence = await sqlRowEvidence(handle, contract, target, metadata, scopeValue, rowCount, options.signal);
     const issueCount = errorCount + warningCount;
-    return mergeGroups(mergeSequence({ ...sqlAggregateRowEvidence(rowCount),
+    return mergeGroups(mergeSequence({ ...rowEvidence,
       valid: errorCount === 0,
       ruleOutcomes: summaries.filter(s => s.SelectedCount != null).map(s => {
         const selected = Number(s.SelectedCount), failed = Number(s.FailureCount);
@@ -455,6 +457,50 @@ function sqlAggregateRowEvidence(rowCount: number): Pick<ValidationResult, "rowO
       omittedRows: rowCount,
       complete: false,
       incompleteBecause: "not-evaluated"
+    }
+  };
+}
+
+/**
+ * Aggregate SQL validation remains the source of legacy counts and issues.
+ * When a bounded source projection is available, use the same predicate
+ * engine as CSV validation to expose explicit per-row states as well.
+ */
+async function sqlRowEvidence(
+  handle: SqlPoolHandle,
+  contract: CsvContract,
+  target: ResolvedSqlServerTarget,
+  metadata: MetadataRow[],
+  scopeValue: string | undefined,
+  rowCount: number,
+  signal?: AbortSignal
+): Promise<Pick<ValidationResult, "rowOutcomes" | "rowOutcomeSummary">> {
+  const limit = 1000;
+  const columns = Object.keys(contract.schema.columns).filter(column => metadata.some(item => item.name === physicalSqlServerColumn(target, column)));
+  if (!columns.length) return sqlAggregateRowEvidence(rowCount);
+  const projection = columns.map(column => `CONVERT(nvarchar(max), t.${sqlIdentifier(physicalSqlServerColumn(target, column))}) AS ${sqlIdentifier(column)}`).join(", ");
+  const request = handle.pool.request();
+  bindScope(request, handle.api, target, scopeValue);
+  const result = await queryWithCancellation<Record<string, string | null>>(request,
+    `/* Bounded row-outcome projection. */ SELECT TOP (${limit}) ${projection} FROM ${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)} AS t ${scopeWhere(target)};`, signal);
+  const rows = result.recordset ?? [];
+  if (!rows.length || !columns.some(column => Object.prototype.hasOwnProperty.call(rows[0], column))) return sqlAggregateRowEvidence(rowCount);
+  const fallbackContract: CsvContract = {
+    ...contract,
+    schema: { ...contract.schema, allowAdditionalColumns: true, columnCount: undefined, columnOrder: undefined },
+    rules: [...(contract.rules ?? []), ...((contract.sqlServer?.conditionalRules ?? []) as NonNullable<CsvContract["rules"]>)]
+  };
+  const projected = Papa.unparse({ fields: columns, data: rows.map(row => columns.map(column => row[column] ?? "")) });
+  const evaluated = validateCsv(fallbackContract, projected);
+  const incomplete = rowCount > rows.length;
+  return {
+    rowOutcomes: evaluated.rowOutcomes ?? [],
+    rowOutcomeSummary: {
+      retentionLimit: limit,
+      retainedRows: evaluated.rowOutcomes?.length ?? 0,
+      omittedRows: Math.max(0, rowCount - rows.length),
+      complete: !incomplete,
+      ...(incomplete ? { incompleteBecause: "truncated" as const } : {})
     }
   };
 }

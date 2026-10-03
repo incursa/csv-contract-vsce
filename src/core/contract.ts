@@ -325,6 +325,7 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
     });
   }
 
+  const groupOutcomeByRow = new Map<string, "pass" | "fail">();
   for (const rule of contract.groupRules ?? []) {
     let validRule = true;
     if (advancedRuleIds.has(rule.id)) {
@@ -343,14 +344,15 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       }
     }
     if (!validRule) continue;
-    const groups = new Map<string, { row: number; labels: string[]; observed: Set<string> }>();
+    const groups = new Map<string, { row: number; rows: number[]; labels: string[]; observed: Set<string> }>();
     parsed.rows.forEach((row, rowIndex) => {
       const runtime = createPredicateRuntime((column) => row[headerIndex.get(column)!] ?? "", options, nullValues);
       if (nativeDates) runtime.dateValue = column => nativeDates[column]?.[rowIndex];
       if (rule.when && !evaluatePredicate(rule.when, runtime)) return;
       const labels = rule.groupBy.map((column) => row[headerIndex.get(column)!] ?? "");
       const key = labels.map((value) => `${normalized(value, options).length}:${normalized(value, options)}`).join("");
-      const group = groups.get(key) ?? { row: parsed.sourceRowNumbers[rowIndex], labels, observed: new Set<string>() };
+      const group = groups.get(key) ?? { row: parsed.sourceRowNumbers[rowIndex], rows: [], labels, observed: new Set<string>() };
+      group.rows.push(parsed.sourceRowNumbers[rowIndex]);
       group.observed.add(normalized(row[headerIndex.get(rule.require.column)!] ?? "", options));
       groups.set(key, group);
     });
@@ -360,6 +362,8 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
         const fragment = normalized(required, options);
         return ![...group.observed].some((value) => value.includes(fragment));
       });
+      const groupOutcome = missingValues.length || missingFragments.length ? "fail" : "pass";
+      for (const row of group.rows) groupOutcomeByRow.set(`${rule.id}\u0000${row}`, groupOutcome);
       for (const missing of [...missingValues, ...missingFragments]) {
         const groupLabel = rule.groupBy.map((column, index) => `${column}=${group.labels[index]}`).join(", ");
         const groupValues = Object.fromEntries(rule.groupBy.map((column, index) => [column, group.labels[index]]));
@@ -483,12 +487,21 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       if (index === undefined) { rowCollector.set(`schema.${column}`, "not-evaluated", "unsupported"); continue; }
       const value = row[index] ?? "";
       const constraints = definition.constraints ?? {};
-      const passed = (!constraints.notNull || !isNull(value, options)) &&
-        (isNull(value, options) || constraints.minLength === undefined || value.length >= constraints.minLength) &&
-        (isNull(value, options) || constraints.maxLength === undefined || value.length <= constraints.maxLength) &&
-        (isNull(value, options) || !constraints.allowedValues || constraints.allowedValues.some(item => normalized(item, options) === normalized(value, options))) &&
-        (isNull(value, options) || !constraints.matches || (() => { try { return new RegExp(constraints.matches!, options.caseSensitive ? "" : "i").test(value); } catch { return false; } })());
-      rowCollector.set(`schema.${column}`, passed ? "pass" : "fail");
+      const nullValue = isNull(value, options);
+      if (nullValue) {
+        const passed = !constraints.notNull;
+        const skipped = constraints.minLength !== undefined || constraints.maxLength !== undefined ||
+          constraints.allowedValues !== undefined || constraints.matches !== undefined;
+        rowCollector.set(`schema.${column}`, passed ? (skipped ? "not-evaluated" : "pass") : "fail",
+          passed && skipped ? "unsupported" : undefined);
+      } else {
+        const passed = (!constraints.notNull || !nullValue) &&
+          (constraints.minLength === undefined || value.length >= constraints.minLength) &&
+          (!constraints.allowedValues || constraints.allowedValues.some(item => normalized(item, options) === normalized(value, options))) &&
+          (constraints.maxLength === undefined || value.length <= constraints.maxLength) &&
+          (!constraints.matches || (() => { try { return new RegExp(constraints.matches!, options.caseSensitive ? "" : "i").test(value); } catch { return false; } })());
+        rowCollector.set(`schema.${column}`, passed ? "pass" : "fail");
+      }
     }
     for (const test of contract.rowTests ?? []) {
       const references = [...Object.keys(test.select), ...Object.keys(test.expect.cells ?? {})];
@@ -514,7 +527,13 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
     }
     for (const rule of contract.groupRules ?? []) {
       const references = [...new Set([...predicateColumns(rule.when), ...rule.groupBy, rule.require.column])];
-      rowCollector.set(`group.${rule.id}`, "not-evaluated", references.some(column => !declared.has(column) || !headerIndex.has(column)) ? "unsupported" : "not-retained");
+      if (references.some(column => !declared.has(column) || !headerIndex.has(column))) {
+        rowCollector.set(`group.${rule.id}`, "not-evaluated", "unsupported");
+      } else {
+        const runtime = createPredicateRuntime((column) => row[headerIndex.get(column)!] ?? "", options, nullValues);
+        if (rule.when && !evaluatePredicate(rule.when, runtime)) rowCollector.set(`group.${rule.id}`, "not-applicable", "condition-false");
+        else rowCollector.set(`group.${rule.id}`, groupOutcomeByRow.get(`${rule.id}\u0000${parsed.sourceRowNumbers[rowIndex]}`) ?? "not-evaluated", groupOutcomeByRow.has(`${rule.id}\u0000${parsed.sourceRowNumbers[rowIndex]}`) ? undefined : "unsupported");
+      }
     }
     for (const rule of contract.orderedRules ?? []) {
       const missing = orderedColumns(rule).some(column => !headerIndex.has(column));
