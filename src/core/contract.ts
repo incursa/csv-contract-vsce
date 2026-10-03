@@ -491,19 +491,35 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       rowCollector.set(`schema.${column}`, passed ? "pass" : "fail");
     }
     for (const test of contract.rowTests ?? []) {
-      const matches = Object.entries(test.select).every(([column, expected]) => headerIndex.has(column) && normalized(row[headerIndex.get(column)!] ?? "", options) === normalized(expected, options));
+      const references = [...Object.keys(test.select), ...Object.keys(test.expect.cells ?? {})];
+      if (references.some(column => !headerIndex.has(column))) {
+        rowCollector.set(`row.${test.id}`, "not-evaluated", "unsupported");
+        continue;
+      }
+      const matches = Object.entries(test.select).every(([column, expected]) => normalized(row[headerIndex.get(column)!] ?? "", options) === normalized(expected, options));
       if (!matches) { rowCollector.set(`row.${test.id}`, "not-applicable", "condition-false"); continue; }
       const passed = Object.entries(test.expect.cells ?? {}).every(([column, expected]) => normalized(row[headerIndex.get(column)!] ?? "", options) === normalized(expected.equals, options));
       rowCollector.set(`row.${test.id}`, passed ? "pass" : "fail");
     }
     for (const rule of contract.rules ?? []) {
+      const references = [...new Set([...predicateColumns(rule.when), ...predicateColumns(rule.expect)])];
+      if (references.some(column => !declared.has(column) || !headerIndex.has(column))) {
+        rowCollector.set(`rule.${rule.id}`, "not-evaluated", "unsupported");
+        continue;
+      }
       const runtime = createPredicateRuntime((column) => row[headerIndex.get(column)!] ?? "", options, nullValues);
       if (nativeDates) runtime.dateValue = column => nativeDates[column]?.[rowIndex];
       if (rule.when && !evaluatePredicate(rule.when, runtime)) { rowCollector.set(`rule.${rule.id}`, "not-applicable", "condition-false"); continue; }
       rowCollector.set(`rule.${rule.id}`, evaluatePredicate(rule.expect, runtime) ? "pass" : "fail");
     }
-    for (const rule of contract.groupRules ?? []) rowCollector.set(`group.${rule.id}`, "not-evaluated", "not-retained");
-    for (const rule of contract.orderedRules ?? []) for (const check of orderedChecks(rule)) rowCollector.set(`ordered.${check.id}`, "not-evaluated", "not-retained");
+    for (const rule of contract.groupRules ?? []) {
+      const references = [...new Set([...predicateColumns(rule.when), ...rule.groupBy, rule.require.column])];
+      rowCollector.set(`group.${rule.id}`, "not-evaluated", references.some(column => !declared.has(column) || !headerIndex.has(column)) ? "unsupported" : "not-retained");
+    }
+    for (const rule of contract.orderedRules ?? []) {
+      const missing = orderedColumns(rule).some(column => !headerIndex.has(column));
+      for (const check of orderedChecks(rule)) rowCollector.set(`ordered.${check.id}`, "not-evaluated", missing ? "unsupported" : "not-retained");
+    }
     rowCollector.endRow();
   });
   const rowEvidence = rowCollector.result();

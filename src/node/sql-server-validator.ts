@@ -225,7 +225,7 @@ export class SqlServerValidationSession {
       const rowCount = await readRowCount(handle, target, scopeValue, options.signal);
       const errors = metadataIssues.filter(issue => issue.severity !== "warning").length;
       const warnings = metadataIssues.length - errors;
-      return mergeGroups(mergeSequence({ valid: errors === 0, rowCount, columnCount: metadata.length,
+      return mergeGroups(mergeSequence({ ...sqlAggregateRowEvidence(rowCount), valid: errors === 0, rowCount, columnCount: metadata.length,
         testCount: contractTestCount(contract), issueCount: metadataIssues.length, errorCount: errors,
         warningCount: warnings, truncated: metadataIssues.length > (options.maxIssues ?? 1000),
         issues: metadataIssues.slice(0, options.maxIssues ?? 1000) }, sequence, options.maxIssues ?? 1000), grouped, options.maxIssues ?? 1000);
@@ -290,7 +290,7 @@ export class SqlServerValidationSession {
     }
     const rowCount = await readRowCount(handle, target, scopeValue, options.signal);
     const issueCount = errorCount + warningCount;
-    return mergeGroups(mergeSequence({
+    return mergeGroups(mergeSequence({ ...sqlAggregateRowEvidence(rowCount),
       valid: errorCount === 0,
       ruleOutcomes: summaries.filter(s => s.SelectedCount != null).map(s => {
         const selected = Number(s.SelectedCount), failed = Number(s.FailureCount);
@@ -439,6 +439,24 @@ function contractTestCount(contract: CsvContract): number {
   return Object.keys(contract.schema.columns).length + (contract.rowTests?.length ?? 0) +
     (contract.rules?.length ?? 0) + (contract.groupRules?.length ?? 0) +
     (contract.sqlServer?.conditionalRules?.length ?? 0);
+}
+
+/**
+ * Server-side SQL checks return aggregates, not source rows. Expose that fact
+ * in the same projection as CSV/client-side validation instead of leaving
+ * consumers to mistake an absent projection for complete evidence.
+ */
+function sqlAggregateRowEvidence(rowCount: number): Pick<ValidationResult, "rowOutcomes" | "rowOutcomeSummary"> {
+  return {
+    rowOutcomes: [],
+    rowOutcomeSummary: {
+      retentionLimit: 0,
+      retainedRows: 0,
+      omittedRows: rowCount,
+      complete: false,
+      incompleteBecause: "not-evaluated"
+    }
+  };
 }
 
 interface SequenceSummary { issues: ValidationIssue[]; issueCount: number; ruleOutcomes: NonNullable<ValidationResult["ruleOutcomes"]> }

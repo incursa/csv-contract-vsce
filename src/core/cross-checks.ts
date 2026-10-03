@@ -349,6 +349,7 @@ export function crossResult(check: CrossCheck, count: unknown, evidence?: Failur
   const failures = Number(count);
   if (count === null || count === undefined || String(count).trim() === "" || !Number.isSafeInteger(failures) || failures < 0) throw new Error(`Invalid cross-check summary for ${check.id}.`);
   const warning = check.severity === "warning";
-  return { valid: !failures || warning, rowCount: 0, columnCount: 0, testCount: 1, issueCount: failures, errorCount: warning ? 0 : failures, warningCount: warning ? failures : 0,
+  return { rowOutcomes: [], rowOutcomeSummary: { retentionLimit: 0, retainedRows: 0, omittedRows: 0, complete: false, incompleteBecause: "not-evaluated" },
+    valid: !failures || warning, rowCount: 0, columnCount: 0, testCount: 1, issueCount: failures, errorCount: warning ? 0 : failures, warningCount: warning ? failures : 0,
     truncated: false, issues: failures ? [{ level: "row", code: "CROSS_CHECK_FAILED", testId: check.id, severity: check.severity ?? "error", actual: failures, expected: 0, evidence, message: `${check.kind}: ${failures} ${check.kind === "foreignKey" ? "orphan rows" : check.kind === "equalTotal" ? "total mismatch or invalid numeric/null inputs" : check.kind === "rowReconciliation" ? "missing or value-mismatched source rows" : check.kind === "relationship" ? "relationship violations" : "rows of population difference"} (${check.from} → ${check.to}).${evidence ? " Bounded source evidence is attached." : " No row-level evidence was available."}` }] : [] };
 }
