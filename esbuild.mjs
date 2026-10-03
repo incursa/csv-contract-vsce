@@ -88,6 +88,7 @@ const builds = [
       "test/workspace-report.test.ts",
       "test/semantic-comparison.test.ts",
       "test/comparison-definition.test.ts",
+      "test/row-outcomes.test.ts",
       "test/sql-server-generator.test.ts",
       "test/sql-schema-import.test.ts"
     ],

@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { RowOutcomeCollector } from "../src/core/row-outcomes";
 import { validateCsv } from "../src/core/contract";
+import { validateCsvFile } from "../src/node/streaming-validator";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 test("row outcomes retain explicit states and never fill missing evidence with pass", () => {
   const collector = new RowOutcomeCollector({ maxRows: 1 });
@@ -59,4 +63,26 @@ test("memory validation distinguishes conditional, unsupported, and evaluated ch
       "rule.missing-column": { state: "not-evaluated", reason: "unsupported" }
     }
   ]);
+});
+
+test("streaming deferred checks update retained rows without changing aggregate semantics", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "csv-contract-row-outcomes-"));
+  const csv = join(directory, "rows.csv");
+  await writeFile(csv, "Id,Value\n1,a\n1,b\n2,c\n", "utf8");
+  const result = (await validateCsvFile(csv, [{ spec: "rows", contract: {
+    version: 1,
+    schema: { columns: {
+      Id: { presence: "required", constraints: { unique: true } },
+      Value: { presence: "required" }
+    } },
+    orderedRules: [{
+      id: "ordered",
+      orderBy: [{ column: "Id", type: "number" }],
+      relations: [{ id: "increasing", message: "Id 2 must follow b", when: { column: "Id", operator: "equals", value: "2" }, requirePrior: { column: "Value", operator: "equals", value: "b" } }]
+    }]
+  } }], { maxRowOutcomes: 10 })).runs[0].result;
+  assert.equal(result.issues.some(issue => issue.code === "NOT_UNIQUE"), true);
+  assert.equal(result.rowOutcomes?.find(row => row.row === 3)?.checks["schema.Id"].state, "fail");
+  assert.equal(result.rowOutcomes?.find(row => row.row === 4)?.checks["ordered.increasing"].state, "pass");
+  assert.equal(result.rowOutcomes?.find(row => row.row === 2)?.checks["ordered.increasing"], undefined);
 });

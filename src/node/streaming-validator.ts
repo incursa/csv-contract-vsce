@@ -109,7 +109,7 @@ interface PreparedColumn {
 function hasRowSchemaConstraints(constraints: ColumnConstraints): boolean {
   return constraints.notNull === true || constraints.minLength !== undefined ||
     constraints.maxLength !== undefined || constraints.allowedValues !== undefined ||
-    constraints.matches !== undefined;
+    constraints.matches !== undefined || constraints.unique === true;
 }
 
 interface PreparedRowTest {
@@ -480,6 +480,7 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
     const values = identity.columns.map(column => normalize(fields[state.headerIndex.get(column)!] ?? "", state.options));
     const { key, nullFailure } = identityKey(values, identity, value => state.options.nullValues.some(marker => normalize(marker, state.options) === value));
     if (nullFailure) state.collector.add({ level: "row", code: "IDENTITY_NULL", testId: identity.id, message: "Identity contains a configured null value.", row: recordNumber });
+    if (identity.unique !== false) state.rowOutcomes.set(`identity.${identity.id}`, nullFailure ? "fail" : "pass");
     if (key !== undefined && state.identity) uniqueness?.add(state.identity.targetId, key, recordNumber);
   }
 
@@ -566,6 +567,7 @@ function addDuplicateIssue(duplicate: DuplicateValue, checks: Map<number, Unique
   const check = checks.get(duplicate.targetId);
   if (!check) throw new Error(`Unknown uniqueness target ${duplicate.targetId}.`);
   if (check.kind === "column") {
+    check.state.rowOutcomes.update(duplicate.row, `schema.${check.column}`, "fail");
     check.state.collector.add({
       level: "cell",
       code: "NOT_UNIQUE",
@@ -579,6 +581,7 @@ function addDuplicateIssue(duplicate: DuplicateValue, checks: Map<number, Unique
       }] }
     });
   } else {
+    check.state.rowOutcomes.update(duplicate.row, `identity.${check.state.input.contract.identity?.id ?? "identity"}`, "fail");
     check.state.collector.add({
       level: "row",
       code: "IDENTITY_NOT_UNIQUE",
@@ -700,7 +703,8 @@ async function validateGroup(
           }
           state.sequenceStores.push({ columns,
             store: new RowSortStore((a, b) => compareOrderedRows(a, b, rule, state.options), options.tempDirectory),
-            evaluator: new OrderedRuleEvaluator(rule, state.options, issue => state.collector.add(issue)) });
+            evaluator: new OrderedRuleEvaluator(rule, state.options, issue => state.collector.add(issue),
+              (row, checkId, passed) => state.rowOutcomes.update(row, `ordered.${checkId}`, passed ? "pass" : "fail")) });
         }
         if (uniqueChecks.size > 0) {
           uniqueness = new PartitionedUniquenessStore(options.tempDirectory, options.uniquePartitions);

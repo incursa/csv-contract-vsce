@@ -37,6 +37,10 @@ export class RowOutcomeCollector {
   public update(row: number, checkId: string, state: RowCheckOutcomeState, reason?: RowCheckOutcome["reason"]): void {
     const record = this.records.find(candidate => candidate.row === row);
     if (!record) return;
+    // A deferred check can observe the same row more than once (for example,
+    // an ordered relation). Once it fails, a later successful observation must
+    // not erase that evidence.
+    if (record.checks[checkId]?.state === "fail" && state === "pass") return;
     record.checks[checkId] = reason ? { state, reason } : { state };
   }
 

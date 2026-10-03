@@ -2,6 +2,7 @@ import type { CsvOptions, OrderedCheck, OrderedRelation, OrderedRule, Validation
 import { evaluatePredicate, predicateColumns } from "./predicate";
 
 export interface OrderedRow { row: number; values: Record<string, string> }
+export type OrderedOutcomeObserver = (row: number, checkId: string, passed: boolean) => void;
 
 function duplicateCheck(rule: OrderedRule): OrderedCheck { return rule.duplicateOrder ?? { id: `${rule.id}.duplicate_order`, message: "Order keys must be unique." }; }
 function invalidCheck(rule: OrderedRule): OrderedCheck { return rule.invalidOrder ?? { id: `${rule.id}.invalid_order`, message: "Order keys must be valid." }; }
@@ -122,7 +123,8 @@ export class OrderedRuleEvaluator {
   private pending = new Map<string, { items: Array<{ row: OrderedRow; ordinal: number }>; head: number }>();
 
   public constructor(private readonly rule: OrderedRule, private readonly options: CsvOptions,
-    private readonly issue: (issue: ValidationIssue) => void) {
+    private readonly issue: (issue: ValidationIssue) => void,
+    private readonly observeOutcome?: OrderedOutcomeObserver) {
     validateOrderedDefinition(rule, new Set(orderedColumns(rule)));
     for (const check of orderedChecks(rule)) this.outcomes.set(check.id, { id: check.id, selected: 0, passed: 0, failed: 0 });
   }
@@ -132,6 +134,7 @@ export class OrderedRuleEvaluator {
   private check(check: OrderedCheck, ok: boolean, row: OrderedRow, detail = "", relatedRows: number[] = []): void {
     const outcome = this.outcomes.get(check.id)!;
     outcome.selected++;
+    this.observeOutcome?.(row.row, check.id, ok);
     if (ok) { outcome.passed++; return; }
     outcome.failed++;
     const values = Object.fromEntries(orderedColumns(this.rule).map(c => [c, row.values[c] ?? ""]));
