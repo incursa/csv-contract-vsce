@@ -184,7 +184,7 @@ export class SqlServerValidationSession {
       throw new Error("SQL preview does not support grouped or ordered rules; run the complete contract.");
     }
     options.onProgress?.({ phase: "connecting" });
-    const handle = await this.getPool(target.connection, target.integratedConnection, target);
+    const handle = await this.getPool(target.connection ?? "", target.integratedConnection, target);
     const metadata = await readMetadata(handle, target, options.signal);
     if (metadata.length === 0) throw new Error(`SQL Server object ${target.schema}.${target.table} does not exist or is not visible to this connection.`);
     const metadataIssues = validateMetadata(contract, target, metadata);
@@ -340,7 +340,7 @@ ORDER BY s.name, o.name, c.column_id;`);
   }
 
   public async captureSchema(target: ResolvedSqlServerTarget): Promise<SchemaBaseline> {
-    const columns = await readMetadata(await this.getPool(target.connection, target.integratedConnection, target), target);
+    const columns = await readMetadata(await this.getPool(target.connection ?? "", target.integratedConnection, target), target);
     if (!columns.length) throw new Error("Object metadata is empty: object missing or not visible to this connection.");
     return sqlSchemaSnapshot(target, columns);
   }

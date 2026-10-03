@@ -3,7 +3,8 @@ import type { CsvContract, SqlServerIntegratedConnection, SqlServerScope, SqlSer
 export interface ResolvedSqlServerTarget {
   baseline?: import("./baseline").BaselineBinding;
   name?: string;
-  connection: string;
+  /** Connection profile name; omitted for integrated-auth targets. */
+  connection?: string;
   integratedConnection?: SqlServerIntegratedConnection;
   schema: string;
   table: string;
