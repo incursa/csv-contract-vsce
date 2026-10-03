@@ -8,6 +8,7 @@ export interface IssueExportRun {
   evaluatedAt?: string;
   scope?: string;
   target: string;
+  spec?: string;
   result?: ValidationResult;
   status?: string;
   error?: string;
@@ -32,24 +33,25 @@ export interface ValidationRunExport {
 }
 
 export function createValidationRunExport(contract: string, runs: IssueExportRun[], options: { definition?: unknown; kind?: "contract" | "suite"; identity?: string } = {}): ValidationRunExport {
-  const issues = runs.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
-  const retainedIssueDetails = runs.reduce((total, run) => total + (run.result?.issues.length ?? 0), 0);
+  const orderedRuns = [...runs].sort((left, right) => left.target.localeCompare(right.target) || (left.spec ?? "").localeCompare(right.spec ?? "") || (left.runId ?? "").localeCompare(right.runId ?? ""));
+  const issues = orderedRuns.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
+  const retainedIssueDetails = orderedRuns.reduce((total, run) => total + (run.result?.issues.length ?? 0), 0);
   return {
     schema: "incursa.csv-contract-results/v1",
-    manifest: manifestFromRuns(options.identity ?? contract, runs, options.definition, options.kind),
+    manifest: manifestFromRuns(options.identity ?? contract, orderedRuns, options.definition, options.kind),
     contract,
     exportedAt: new Date().toISOString(),
     totals: {
-      targets: runs.length,
-      passed: runs.filter((run) => (run.result?.valid && run.result.preview?.scope !== "sample" && (!run.status || run.status === "PASS"))).length,
-      rowsScanned: runs.reduce((total, run) => total + (run.result?.rowCount ?? 0), 0),
-      errors: runs.reduce((total, run) => total + (run.result?.errorCount ?? 0), 0),
-      warnings: runs.reduce((total, run) => total + (run.result?.warningCount ?? 0), 0),
+      targets: orderedRuns.length,
+      passed: orderedRuns.filter((run) => (run.result?.valid && run.result.preview?.scope !== "sample" && (!run.status || run.status === "PASS"))).length,
+      rowsScanned: orderedRuns.reduce((total, run) => total + (run.result?.rowCount ?? 0), 0),
+      errors: orderedRuns.reduce((total, run) => total + (run.result?.errorCount ?? 0), 0),
+      warnings: orderedRuns.reduce((total, run) => total + (run.result?.warningCount ?? 0), 0),
       issues,
       retainedIssueDetails,
       issueDetailsComplete: issues === retainedIssueDetails
     },
-    runs
+    runs: orderedRuns
   };
 }
 
@@ -182,8 +184,13 @@ export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown, option
     if (run.error) rows.push([run.target, run.status ?? "ERROR", "execution", "", "", "", "", run.error, "", "", "[]", "[]", "{}", "false", ...metadata(run)]);
     else if (extended && !run.result?.issues.length) rows.push([run.target, "", "summary", "", "", "", "", "No retained issue details in this scope.", "", "", "[]", "[]", "{}", "false", ...metadata(run)]);
   }
-  columns.push("PackageSchemaVersion", "ToolVersion", "PackageKind", "PackageIdentity", "DefinitionFingerprint", "PackageRunId", "EvaluatedAt", "SelectedScope", "SourceLabels", "Targets", "EvidenceRetention", "Sampled", "Truncated", "EvidenceComplete", "CompletenessNotices");
-  const manifestValues = [manifest.packageSchemaVersion, manifest.toolVersion, manifest.identity.kind, manifest.identity.id, manifest.identity.definitionFingerprint, manifest.run.id, manifest.run.evaluatedAt ?? "", JSON.stringify(manifest.selectedScope), JSON.stringify(manifest.sourceLabels), JSON.stringify(manifest.targets), JSON.stringify(manifest.evidence.retention), String(manifest.evidence.sampled), String(manifest.evidence.truncated), String(manifest.evidence.complete), JSON.stringify(manifest.completenessNotices)];
-  rows.forEach(row => row.push(...manifestValues));
+  // Keep the original compact CSV shape for callers that use the legacy
+  // overload. Application exports pass provenance options and receive the
+  // versioned manifest columns below.
+  if (extended || options.identity !== undefined || options.definition !== undefined || options.kind !== undefined) {
+    columns.push("PackageSchemaVersion", "ToolVersion", "PackageKind", "PackageIdentity", "DefinitionFingerprint", "PackageRunId", "EvaluatedAt", "SelectedScope", "SourceLabels", "Targets", "EvidenceRetention", "Sampled", "Truncated", "EvidenceComplete", "CompletenessNotices");
+    const manifestValues = [manifest.packageSchemaVersion, manifest.toolVersion, manifest.identity.kind, manifest.identity.id, manifest.identity.definitionFingerprint, manifest.run.id, manifest.run.evaluatedAt ?? "", JSON.stringify(manifest.selectedScope), JSON.stringify(manifest.sourceLabels), JSON.stringify(manifest.targets), JSON.stringify(manifest.evidence.retention), String(manifest.evidence.sampled), String(manifest.evidence.truncated), String(manifest.evidence.complete), JSON.stringify(manifest.completenessNotices)];
+    rows.forEach(row => row.push(...manifestValues));
+  }
   return rowsToCsv(columns, rows);
 }

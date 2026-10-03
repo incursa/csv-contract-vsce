@@ -1,4 +1,4 @@
-import type { CsvContract, ValidationResult } from "./model";
+import type { ValidationResult } from "./model";
 
 /** The version of the portable validation-package envelope. */
 export const PACKAGE_SCHEMA_VERSION = "1";
@@ -47,6 +47,16 @@ function safe(value: unknown): unknown {
     .sort(([a], [b]) => compareStable(a, b)).map(([key, item]) => [key, safe(item)]));
 }
 
+/** Remove connection and credential material before values enter a package. */
+function portable(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(portable);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => !/(password|secret|credential|connection|string|token|apiKey|accessKey|privateKey)/i.test(key))
+    .sort(([a], [b]) => compareStable(a, b))
+    .map(([key, item]) => [key, portable(item)]));
+}
+
 function stable(value: unknown): string {
   return JSON.stringify(safe(value));
 }
@@ -83,6 +93,7 @@ export function createPackageManifest(options: PackageManifestOptions = {}): Pac
   const retained = options.retainedIssueDetails ?? reported;
   const targetSources = options.targetSources
     ? [...new Map(options.targetSources.map(target => [`${target.id}\u0000${target.source ?? ""}`, target])).values()]
+      .map(target => ({ id: target.id, ...(target.source === undefined ? {} : { source: target.source }) }))
       .sort((a, b) => compareStable(a.id, b.id) || compareStable(a.source ?? "", b.source ?? ""))
     : undefined;
   const targets = [...new Set(options.targetIdentities ?? [])].sort(compareStable);
@@ -97,7 +108,7 @@ export function createPackageManifest(options: PackageManifestOptions = {}): Pac
     selectedScope: options.scope ?? "all",
     sourceLabels: sources,
     targets: targetSources ?? targets.map((id, index) => ({ id, ...(sources[index] ? { source: sources[index] } : {}) })),
-    evidence: { retention: { ...(options.evidenceSettings ?? {}), reportedIssueDetails: reported, retainedIssueDetails: retained }, sampled, truncated, complete: !sampled && !truncated && retained >= reported },
+    evidence: { retention: { ...(portable(options.evidenceSettings ?? {}) as Record<string, unknown>), reportedIssueDetails: reported, retainedIssueDetails: retained }, sampled, truncated, complete: !sampled && !truncated && retained >= reported },
     completenessNotices: notice(options, sampled, truncated)
   };
 }
@@ -108,12 +119,12 @@ export function manifestFromRuns(identity: string, runs: Array<{ target?: string
   const retained = results.reduce((sum, result) => sum + result.issues.length, 0);
   const targetSources = runs.map(run => { const target = run.target ?? run.table ?? "unknown"; return { id: kind === "suite" ? `${run.member ?? "member"}/${target}` : target, source: run.spec }; });
   return createPackageManifest({ kind, identity, definition: definition ?? identity, runId: runs.find(run => run.runId)?.runId,
-    evaluatedAt: runs.find(run => run.evaluatedAt)?.evaluatedAt, scope: runs.find(run => run.scope)?.scope ?? "all",
+    evaluatedAt: runs.find(run => run.evaluatedAt)?.evaluatedAt ?? runs.find(run => run.result?.evaluatedAt)?.result?.evaluatedAt, scope: runs.find(run => run.scope)?.scope ?? "all",
     targetIdentities: targetSources.map(target => target.id), targetSources, sourceLabels: runs.map(run => run.spec ?? ""),
     sampled: results.some(result => result.preview?.scope === "sample"), truncated: results.some(result => result.truncated) || retained < reported,
     retainedIssueDetails: retained, reportedIssues: reported,
     evidenceSettings: { runCount: runs.length, statuses: [...new Set(runs.map(run => run.status).filter(Boolean))].sort() } });
 }
 
-export function contractDefinitionFingerprint(contract: CsvContract): string { return fingerprint(contract); }
+export function contractDefinitionFingerprint(contract: unknown): string { return fingerprint(contract); }
 export function suiteDefinitionFingerprint(suite: unknown): string { return fingerprint(suite); }
