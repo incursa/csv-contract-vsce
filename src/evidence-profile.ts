@@ -47,7 +47,9 @@ function masked(value: EvidenceValue, strategy: EvidenceMaskStrategy, seed: stri
 }
 
 function policy(profile: EvidenceProfile | undefined, columns: string[]): EvidenceProfilePreview {
-  const include = profile?.include?.length ? new Set(profile.include) : undefined;
+  // An omitted include list preserves the legacy full-row behavior. An
+  // explicitly supplied list, including an empty one, is an allowlist.
+  const include = profile?.include === undefined ? undefined : new Set(profile.include);
   const exclude = new Set(profile?.exclude ?? []);
   const masks = new Set(Object.keys(profile?.mask ?? {}));
   const configured = new Set([...(profile?.include ?? []), ...(profile?.exclude ?? []), ...masks]);
@@ -64,7 +66,7 @@ function policy(profile: EvidenceProfile | undefined, columns: string[]): Eviden
     masked: maskedColumns,
     unknown,
     redaction,
-    warning: unknown.length ? `Profile references unknown columns: ${unknown.join(", ")}. They were ignored.` : undefined
+    ...(unknown.length ? { warning: `Profile references unknown columns: ${unknown.join(", ")}. They were ignored.` } : {})
   };
 }
 

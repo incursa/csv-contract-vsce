@@ -17,6 +17,12 @@ test("evidence preview gives exclude precedence and warns on unknown columns", (
   });
 });
 
+test("an explicit empty include list is a safe empty allowlist", () => {
+  assert.deepEqual(previewEvidenceProfile({ id: "empty", include: [] }, ["Id", "Amount"]), {
+    profileId: "empty", included: [], excluded: ["Id", "Amount"], masked: [], unknown: [], redaction: true
+  });
+});
+
 test("redaction applies consistently to primary, related, aggregate, and group evidence", () => {
   const profile: EvidenceProfile = { id: "package", include: ["Id", "Region"], mask: { Id: "hash", Region: "partial" } };
   const redacted = redactValidationResult(result, profile)!;
