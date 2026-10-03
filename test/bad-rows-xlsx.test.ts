@@ -123,6 +123,48 @@ test("validation package exposes a preflight estimate and honors cancellation", 
   await assert.rejects(() => badRowsXlsxAsync([{ target: "source.csv", result }], { title: "Canceled", signal: controller.signal }), /canceled/i);
 });
 
+test("async export reports cooperative cancellation during a many-target build", async () => {
+  const runs = Array.from({ length: 24 }, (_, index) => ({
+    member: `test-${index}`,
+    target: `target-${index}.csv`,
+    status: "FAIL",
+    result
+  }));
+  const controller = new AbortController();
+  const phases: string[] = [];
+  await assert.rejects(() => badRowsXlsxAsync(runs, {
+    title: "Cooperative cancellation",
+    signal: controller.signal,
+    maxRowsPerSheet: 8,
+    maxColumnsPerSheet: 8,
+    onProgress: update => {
+      phases.push(update.phase);
+      if (update.phase === "build" && update.completed >= 2) controller.abort();
+    }
+  }), /canceled/i);
+  assert.ok(phases.includes("estimate"));
+  assert.ok(phases.includes("build"));
+});
+
+test("many targets retain target and source identity in deterministic shards", async () => {
+  const runs = Array.from({ length: 12 }, (_, index) => ({
+    member: `test-${index}`,
+    target: `target-${index}.csv`,
+    status: "FAIL",
+    result
+  }));
+  const files = unzipSync(await badRowsXlsxAsync(runs, {
+    title: "Many targets",
+    maxRowsPerSheet: 30,
+    maxColumnsPerSheet: 13
+  }));
+  const sheets = Object.entries(files).filter(([name]) => name.startsWith("xl/worksheets/sheet") && name.endsWith(".xml"));
+  assert.ok(sheets.length > 4);
+  const xml = sheets.map(([, bytes]) => strFromU8(bytes)).join("\n");
+  assert.ok((xml.match(/Test files/g) ?? []).length >= 12);
+  assert.ok((xml.match(/Source row/g) ?? []).length >= 12);
+});
+
 test("async validation package streams worksheet XML into a valid archive", async () => {
   const bytes = await badRowsXlsxAsync([{ member: "streamed-test", target: "source.csv", status: "FAIL", result }], { title: "Streamed package" });
   assert.equal(String.fromCharCode(...bytes.slice(0, 2)), "PK");

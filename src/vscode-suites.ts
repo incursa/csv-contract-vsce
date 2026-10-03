@@ -23,14 +23,30 @@ import type { ResultColorMode } from "./core/result-health";
 
 async function writeSuiteExportAtomically(uri: vscode.Uri, data: Uint8Array, signal?: AbortSignal): Promise<void> {
   const temporary = uri.with({ path: `${uri.path}.partial-${Date.now()}-${Math.random().toString(36).slice(2)}` });
+  let renamed = false;
+  let operationError: unknown;
   try {
     if (signal?.aborted) throw new Error("Excel validation package export canceled.");
     await vscode.workspace.fs.writeFile(temporary, data);
     if (signal?.aborted) throw new Error("Excel validation package export canceled.");
     await vscode.workspace.fs.rename(temporary, uri, { overwrite: true });
-  } finally {
-    try { await vscode.workspace.fs.delete(temporary, { useTrash: false }); } catch { /* renamed successfully or already absent */ }
+    renamed = true;
+  } catch (error) {
+    operationError = error;
   }
+  // A successful rename consumes the temporary URI. On every other path a
+  // cleanup failure is actionable: leaving a partial export behind can make
+  // a later attempt look like a completed package. Preserve both failures so
+  // cancellation/write errors are not hidden by cleanup errors.
+  if (!renamed) {
+    try {
+      await vscode.workspace.fs.delete(temporary, { useTrash: false });
+    } catch (cleanupError) {
+      if (operationError !== undefined) throw new AggregateError([operationError, cleanupError], "Excel validation package cleanup failed.");
+      throw cleanupError;
+    }
+  }
+  if (operationError !== undefined) throw operationError;
 }
 
 export async function editSuiteConnection(document: vscode.TextDocument, index?: number, standalone = false, memberId?: string, targetIndex?: number): Promise<void> {
