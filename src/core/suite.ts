@@ -224,8 +224,8 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
   validateFile?: (contract: CsvContract, source: string, target: CsvTarget, index?: number,
     onProgress?: (progress: ValidationProgress) => void) => Promise<ValidationResult>,
   controls: { signal?: AbortSignal; members?: string[]; onProgress?: (run: SuiteRun, index?: number) => void;
-    onTargetStart?: (target: Pick<SuiteRun, "suite" | "member" | "spec" | "table" | "target">, index: number) => void;
-    onTargetProgress?: (target: Pick<SuiteRun, "suite" | "member" | "spec" | "table" | "target">, progress: ValidationProgress, index: number) => void;
+    onTargetStart?: (target: Pick<SuiteRun, "suite" | "member" | "spec" | "table" | "target" | "displayTarget">, index: number) => void;
+    onTargetProgress?: (target: Pick<SuiteRun, "suite" | "member" | "spec" | "table" | "target" | "displayTarget">, progress: ValidationProgress, index: number) => void;
     parallelTargets?: number; parallelMembers?: number; crossExecutor?: CrossExecutor } = {}) {
   const runs: SuiteRun[] = [];
   const runId = globalThis.crypto.randomUUID();

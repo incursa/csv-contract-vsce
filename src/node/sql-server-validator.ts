@@ -131,7 +131,7 @@ function runtimeInteger(name: string, fallback: number, maximum: number): number
 export class SqlServerValidationSession {
   public async validateCross(plan: SqlCrossPlan, signal?: AbortSignal): Promise<ValidationResult> {
     const fromValue = resolveScopeValue(plan.from), toValue = resolveScopeValue(plan.to);
-    const handle = await this.getPool(plan.from.connection, plan.from.integratedConnection, plan.from);
+    const handle = await this.getPool(plan.from.connection ?? "", plan.from.integratedConnection, plan.from);
     const request = handle.pool.request();
     bindScope(request, handle.api, plan.from, fromValue);
     bindScope(request, handle.api, plan.to, toValue);

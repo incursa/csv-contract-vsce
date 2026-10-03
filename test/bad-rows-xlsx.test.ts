@@ -124,3 +124,14 @@ test("validation package maps aggregate count findings to the configured rule", 
   assert.match(rules, /FAILED/);
   assert.match(aggregate, /row-count-min/);
 });
+
+test("validation package keeps explicit CSV labels and distinct case-sensitive targets", () => {
+  const longA = `exports/${"a".repeat(40)}.csv`;
+  const longB = `exports/${"A".repeat(40)}.csv`;
+  const runs = [longB, longA].map(target => ({ member: "csv-test", target, status: "ERROR", error: "Login failed; User ID=alice; Password=secret; Server=sql01; Database=Sales" }));
+  const files = unzipSync(badRowsXlsx(runs, { title: "CSV package" }));
+  const overview = strFromU8(files["xl/worksheets/sheet1.xml"]);
+  assert.match(overview, new RegExp(longA));
+  assert.match(overview, new RegExp(longB));
+  assert.doesNotMatch(overview, /alice|secret|sql01|Sales/);
+});

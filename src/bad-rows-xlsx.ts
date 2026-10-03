@@ -64,6 +64,12 @@ function shown(value: unknown): string {
   return Array.isArray(value) ? value.map(shown).join(", ") : String(value);
 }
 
+function workbookSafeError(value: string): string {
+  return value
+    .replace(/((?:User\s*ID|UID|Password|Pwd|AccessToken)\s*=\s*)(?:\{[^}]*\}|[^;\r\n]*)/gi, "$1[redacted]")
+    .replace(/(Server|Data Source)\s*=\s*[^;\r\n]+(?:;[^;\r\n]+)*/gi, "$1=[redacted]");
+}
+
 function describePredicate(predicate: Predicate | SqlPredicate): string {
   if ("all" in predicate) return predicate.all.map(describePredicate).join(" and ");
   if ("any" in predicate) return `any of: ${predicate.any.map(describePredicate).join("; ")}`;
@@ -220,7 +226,7 @@ function overviewSheet(runs: BadRowsRun[], options: BadRowsWorkbookOptions, used
     rows.push([testLabel(run, index, options), runLabel(run, index), run.status ?? (run.result?.valid ? "PASS" : run.result ? "FAIL" : "ERROR"),
       sampled ? "Sample only" : resultHealthCategory(health), sampled ? undefined : health.score, run.result?.rowCount, run.result?.testCount, run.result?.issueCount,
       run.result?.errorCount, run.result?.warningCount, run.durationMs === undefined ? undefined : Math.round(run.durationMs / 100) / 10,
-      run.evaluatedAt ?? run.result?.evaluatedAt, run.error ?? (run.result?.truncated ? "Finding details were limited." : sampled ? "Incomplete sampled validation." : "")]);
+      run.evaluatedAt ?? run.result?.evaluatedAt, run.error ? workbookSafeError(run.error) : (run.result?.truncated ? "Finding details were limited." : sampled ? "Incomplete sampled validation." : "")]);
     const style = sampled ? 8 : healthStyle(health.band);
     styles.push([6, 6, run.status === "SKIPPED" ? 11 : style, style, style]);
   });
@@ -372,7 +378,9 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
   const groupedTargets = new Map<string, { label: string; entries: Array<{ run: BadRowsRun; index: number }> }>();
   orderedRuns(runs, options).forEach(({ run, index: runIndex }) => {
     const label = targetDisplayLabel(run, runIndex);
-    const key = label.trim().toLocaleLowerCase();
+    // Labels identify the execution target. Keep case-distinct labels separate;
+    // Excel tab-name collisions are handled independently by safeSheetName.
+    const key = label;
     const group = groupedTargets.get(key) ?? { label, entries: [] };
     group.entries.push({ run, index: runIndex });
     groupedTargets.set(key, group);
