@@ -33,7 +33,9 @@ export function sqlServerConnectionKey(target: ResolvedSqlServerTarget): string 
 export function sqlServerTargetLabel(target: ResolvedSqlServerTarget): string {
   const endpoint = target.resolvedConnection ?? target.integratedConnection;
   if (endpoint) return `${endpoint.server}.${endpoint.database}.${target.schema}.${target.table}`;
-  return `${target.connection || "unconfigured"}.${target.schema}.${target.table}`;
+  // A profile name is not an execution endpoint and may identify credentials,
+  // so never use it as a reviewer-facing target label when resolution failed.
+  return `unresolved.${target.schema}.${target.table}`;
 }
 
 export function resolveSqlServerTargets(contract: CsvContract, requireConnection = true): ResolvedSqlServerTarget[] {

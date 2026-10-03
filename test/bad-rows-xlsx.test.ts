@@ -35,6 +35,10 @@ test("SQL target labels use the resolved execution endpoint and ignore display n
   assert.equal(sqlServerTargetLabel({ connection: "unused", integratedConnection: { server: "sql02", database: "Warehouse" }, schema: "stage", table: "Orders" }), "sql02.Warehouse.stage.Orders");
 });
 
+test("unresolved SQL target labels do not expose connection profile names", () => {
+  assert.equal(sqlServerTargetLabel({ connection: "production-credentials", schema: "dbo", table: "Orders" }), "unresolved.dbo.Orders");
+});
+
 test("validation package uses one canonical target label across reviewer sheets", () => {
   const canonical = "sql01.Sales.dbo.Orders";
   assert.equal(targetDisplayLabel({ target: canonical, displayTarget: canonical, member: "sql-test" }, 0), canonical);
