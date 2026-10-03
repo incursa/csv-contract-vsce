@@ -70,10 +70,14 @@ class IssueCollector {
   public total = 0;
   public errors = 0;
   public warnings = 0;
+  private currentRow?: { row: number; values: Record<string, string> };
 
   public constructor(private readonly maximum: number) {}
 
   public add(issue: ValidationIssue): void {
+    if (!issue.evidence && issue.row !== undefined && this.currentRow?.row === issue.row) {
+      issue = { ...issue, evidence: { samples: [{ primary: { label: "Source row", row: issue.row, values: this.currentRow.values } }] } };
+    }
     this.total += 1;
     if (issue.severity === "warning") this.warnings += 1;
     else this.errors += 1;
@@ -83,6 +87,9 @@ class IssueCollector {
   public addAll(issues: ValidationIssue[]): void {
     issues.forEach((issue) => this.add(issue));
   }
+
+  public atRow(row: number, values: Record<string, string>): void { this.currentRow = { row, values }; }
+  public leaveRow(): void { this.currentRow = undefined; }
 }
 
 interface PreparedColumn {
@@ -394,6 +401,7 @@ function initializeState(
 
 function processRow(state: ContractState, fields: string[], recordNumber: number,
   uniqueness?: PartitionedUniquenessStore, groups?: PartitionedGroupStore): void {
+  state.collector.atRow(recordNumber, Object.fromEntries(state.headers.map((header, index) => [header, fields[index] ?? ""])));
   state.rowCount += 1;
   state.groupRunners.forEach(runner => runner.add(recordNumber, fields));
   for (const sequence of state.sequenceStores) sequence.store.add({ row: recordNumber,
@@ -499,6 +507,7 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
     const observed = normalize(fields[state.headerIndex.get(prepared.rule.require.column)!] ?? "", state.options);
     groups?.add(prepared.targetId, key, display, observed, recordNumber);
   }
+  state.collector.leaveRow();
 }
 
 function addDuplicateIssue(duplicate: DuplicateValue, checks: Map<number, UniqueCheck>): void {
@@ -511,7 +520,11 @@ function addDuplicateIssue(duplicate: DuplicateValue, checks: Map<number, Unique
       message: `"${check.column}" duplicates CSV record ${duplicate.firstRow}.`,
       column: check.column,
       row: duplicate.row,
-      actual: displayValue(duplicate.value)
+      actual: displayValue(duplicate.value),
+      evidence: { samples: [{
+        primary: { label: "Duplicate source row", row: duplicate.row, values: { [check.column!]: displayValue(duplicate.value) } },
+        related: [{ label: "First source row", row: duplicate.firstRow, values: { [check.column!]: displayValue(duplicate.value) } }]
+      }] }
     });
   } else {
     check.state.collector.add({
@@ -519,7 +532,8 @@ function addDuplicateIssue(duplicate: DuplicateValue, checks: Map<number, Unique
       code: "IDENTITY_NOT_UNIQUE",
       testId: check.state.input.contract.identity?.id,
       message: `Composite identity duplicates CSV record ${duplicate.firstRow}.`,
-      row: duplicate.row
+      row: duplicate.row,
+      evidence: { samples: [], aggregate: { duplicateRow: duplicate.row, firstRow: duplicate.firstRow } }
     });
   }
 }
@@ -546,7 +560,8 @@ function addGroupIssues(group: GroupValues, checks: Map<number, GroupCheck>): vo
       group: groupValues,
       testId: rule.id,
       expected: missing,
-      severity: rule.severity ?? "error"
+      severity: rule.severity ?? "error",
+      evidence: { samples: [], aggregate: groupValues }
     });
   }
 }

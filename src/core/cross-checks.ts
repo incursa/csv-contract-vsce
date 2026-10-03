@@ -1,4 +1,4 @@
-import type { CsvContract, CsvTarget, ParsedCsv, ValidationResult } from "./model";
+import type { CsvContract, CsvTarget, FailureEvidence, ParsedCsv, ValidationResult } from "./model";
 import { resolveSqlServerTargets, physicalSqlServerColumn, type ResolvedSqlServerTarget } from "./sql-server-targets";
 import { sqlIdentifier } from "./sql-server-generator";
 export interface CrossCheck {
@@ -30,7 +30,7 @@ export interface CrossPredicateLeaf {
   other?: { side: "from" | "to"; column: string };
 }
 export type CrossPredicate = CrossPredicateLeaf | { all: CrossPredicate[] } | { any: CrossPredicate[] };
-export interface SqlCrossPlan { mode: "sql"; check: CrossCheck; from: ResolvedSqlServerTarget; to: ResolvedSqlServerTarget; sql: string }
+export interface SqlCrossPlan { mode: "sql"; check: CrossCheck; from: ResolvedSqlServerTarget; to: ResolvedSqlServerTarget; sql: string; detailSql?: string }
 export interface CsvCrossParticipant { contract: CsvContract; source: string; target: CsvTarget }
 export interface CsvCrossPlan { mode: "csv"; check: CrossCheck; from: CsvCrossParticipant; to: CsvCrossParticipant }
 export type CrossPlan = SqlCrossPlan | CsvCrossPlan;
@@ -59,6 +59,7 @@ export function planCrossCheck(check: CrossCheck, members: { id: string; source?
     return t.scope ? `(SELECT * FROM ${name} WHERE CONVERT(nvarchar(max), ${sqlIdentifier(physicalSqlServerColumn(t, t.scope.column))}) = CONVERT(nvarchar(max), @${t.scope.parameter}))` : name;
   };
   let sql: string;
+  let detailSql: string | undefined;
   if (check.kind === "equalPopulation") sql = `SELECT ABS((SELECT COUNT_BIG(*) FROM ${object(from)} AS a) - (SELECT COUNT_BIG(*) FROM ${object(to)} AS b)) AS FailureCount;`;
   else if (check.kind === "equalTotal") {
     const columns = check.valueColumns;
@@ -79,7 +80,9 @@ export function planCrossCheck(check: CrossCheck, members: { id: string; source?
     const present = keys.map(k => `${k.from} IS NOT NULL`).join(" AND ");
     const equality = keys.map(k => `${k.from} = ${k.to}`).join(" AND ");
     const missing = `NOT EXISTS (SELECT 1 FROM ${object(to)} AS b WHERE ${equality})`;
-    sql = `SELECT COUNT_BIG(*) AS FailureCount FROM ${object(from)} AS a WHERE ${check.nulls === "fail" ? `NOT (${present}) OR (${missing})` : `(${present}) AND (${missing})`};`;
+    const failure = check.nulls === "fail" ? `NOT (${present}) OR (${missing})` : `(${present}) AND (${missing})`;
+    sql = `SELECT COUNT_BIG(*) AS FailureCount FROM ${object(from)} AS a WHERE ${failure};`;
+    detailSql = `SELECT TOP (100) (SELECT a.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS PrimaryRowJson, CAST(NULL AS nvarchar(max)) AS RelatedRowJson FROM ${object(from)} AS a WHERE ${failure};`;
   }
   else if (check.kind === "rowReconciliation") {
     if (!check.keys?.length || !check.valueMappings?.length) throw new Error(`Cross-check ${check.id}: rowReconciliation requires keys and valueMappings.`);
@@ -106,6 +109,13 @@ export function planCrossCheck(check: CrossCheck, members: { id: string; source?
     const mismatch = `EXISTS (SELECT 1 FROM ${object(to)} AS b WHERE ${equality} AND (${violations.join(" OR ")}))`;
     const failure = `(${missing}) OR (${mismatch})`;
     sql = `SELECT COUNT_BIG(*) AS FailureCount FROM ${object(from)} AS a WHERE ${check.nulls === "fail" ? `NOT (${present}) OR (${failure})` : `(${present}) AND (${failure})`};`;
+    const detailEquality = equality.replaceAll("b.", "candidate.");
+    const detailViolations = violations.join(" OR ").replaceAll("b.", "candidate.");
+    const selected = `OUTER APPLY (SELECT TOP (1) candidate.* FROM ${object(to)} AS candidate WHERE ${detailEquality} ORDER BY CASE WHEN ${detailViolations} THEN 0 ELSE 1 END) AS b`;
+    const matched = `b.${sqlIdentifier(physicalSqlServerColumn(to, check.keys[0].to))} IS NOT NULL`;
+    const detailFailure = `(NOT (${matched})) OR (${violations.join(" OR ")})`;
+    const detailWhere = check.nulls === "fail" ? `NOT (${present}) OR (${detailFailure})` : `(${present}) AND (${detailFailure})`;
+    detailSql = `SELECT TOP (100) (SELECT a.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS PrimaryRowJson, CASE WHEN ${matched} THEN (SELECT b.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) END AS RelatedRowJson FROM ${object(from)} AS a ${selected} WHERE ${detailWhere};`;
   }
   else {
     if (!check.keys?.length || !check.expect || !check.lookup?.orderBy.length) throw new Error(`Cross-check ${check.id}: relationship requires keys, lookup.orderBy, and expect.`);
@@ -122,9 +132,11 @@ export function planCrossCheck(check: CrossCheck, members: { id: string; source?
     const expect = crossPredicateSql(check.expect, from, to, "a", "b")!;
     const missing = check.missing === "ignore" ? "1 = 0" : "b.[__csv_contract_match] IS NULL";
     const violation = `(b.[__csv_contract_match] = 1 AND (${when}) AND NOT (${expect}))`;
-    sql = `SELECT COUNT_BIG(*) AS FailureCount FROM ${object(from)} AS a ${lookup} WHERE ${check.nulls === "fail" ? `NOT (${present}) OR (${missing}) OR ${violation}` : `((${present}) AND ((${missing}) OR ${violation}))`};`;
+    const failure = check.nulls === "fail" ? `NOT (${present}) OR (${missing}) OR ${violation}` : `((${present}) AND ((${missing}) OR ${violation}))`;
+    sql = `SELECT COUNT_BIG(*) AS FailureCount FROM ${object(from)} AS a ${lookup} WHERE ${failure};`;
+    detailSql = `SELECT TOP (100) (SELECT a.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS PrimaryRowJson, CASE WHEN b.[__csv_contract_match] = 1 THEN (SELECT b.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) END AS RelatedRowJson FROM ${object(from)} AS a ${lookup} WHERE ${failure};`;
   }
-  return { mode: "sql", check, from, to, sql };
+  return { mode: "sql", check, from, to, sql, detailSql };
 }
 
 function predicateLeaves(predicate: CrossPredicate | undefined): CrossPredicateLeaf[] {
@@ -230,6 +242,17 @@ export function evaluateCsvCrossCheck(plan: CsvCrossPlan, fromCsv: ParsedCsv, to
   if (fromCsv.parseErrors.length || toCsv.parseErrors.length) throw new Error(`Cross-check ${plan.check.id}: CSV parsing failed.`);
   const objects = (csv: ParsedCsv) => csv.rows.map(row => Object.fromEntries(csv.headers.map((header, index) => [header, row[index] ?? ""])));
   const fromRows = objects(fromCsv), toRows = objects(toCsv), check = plan.check;
+  const rowNumber = new WeakMap<Record<string, string>, number>();
+  fromRows.forEach((row, index) => rowNumber.set(row, fromCsv.sourceRowNumbers[index]));
+  toRows.forEach((row, index) => rowNumber.set(row, toCsv.sourceRowNumbers[index]));
+  const evidenceSamples: FailureEvidence["samples"] = [];
+  const retain = (primary: Record<string, string>, related: Record<string, string>[] = []) => {
+    if (evidenceSamples.length >= 100) return;
+    evidenceSamples.push({
+      primary: { label: check.from, row: rowNumber.get(primary), values: primary },
+      related: related.map(row => ({ label: check.to, row: rowNumber.get(row), values: row }))
+    });
+  };
   const nullValue = (side: "from" | "to", candidate: string) => ((side === "from" ? plan.from.contract : plan.to.contract).csv?.nullValues ?? [""]).includes(candidate);
   const value = (leaf: CrossPredicateLeaf, from: Record<string, string>, to: Record<string, string>) => (leaf.side === "from" ? from : to)[leaf.column] ?? "";
   const evaluate = (predicate: CrossPredicate | undefined, from: Record<string, string>, to: Record<string, string>): boolean => {
@@ -261,20 +284,29 @@ export function evaluateCsvCrossCheck(plan: CsvCrossPlan, fromCsv: ParsedCsv, to
     }
   };
   const key = (row: Record<string, string>, mappings: { from: string; to: string }[], side: "from" | "to") => mappings.map(mapping => row[side === "from" ? mapping.from : mapping.to] ?? "").join("\u0000");
-  if (check.kind === "equalPopulation") return crossResult(check, Math.abs(fromRows.length - toRows.length));
+  if (check.kind === "equalPopulation") {
+    const failures = Math.abs(fromRows.length - toRows.length);
+    return crossResult(check, failures, failures ? { samples: [], aggregate: { fromRows: fromRows.length, toRows: toRows.length } } : undefined);
+  }
   if (!check.keys?.length) throw new Error(`Cross-check ${check.id}: keys are required for CSV execution.`);
   const index = new Map<string, Record<string, string>[]>();
   for (const row of toRows) { const id = key(row, check.keys, "to"); const rows = index.get(id) ?? []; rows.push(row); index.set(id, rows); }
   let failures = 0;
   const hasKeys = (row: Record<string, string>) => check.keys!.every(mapping => !nullValue("from", row[mapping.from] ?? ""));
-  if (check.kind === "foreignKey") failures = fromRows.filter(row => !hasKeys(row) ? check.nulls === "fail" : !index.has(key(row, check.keys!, "from"))).length;
+  if (check.kind === "foreignKey") failures = fromRows.filter(row => {
+    const failed = !hasKeys(row) ? check.nulls === "fail" : !index.has(key(row, check.keys!, "from"));
+    if (failed) retain(row);
+    return failed;
+  }).length;
   else if (check.kind === "rowReconciliation") failures = fromRows.filter(row => {
-    if (!hasKeys(row)) return check.nulls === "fail";
+    if (!hasKeys(row)) { if (check.nulls === "fail") retain(row); return check.nulls === "fail"; }
     const matches = index.get(key(row, check.keys!, "from")) ?? [];
-    return !matches.length || matches.some(match => check.valueMappings!.some(mapping => {
+    const failed = !matches.length || matches.some(match => check.valueMappings!.some(mapping => {
       const source = row[mapping.from] ?? "", target = match[mapping.to] ?? "", blank = source.trim() === "" || nullValue("from", source);
       return blank && mapping.blankTo !== undefined && target !== mapping.blankTo || !blank && mapping.otherwise === "preserve" && target !== source;
     }));
+    if (failed) retain(row, matches);
+    return failed;
   }).length;
   else if (check.kind === "equalTotal") {
     const columns = check.valueColumns!;
@@ -287,15 +319,18 @@ export function evaluateCsvCrossCheck(plan: CsvCrossPlan, fromCsv: ParsedCsv, to
     }, { total: 0, invalid: false });
     const left = aggregate(fromRows, columns.from, "from"), right = aggregate(toRows, columns.to, "to");
     failures = !left.invalid && !right.invalid && Math.abs(left.total - right.total) <= Number(check.tolerance ?? "0") ? 0 : 1;
+    if (failures) return crossResult(check, failures, { samples: [], aggregate: { fromTotal: left.total, toTotal: right.total, fromInvalid: left.invalid, toInvalid: right.invalid } });
   } else failures = fromRows.filter(row => {
-    if (!hasKeys(row)) return check.nulls === "fail";
+    if (!hasKeys(row)) { if (check.nulls === "fail") retain(row); return check.nulls === "fail"; }
     const matches = [...(index.get(key(row, check.keys!, "from")) ?? [])];
     if (check.lookup?.orderBy.length && matches.length > 1) matches.sort((a, b) => compareLookupRows(a, b, check.lookup!.orderBy));
     const selected = check.lookup ? matches.slice(0, 1) : matches;
-    if (!selected.length) return check.missing !== "ignore";
-    return selected.some(match => evaluate(check.when, row, match) && !evaluate(check.expect, row, match));
+    if (!selected.length) { if (check.missing !== "ignore") retain(row); return check.missing !== "ignore"; }
+    const failed = selected.some(match => evaluate(check.when, row, match) && !evaluate(check.expect, row, match));
+    if (failed) retain(row, selected);
+    return failed;
   }).length;
-  return crossResult(check, failures);
+  return crossResult(check, failures, failures ? { samples: evidenceSamples, totalSamples: failures, limited: evidenceSamples.length < failures } : undefined);
 }
 function compareLookupRows(left: Record<string, string>, right: Record<string, string>, order: NonNullable<CrossCheck["lookup"]>["orderBy"]): number {
   for (const item of order) {
@@ -310,10 +345,10 @@ function compareLookupRows(left: Record<string, string>, right: Record<string, s
   }
   return 0;
 }
-export function crossResult(check: CrossCheck, count: unknown): ValidationResult {
+export function crossResult(check: CrossCheck, count: unknown, evidence?: FailureEvidence): ValidationResult {
   const failures = Number(count);
   if (count === null || count === undefined || String(count).trim() === "" || !Number.isSafeInteger(failures) || failures < 0) throw new Error(`Invalid cross-check summary for ${check.id}.`);
   const warning = check.severity === "warning";
   return { valid: !failures || warning, rowCount: 0, columnCount: 0, testCount: 1, issueCount: failures, errorCount: warning ? 0 : failures, warningCount: warning ? failures : 0,
-    truncated: false, issues: failures ? [{ level: "row", code: "CROSS_CHECK_FAILED", testId: check.id, severity: check.severity ?? "error", actual: failures, expected: 0, message: `${check.kind}: ${failures} ${check.kind === "foreignKey" ? "orphan rows" : check.kind === "equalTotal" ? "total mismatch or invalid numeric/null inputs" : check.kind === "rowReconciliation" ? "missing or value-mismatched source rows" : check.kind === "relationship" ? "relationship violations" : "rows of population difference"} (${check.from} → ${check.to}). Aggregate only; no example rows retrieved.` }] : [] };
+    truncated: false, issues: failures ? [{ level: "row", code: "CROSS_CHECK_FAILED", testId: check.id, severity: check.severity ?? "error", actual: failures, expected: 0, evidence, message: `${check.kind}: ${failures} ${check.kind === "foreignKey" ? "orphan rows" : check.kind === "equalTotal" ? "total mismatch or invalid numeric/null inputs" : check.kind === "rowReconciliation" ? "missing or value-mismatched source rows" : check.kind === "relationship" ? "relationship violations" : "rows of population difference"} (${check.from} → ${check.to}).${evidence ? " Bounded source evidence is attached." : " No row-level evidence was available."}` }] : [] };
 }

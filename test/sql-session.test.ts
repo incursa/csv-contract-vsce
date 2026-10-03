@@ -39,12 +39,13 @@ test("SQL target baseline overrides contract baseline without changing either", 
   assert.equal(baseline.columns[0].maxLength, 10);
 });
 
-test("SQL session preserves actual aggregate outcomes without retrieving example rows", async () => {
+test("SQL session preserves aggregate outcomes and retrieves bounded failing-row evidence", async () => {
   const queries: string[] = [];
   const friendly: CsvContract = { ...contract, rules: [{ ...contract.rules![0], name: "Identifier must be recognized", message: "Review this identifier before continuing." }] };
   const session = sessionWithQuery(async text => {
     queries.push(text);
     if (text.includes("sys.columns")) return { recordset: [{ name: "Id", ordinal: 1, sqlType: "nvarchar", nullable: false }] };
+    if (text.includes("Bounded failing-row")) return { recordsets: [[{ RuleId: "constant", Id: "0002" }]] };
     if (text.includes("AS RuleId")) return { recordsets: [[{ RuleId: "constant", RuleName: "Identifier must be recognized", FailureMessage: "Review this identifier before continuing.", Code: "RULE_EXPECTATION_FAILED", ColumnName: "", Severity: "error", FailureCount: 1, SelectedCount: 3 }]] };
     return { recordset: [{ count: 3 }] };
   });
@@ -54,7 +55,9 @@ test("SQL session preserves actual aggregate outcomes without retrieving example
   assert.equal(result.issues[0].title, "Identifier must be recognized");
   assert.equal(result.issues[0].message, "Review this identifier before continuing.");
   assert.match(result.issues[0].diagnostic!, /failed for 1 row or group/);
-  assert(queries.every(q => !q.includes("t.*")));
+  assert.equal(result.issues[0].evidence?.samples[0].primary?.values.Id, "0002");
+  assert.equal(result.issues[0].evidence?.aggregate?.failureCount, 1);
+  assert(queries.some(q => q.includes("t.*")));
 });
 
 test("metadata failures and missing SQL summaries are execution errors", async () => {

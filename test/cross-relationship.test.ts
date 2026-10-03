@@ -17,7 +17,7 @@ const relationship = (expectAmount: number, category: string): CrossCheck => ({
   nulls: "fail", missing: "fail"
 });
 
-test("relationship cross-checks select a deterministic CSV lookup row and return aggregate-only failures", () => {
+test("relationship cross-checks retain the failing source and selected lookup rows", () => {
   const payments: CsvContract = { version: 1, targets: [{ path: "payments.csv" }], schema: { columns: paymentColumns } };
   const classifications: CsvContract = { version: 1, targets: [{ path: "classifications.csv" }], schema: { columns: classificationColumns } };
   const check = relationship(1, "Special");
@@ -29,8 +29,10 @@ test("relationship cross-checks select a deterministic CSV lookup row and return
   const result = evaluateCsvCrossCheck(plan, from, to);
   assert.equal(result.issueCount, 2);
   assert.equal(result.issues.length, 1);
-  assert.match(result.issues[0].message, /Aggregate only/);
-  assert.doesNotMatch(JSON.stringify(result), /RecordId|2025-01-01/);
+  assert.match(result.issues[0].message, /evidence is attached/);
+  assert.equal(result.issues[0].evidence?.samples.length, 2);
+  assert.equal(result.issues[0].evidence?.samples[0].primary?.values.RecordId, "B");
+  assert.equal(result.issues[0].evidence?.samples[0].related?.[0].values.Category, "Special");
 
   const greater = relationship(1, "Special");
   greater.id = "special-amount-greater-than-one";
@@ -41,7 +43,7 @@ test("relationship cross-checks select a deterministic CSV lookup row and return
   assert.equal(evaluateCsvCrossCheck(greaterPlan, from, to).issueCount, 2);
 });
 
-test("relationship SQL uses the same generic lookup, typed predicates, and aggregate-only result", () => {
+test("relationship SQL uses the same generic lookup, typed predicates, and bounded joined evidence", () => {
   const payments: CsvContract = { version: 1, schema: { columns: paymentColumns }, sqlServer: { connection: "portable", schema: "left", table: "Payments" } };
   const classifications: CsvContract = { version: 1, schema: { columns: classificationColumns }, sqlServer: { connection: "portable", schema: "right", table: "Classifications" } };
   const plan = planCrossCheck(relationship(1, "Special"), [{ id: "payments", contract: payments }, { id: "classifications", contract: classifications }]);
@@ -52,6 +54,8 @@ test("relationship SQL uses the same generic lookup, typed predicates, and aggre
   assert.match(plan.sql, /TRY_CONVERT\(decimal\(38,10\), candidate\.\[Sequence\]\) DESC/);
   assert.match(plan.sql, /TRY_CONVERT\(decimal\(38,10\), a\.\[Amount\]\) = TRY_CONVERT/);
   assert.match(plan.sql, /^SELECT COUNT_BIG\(\*\) AS FailureCount/);
+  assert.match(plan.detailSql!, /PrimaryRowJson/);
+  assert.match(plan.detailSql!, /RelatedRowJson/);
   assert.doesNotMatch(plan.sql, /DROP|DELETE|UPDATE/);
 });
 

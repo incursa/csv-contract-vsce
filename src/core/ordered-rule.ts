@@ -134,8 +134,10 @@ export class OrderedRuleEvaluator {
     outcome.selected++;
     if (ok) { outcome.passed++; return; }
     outcome.failed++;
+    const values = Object.fromEntries(orderedColumns(this.rule).map(c => [c, row.values[c] ?? ""]));
     this.issue({ level: "row", code: "ORDERED_RULE_FAILED", testId: check.id, row: row.row, relatedRows,
-      actual: JSON.stringify(Object.fromEntries(orderedColumns(this.rule).map(c => [c, row.values[c] ?? ""]))).slice(0, 240),
+      actual: JSON.stringify(values).slice(0, 240),
+      evidence: { samples: [{ primary: { label: "Source row", row: row.row, values } }], aggregate: relatedRows.length ? { relatedRows: relatedRows.join(", ") } : undefined },
       message: `${check.message}${detail ? ` ${detail}` : ""}` });
   }
 

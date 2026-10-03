@@ -36,6 +36,7 @@ import { mergeImportedSchema, parseSqlSchemaSource, type ImportedSqlTable } from
 import { hasSqlServerConnection, resolveSqlServerTargets, sqlServerTargetLabel, type ResolvedSqlServerTarget } from "./core/sql-server-targets";
 import { suggestSqlColumnMappings } from "./core/sql-server-column-mapping";
 import { issueRunsToCsv, parseValidationRunExport, validationRunExportJson } from "./issue-export";
+import { badRowsXlsx, contractCheckCatalog } from "./bad-rows-xlsx";
 
 const viewType = "csv-contract-vsce.contractEditor";
 
@@ -725,7 +726,8 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         }
         const format = await vscode.window.showQuickPick([
           { label: "JSON", description: "Complete target summaries and retained issue details", extension: "results.json" },
-          { label: "CSV", description: "One row per retained validation issue", extension: "issues.csv" }
+          { label: "CSV", description: "One row per retained validation issue", extension: "issues.csv" },
+          { label: "Excel validation package", description: "Overall status, rule catalog, and bad-row matrices", extension: "validation-package.xlsx" }
         ], { title: "Export validation results", placeHolder: "Choose a machine-readable format" });
         if (!format) return;
         const contractFilename = document.uri.path.split("/").at(-1) ?? "contract.csvtest.yaml";
@@ -733,15 +735,16 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         const outputUri = await vscode.window.showSaveDialog({
           title: "Export validation results",
           defaultUri: document.uri.with({ path: document.uri.path.replace(/[^/]+$/, exportFilename) }),
-          filters: format.label === "JSON" ? { "JSON files": ["json"] } : { "CSV files": ["csv"] }
+          filters: format.label === "JSON" ? { "JSON files": ["json"] } : format.label === "CSV" ? { "CSV files": ["csv"] } : { "Excel workbooks": ["xlsx"] }
         });
         if (!outputUri) return;
-        const exportRuns = filterResultRuns(latestRuns, String(message.filter ?? ""), message.selectedIssues);
+        const exportRuns = format.label === "Excel validation package" ? latestRuns : filterResultRuns(latestRuns, String(message.filter ?? ""), message.selectedIssues);
         const exportContext = { filter: message.filter ?? "", selectedIssues: message.selectedIssues ?? [], stale, runNotice, totals: "original target scope; exported details may be selected or filtered" };
         const content = format.label === "JSON"
           ? JSON.stringify({ ...JSON.parse(validationRunExportJson(vscode.workspace.asRelativePath(document.uri, false), exportRuns)), exportScope: exportContext }, null, 2)
-          : issueRunsToCsv(exportRuns, exportContext);
-        await vscode.workspace.fs.writeFile(outputUri, new TextEncoder().encode(content));
+          : format.label === "CSV" ? issueRunsToCsv(exportRuns, exportContext)
+          : badRowsXlsx(exportRuns, { title: `${contractFilename} validation results`, testLabel: contractFilename, checkCatalog: () => contractCheckCatalog(read()) });
+        await vscode.workspace.fs.writeFile(outputUri, typeof content === "string" ? new TextEncoder().encode(content) : content);
         const totalIssueCount = latestRuns.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
         if (totalIssueCount > retainedIssueCount) {
           void vscode.window.showWarningMessage(

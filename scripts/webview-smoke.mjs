@@ -102,7 +102,8 @@ const failedState = {
         message: "Review the customer status before continuing.",
         diagnostic: `Expected Active; found Inactive at row ${index + 2}.`,
         expected: "Active",
-        actual: "Inactive"
+        actual: "Inactive",
+        evidence: { samples: [{ primary: { label: "customers-east.csv", row: index + 2, values: { CustomerId: `C${String(index + 1).padStart(6, "0")}`, Status: "Inactive", Notes: "Needs review" } } }] }
       }))
     }
   }]
@@ -252,6 +253,12 @@ if (!(await page.locator(".finding-card").first().textContent()).includes("Custo
   || !(await page.locator(".finding-card").first().textContent()).includes("Row 2")) {
   throw new Error("Finding cards did not explain the rule and location in readable language.");
 }
+const rowEvidence = page.locator(".finding-card").first().locator(".finding-evidence");
+await rowEvidence.locator("summary").click();
+if (!(await rowEvidence.textContent()).includes("CustomerId") || !(await rowEvidence.textContent()).includes("Inactive")) {
+  throw new Error("Finding row evidence did not show the evaluated source values.");
+}
+await rowEvidence.screenshot({ path: join(qaScreenshotDir, "row-evidence.png") });
 const exportIssuesButton = page.locator('[data-action="export-issues"]');
 if (!await exportIssuesButton.isVisible() || (await exportIssuesButton.textContent())?.trim() !== "Export results (12 details)") {
   throw new Error("Failed results did not expose the complete issue export action.");

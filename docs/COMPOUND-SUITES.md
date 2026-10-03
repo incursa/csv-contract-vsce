@@ -200,9 +200,27 @@ named profile in VS Code Secret Storage; credentials are never written into YAML
 Execution errors retain SQL/ODBC diagnostic fields and nested messages. Assertion
 details are expanded by default. **Export errors / results** opens a Save dialog:
 CSV contains retained issues, execution errors and skipped reasons with suite,
-member, table and rule identity; JSON contains the complete in-memory suite report.
+member, table and rule identity. It also contains JSON columns for primary rows,
+related joined rows and aggregate context. JSON contains the complete in-memory
+suite report. The Workbench shows the same information under **Row evidence** on
+each finding. Ordinary CSV and SQL row checks retain the main row being evaluated.
+Cross-source checks retain the source row and the selected or matched row from the
+other source when available. Evidence is bounded and explicitly marked when the
+failure count exceeds the retained samples.
+The Excel validation package starts with an **Overview** of every suite member and
+target using the same graded health calculation as the Workbench. **Rules** lists
+each configured check in readable terms and summarizes how many targets evaluated
+or failed it. Each target with retained row evidence receives one bad-row matrix
+sheet that combines all suite test files for that target. Matching source rows are
+merged, and every check column is qualified by test file. The matrix includes the
+primary row, related joined values and one column for every configured check. A
+red `FALSE` means that check failed the row. Blank cells deliberately do not claim a
+pass: the check may not have failed, may not apply or may not be provably evaluated
+for that row. Findings without row evidence are listed on **Aggregate Findings**.
 Truncated validation details remain marked as truncated. Export saves existing
-results without querying the database again. Previous runs must be repeated after
+results without querying the database again. Row evidence can contain every column
+from the evaluated source, so treat the UI and saved exports as source data with
+the same access and handling requirements. Previous runs must be repeated after
 updating from a version that reduced driver errors to `[object Object]`.
 
 If VS Code kept an existing text-editor association, use **Reopen Editor With →

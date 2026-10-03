@@ -55,6 +55,32 @@ function requiredInteger(value: unknown, name: string): number {
   return Number(value);
 }
 
+function validateEvidenceRecord(value: unknown, location: string): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${location} is not a record.`);
+  const record = value as Record<string, unknown>;
+  if (record.label !== undefined && typeof record.label !== "string" || record.row !== undefined && (!Number.isSafeInteger(record.row) || Number(record.row) < 0) ||
+      !record.values || typeof record.values !== "object" || Array.isArray(record.values) || Object.values(record.values as Record<string, unknown>).some(item => item !== null && !["string", "number", "boolean"].includes(typeof item))) {
+    throw new Error(`${location} has invalid row values.`);
+  }
+}
+
+function validateEvidence(value: unknown, location: string): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${location} is invalid.`);
+  const evidence = value as Record<string, unknown>;
+  if (!Array.isArray(evidence.samples) || evidence.limited !== undefined && typeof evidence.limited !== "boolean" ||
+      evidence.totalSamples !== undefined && (!Number.isSafeInteger(evidence.totalSamples) || Number(evidence.totalSamples) < 0)) throw new Error(`${location} is invalid.`);
+  evidence.samples.forEach((value, index) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${location} sample ${index + 1} is invalid.`);
+    const sample = value as Record<string, unknown>;
+    if (sample.primary !== undefined) validateEvidenceRecord(sample.primary, `${location} sample ${index + 1} primary row`);
+    if (sample.related !== undefined) {
+      if (!Array.isArray(sample.related)) throw new Error(`${location} sample ${index + 1} related rows are invalid.`);
+      sample.related.forEach((record, relatedIndex) => validateEvidenceRecord(record, `${location} sample ${index + 1} related row ${relatedIndex + 1}`));
+    }
+  });
+  if (evidence.aggregate !== undefined) validateEvidenceRecord({ values: evidence.aggregate }, `${location} aggregate context`);
+}
+
 function validationResult(value: unknown, run: number): ValidationResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Results JSON run ${run} has no validation result.`);
   const result = value as Record<string, unknown>;
@@ -70,6 +96,7 @@ function validationResult(value: unknown, run: number): ValidationResult {
     if (issue.title !== undefined && typeof issue.title !== "string" || issue.diagnostic !== undefined && typeof issue.diagnostic !== "string") {
       throw new Error(`Results JSON run ${run}, issue ${index + 1} has an invalid title or diagnostic.`);
     }
+    if (issue.evidence !== undefined) validateEvidence(issue.evidence, `Results JSON run ${run}, issue ${index + 1} evidence`);
     return value as ValidationResult["issues"][number];
   });
   return {
@@ -122,7 +149,11 @@ export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown): strin
     "Row",
     "Message",
     "Actual",
-    "Expected"
+    "Expected",
+    "PrimaryRows",
+    "RelatedRows",
+    "AggregateContext",
+    "EvidenceLimited"
   ];
   const extended = context !== undefined || runs.some(run => run.runId);
   const metadata = (run: IssueExportRun) => extended ? [run.runId ?? "", run.workId ?? "", run.evaluatedAt ?? "", run.scope ?? "", run.status ?? (run.result?.valid ? "PASS" : "FAIL"), JSON.stringify(context ?? {}), String(run.result?.issueCount ?? 0), String(run.result?.issues.length ?? 0), String(run.result?.truncated ?? false)] : [];
@@ -136,11 +167,15 @@ export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown): strin
     issue.row === undefined ? "" : String(issue.row),
     issue.message,
     issue.actual === undefined ? "" : String(issue.actual),
-    issue.expected === undefined ? "" : String(issue.expected), ...metadata(run)
+    issue.expected === undefined ? "" : String(issue.expected),
+    JSON.stringify(issue.evidence?.samples.flatMap(sample => sample.primary ? [sample.primary] : []) ?? []),
+    JSON.stringify(issue.evidence?.samples.flatMap(sample => sample.related ?? []) ?? []),
+    JSON.stringify(issue.evidence?.aggregate ?? {}),
+    String(issue.evidence?.limited ?? false), ...metadata(run)
   ]));
   for (const run of runs) {
-    if (run.error) rows.push([run.target, run.status ?? "ERROR", "execution", "", "", "", "", run.error, "", "", ...metadata(run)]);
-    else if (extended && !run.result?.issues.length) rows.push([run.target, "", "summary", "", "", "", "", "No retained issue details in this scope.", "", "", ...metadata(run)]);
+    if (run.error) rows.push([run.target, run.status ?? "ERROR", "execution", "", "", "", "", run.error, "", "", "[]", "[]", "{}", "false", ...metadata(run)]);
+    else if (extended && !run.result?.issues.length) rows.push([run.target, "", "summary", "", "", "", "", "No retained issue details in this scope.", "", "", "[]", "[]", "{}", "false", ...metadata(run)]);
   }
   if (extended) columns.push("RunId", "WorkId", "EvaluatedAt", "EvaluationScope", "Status", "ExportScope", "TotalIssues", "RetainedIssues", "DetailsLimited");
   return rowsToCsv(columns, rows);

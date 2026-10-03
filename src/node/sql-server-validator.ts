@@ -7,7 +7,7 @@ import sql from "mssql";
 import { assertCompleteSqlSummaries } from "../core/sql-server-results";
 import Papa from "papaparse";
 import { validateCsv } from "../core/contract";
-import type { CountExpectation, CsvContract, SqlServerIntegratedConnection, SqlServerObjectInfo, ValidationIssue, ValidationResult } from "../core/model";
+import type { CountExpectation, CsvContract, EvidenceValue, SqlServerIntegratedConnection, SqlServerObjectInfo, ValidationIssue, ValidationResult } from "../core/model";
 import { generateSqlServerValidation, safeSqlType, sqlIdentifier } from "../core/sql-server-generator";
 import { canonicalSqlServerColumn, physicalSqlServerColumn, type ResolvedSqlServerTarget } from "../core/sql-server-targets";
 import { OrderedRuleEvaluator, orderedColumns, compareOrderedRows } from "../core/ordered-rule";
@@ -54,6 +54,12 @@ interface SummaryRow {
   Code: string;
   ColumnName: string;
   FailureCount: number | string;
+}
+
+function evidenceValue(value: unknown): EvidenceValue {
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+  if (value instanceof Date) return value.toISOString();
+  return String(value);
 }
 
 type MetadataRow = BaselineColumn;
@@ -129,9 +135,23 @@ export class SqlServerValidationSession {
     const request = handle.pool.request();
     bindScope(request, handle.api, plan.from, fromValue);
     bindScope(request, handle.api, plan.to, toValue);
-    const result = await queryWithCancellation<{ FailureCount: number | string }>(request, plan.sql, signal);
+    const result = await queryWithCancellation<{ FailureCount: number | string; PrimaryRowJson?: string | null; RelatedRowJson?: string | null }>(request, `${plan.sql}${plan.detailSql ? `\n${plan.detailSql}` : ""}`, signal);
     if (result.recordset.length !== 1) throw new Error("Cross-check did not return one aggregate summary.");
-    return crossResult(plan.check, result.recordset[0].FailureCount);
+    const count = Number(result.recordset[0].FailureCount);
+    const details = (result.recordsets[1] ?? []) as Array<{ PrimaryRowJson?: string | null; RelatedRowJson?: string | null }>;
+    const parse = (value: string | null | undefined): Record<string, EvidenceValue> | undefined => {
+      if (!value) return undefined;
+      const parsed = JSON.parse(value) as Record<string, unknown>;
+      return Object.fromEntries(Object.entries(parsed).map(([key, item]) => [key, evidenceValue(item)]));
+    };
+    const samples = details.map(row => {
+      const primary = parse(row.PrimaryRowJson), related = parse(row.RelatedRowJson);
+      return {
+        ...(primary ? { primary: { label: plan.check.from, values: primary } } : {}),
+        ...(related ? { related: [{ label: plan.check.to, values: related }] } : {})
+      };
+    });
+    return crossResult(plan.check, count, count ? { samples, aggregate: { failureCount: count }, totalSamples: count, limited: samples.length < count } : undefined);
   }
   private readonly pools = new Map<string, SqlPoolHandle>();
   private closed = false;
@@ -214,6 +234,25 @@ export class SqlServerValidationSession {
     bindScope(request, handle.api, target, scopeValue);
     const executed = await queryWithCancellation(request, generated.sql, options.signal);
     const summaries = (((executed.recordsets as sql.IRecordSet<unknown>[])[0]) ?? []) as unknown as SummaryRow[];
+    const evidenceByRule = new Map<string, Array<Record<string, EvidenceValue>>>();
+    const detailCapable = new Set(generated.rules.filter(rule => rule.detailAvailable).map(rule => rule.id));
+    const failedRuleIds = summaries.filter(summary => Number(summary.FailureCount) > 0 && detailCapable.has(summary.RuleId)).map(summary => summary.RuleId);
+    if (failedRuleIds.length) {
+      const details = generateSqlServerValidation(contract, { target, declareScopeParameter: false, includeSummaryQuery: false, includeDetailQueries: true, detailRuleIds: failedRuleIds });
+      const detailRequest = handle.pool.request();
+      bindScope(detailRequest, handle.api, target, scopeValue);
+      const detailResult = await queryWithCancellation<Record<string, unknown>>(detailRequest, details.sql, options.signal);
+      for (const recordset of detailResult.recordsets as sql.IRecordSet<Record<string, unknown>>[]) {
+      for (const row of recordset) {
+        const ruleId = String(row.RuleId ?? "");
+        if (!ruleId) continue;
+        const values = Object.fromEntries(Object.entries(row).filter(([key]) => key !== "RuleId").map(([key, value]) => [canonicalSqlServerColumn(target, key), evidenceValue(value)]));
+        const samples = evidenceByRule.get(ruleId) ?? [];
+        samples.push(values);
+        evidenceByRule.set(ruleId, samples);
+      }
+      }
+    }
     assertCompleteSqlSummaries(generated.rules.map((rule) => rule.id), summaries);
     const issues = [...metadataIssues];
     let errorCount = metadataIssues.filter((issue) => issue.severity !== "warning").length;
@@ -223,6 +262,8 @@ export class SqlServerValidationSession {
       if (!Number.isFinite(failures) || failures <= 0) continue;
       const diagnostic = `${summary.RuleName} failed for ${failures.toLocaleString()} ${failures === 1 ? "row or group" : "rows or groups"}.`;
       const customMessage = summary.FailureMessage?.trim();
+      const samples = evidenceByRule.get(summary.RuleId) ?? [];
+      const detailAvailable = detailCapable.has(summary.RuleId);
       const issue: ValidationIssue = {
         level: summary.ColumnName ? "cell" : "row",
         code: summary.Code,
@@ -233,7 +274,15 @@ export class SqlServerValidationSession {
         testId: summary.RuleId,
         actual: failures,
         expected: 0,
-        severity: summary.Severity
+        severity: summary.Severity,
+        evidence: {
+          samples: samples.map(values => ({ primary: { label: `${target.schema}.${target.table}`, values } })),
+          aggregate: {
+            failureCount: failures,
+            ...(summary.SelectedCount == null ? {} : { selectedCount: Number(summary.SelectedCount) })
+          },
+          ...(detailAvailable ? { totalSamples: failures, limited: samples.length < failures } : {})
+        }
       };
       if (issues.length < (options.maxIssues ?? 1000)) issues.push(issue);
       if (summary.Severity === "warning") warningCount += failures;

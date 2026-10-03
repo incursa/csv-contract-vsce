@@ -1,10 +1,18 @@
 # Changelog
 
+## 0.22.0
+
+- Attach bounded primary-row snapshots to retained CSV and SQL findings and show them in an expandable **Row evidence** section.
+- Include primary rows, related cross-source rows, aggregate context and evidence-limit markers in suite and test CSV/JSON exports.
+- Retain both sides of CSV and SQL relationship/reconciliation failures when a joined row is available.
+- Export a self-contained Excel validation package for a test or suite with a graded target overview, human-readable rule catalog, aggregate findings, and one consolidated bad-row matrix per target.
+- Merge matching source rows across test files and qualify every matrix check by test file so repeated rule IDs remain distinct.
+
 ## 0.21.0
 
 - Add generic suite-level `relationship` checks with deterministic ordered lookups and side-qualified predicates.
 - Use the same relationship YAML for two CSV files or two SQL Server tables, while rejecting mixed and ambiguous source combinations explicitly.
-- Keep cross-source results aggregate-only and support typed numeric and date comparisons without embedding client-specific SQL or schema assumptions.
+- Support typed numeric and date comparisons without embedding client-specific SQL or schema assumptions.
 
 ## 0.20.6
 

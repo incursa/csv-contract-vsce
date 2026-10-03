@@ -15,6 +15,7 @@ import { resolveSqlServerTargets } from "./core/sql-server-targets";
 import { parseCsv, validateCsv } from "./core/contract";
 import { renderSuiteWorkbench, type SuiteMemberProgress, type SuiteRunProgress, type SuiteTargetProgress } from "./suite-workbench";
 import { suiteErrorsCsv, updateSuiteConnection } from "./suite-actions";
+import { badRowsXlsx, contractCheckCatalog } from "./bad-rows-xlsx";
 import { filterResultRuns } from "./results-view";
 import { errorDetails } from "./core/error-details";
 import type { SuiteConnection } from "./core/suite";
@@ -374,12 +375,21 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
           const exportScope = { members: message.memberIds ?? "all", filter: message.resultFilter ?? "", selectedIssues: message.selectedIssues ?? [], stale, totals: "original scope; retained details may be filtered or selected" };
           const filtered = filterResultRuns(scoped, message.resultFilter ?? "", message.selectedIssues);
           const snapshot = { ...report, runs: filtered, members: report.members.map(member => ({ id: member.id, runs: filtered.filter(run => run.member === member.id) })).filter(member => member.runs.length), exportScope, stale };
-          const format = await vscode.window.showQuickPick(["CSV", "JSON"], { title: "Export suite errors and results" });
+          const format = await vscode.window.showQuickPick(["CSV", "JSON", "Excel validation package"], { title: "Export suite errors and results" });
           if (!format) return;
-          const destination = await vscode.window.showSaveDialog({ title: "Export suite results", defaultUri: vscode.Uri.joinPath(document.uri, "..", `${snapshot.suite}.results.${format.toLowerCase()}`), filters: { [format]: [format.toLowerCase()] } });
+          const extension = format === "CSV" ? "csv" : format === "JSON" ? "json" : "validation-package.xlsx";
+          const destination = await vscode.window.showSaveDialog({ title: "Export suite results", defaultUri: vscode.Uri.joinPath(document.uri, "..", `${snapshot.suite}.results.${extension}`), filters: format === "CSV" ? { CSV: ["csv"] } : format === "JSON" ? { JSON: ["json"] } : { "Excel workbooks": ["xlsx"] } });
           if (!destination) return;
-          const content = format === "CSV" ? suiteErrorsCsv(snapshot.runs, exportScope) : JSON.stringify({ schema: "incursa.csv-suite-results/v1", ...snapshot }, null, 2) + "\n";
-          await vscode.workspace.fs.writeFile(destination, new TextEncoder().encode(content));
+          const content = format === "CSV" ? suiteErrorsCsv(snapshot.runs, exportScope) : format === "JSON" ? JSON.stringify({ schema: "incursa.csv-suite-results/v1", ...snapshot }, null, 2) + "\n"
+            : badRowsXlsx(scoped, { title: `${snapshot.suite} validation results`, checkCatalog: run => {
+              if (run.member?.startsWith("cross:")) {
+                const id = run.member.slice("cross:".length);
+                return [{ id, category: "Cross-source check", description: `Validate the configured relationship or reconciliation between ${run.table ?? "suite sources"}.` }];
+              }
+              const member = currentSuite?.members.find(candidate => candidate.id === run.member);
+              return member?.contract ? contractCheckCatalog(member.contract) : [];
+            } });
+          await vscode.workspace.fs.writeFile(destination, typeof content === "string" ? new TextEncoder().encode(content) : content);
           notice = `Exported results to ${destination.fsPath}`;
           await render();
         }

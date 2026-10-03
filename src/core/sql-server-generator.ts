@@ -17,6 +17,7 @@ export interface SqlGeneratedRule {
   severity: RuleSeverity;
   code: string;
   column?: string;
+  detailAvailable?: boolean;
 }
 
 export interface SqlGenerationOptions {
@@ -28,6 +29,10 @@ export interface SqlGenerationOptions {
   declareScopeParameter?: boolean;
   /** Standalone scripts include diagnostic rows; direct report execution only needs aggregate results. */
   includeDetailQueries?: boolean;
+  /** Runtime detail collection can omit the aggregate summary already executed. */
+  includeSummaryQuery?: boolean;
+  /** Limit runtime detail queries to rules already known to have failed. */
+  detailRuleIds?: string[];
 }
 
 export interface SqlGenerationResult {
@@ -295,7 +300,7 @@ function generatePhysicalSqlServerValidation(contract: CsvContract, options: Sql
     "*/", "SET NOCOUNT ON;", ""
   ];
   if (scope && options.declareScopeParameter !== false) lines.push(`DECLARE ${parameter} ${safeSqlType(scope.sqlType)} = NULL; -- REQUIRED: set the load/batch value.`, `IF ${parameter} IS NULL THROW 50001, 'Set ${parameter} before running staging validation.', 1;`, "");
-  if (rules.length) {
+  if (rules.length && options.includeSummaryQuery !== false) {
     lines.push(
       "-- One row per validation rule. FailureCount = 0 means the rule passed.",
       ...rules.flatMap((rule, index) => [
@@ -305,12 +310,13 @@ function generatePhysicalSqlServerValidation(contract: CsvContract, options: Sql
       ]),
       "ORDER BY Severity, RuleId;"
     );
-    if (options.includeDetailQueries !== false) {
-      lines.push("", `-- Bounded failing-row samples. At most ${detailLimit} rows are returned per rule.`);
-      for (const rule of rules.filter((candidate) => candidate.violation)) {
-        const locator = config.rowLocator?.length ? `${config.rowLocator.map((column) => `t.${sqlIdentifier(column)}`).join(", ")}, ` : "";
-        lines.push("", `SELECT TOP (${detailLimit}) ${sqlString(rule.id)} AS RuleId, ${locator}t.*`, `FROM ${table} AS t`, `WHERE (${scopeSql}) AND (${rule.violation});`);
-      }
+  }
+  if (rules.length && options.includeDetailQueries !== false) {
+    const requested = options.detailRuleIds ? new Set(options.detailRuleIds) : undefined;
+    lines.push("", `-- Bounded failing-row samples. At most ${detailLimit} rows are returned per rule.`);
+    for (const rule of rules.filter((candidate) => candidate.violation && (!requested || requested.has(candidate.id)))) {
+      const locator = config.rowLocator?.length ? `${config.rowLocator.map((column) => `t.${sqlIdentifier(column)}`).join(", ")}, ` : "";
+      lines.push("", `SELECT TOP (${detailLimit}) ${sqlString(rule.id)} AS RuleId, ${locator}t.*`, `FROM ${table} AS t`, `WHERE (${scopeSql}) AND (${rule.violation});`);
     }
   }
   if (warnings.length) lines.push("", "-- Translation warnings:", ...warnings.map((warning) => `-- WARNING: ${warning}`));
@@ -318,6 +324,6 @@ function generatePhysicalSqlServerValidation(contract: CsvContract, options: Sql
     sql: `${lines.join("\n")}\n`,
     ruleCount: rules.length,
     warnings,
-    rules: rules.map((rule) => ({ id: rule.id, name: rule.name, ...(rule.message ? { message: rule.message } : {}), severity: rule.severity, code: rule.code, column: rule.column }))
+    rules: rules.map((rule) => ({ id: rule.id, name: rule.name, ...(rule.message ? { message: rule.message } : {}), severity: rule.severity, code: rule.code, column: rule.column, detailAvailable: Boolean(rule.violation) }))
   };
 }

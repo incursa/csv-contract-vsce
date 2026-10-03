@@ -84,6 +84,7 @@ const builds = [
       "test/targets.test.ts",
       "test/manifest.test.ts",
       "test/issue-export.test.ts",
+      "test/bad-rows-xlsx.test.ts",
       "test/workspace-report.test.ts",
       "test/semantic-comparison.test.ts",
       "test/comparison-definition.test.ts",
