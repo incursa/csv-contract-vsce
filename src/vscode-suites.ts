@@ -381,9 +381,13 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
           const extension = format === "CSV" ? "csv" : format === "JSON" ? "json" : "validation-package.xlsx";
           const destination = await vscode.window.showSaveDialog({ title: "Export suite results", defaultUri: vscode.Uri.joinPath(document.uri, "..", `${snapshot.suite}.results.${extension}`), filters: format === "CSV" ? { CSV: ["csv"] } : format === "JSON" ? { JSON: ["json"] } : { "Excel workbooks": ["xlsx"] } });
           if (!destination) return;
-          const manifest = manifestFromRuns(snapshot.suite, scoped, currentSuite, "suite");
+          // The manifest describes the package being written, so it must use the
+          // same filtered run set as the payload.  Using `scoped` here caused
+          // selected-member and issue-filtered exports to claim provenance for
+          // runs that were not present in the package.
+          const manifest = manifestFromRuns(snapshot.suite, filtered, currentSuite, "suite");
           const content = format === "CSV" ? suiteErrorsCsv(snapshot.runs, exportScope, currentSuite) : format === "JSON" ? JSON.stringify({ schema: "incursa.csv-suite-results/v1", manifest, ...snapshot }, null, 2) + "\n"
-            : badRowsXlsx(scoped, { title: `${snapshot.suite} validation results`, manifest, packageKind: "suite", checkCatalog: run => {
+            : badRowsXlsx(filtered, { title: `${snapshot.suite} validation results`, manifest, packageKind: "suite", checkCatalog: run => {
               if (run.member?.startsWith("cross:")) {
                 const id = run.member.slice("cross:".length);
                 return [{ id, category: "Cross-source check", description: `Validate the configured relationship or reconciliation between ${run.table ?? "suite sources"}.` }];
