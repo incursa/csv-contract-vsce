@@ -533,9 +533,14 @@ export function estimateBadRowsWorkbook(runs: BadRowsRun[], options: BadRowsWork
     const matrix = matrixRows(run);
     retainedRows += matrix.rows.length;
     aggregateFindings += matrix.aggregateIssues.length;
-    const configuredChecks = options.checkCatalog
-      ? options.checkCatalog(run, index).length
-      : options.checkIds ? options.checkIds(run, index).length : 0;
+    // Include discovered failure IDs as well as configured checks. Retained
+    // evidence can contain a check that was not present in a caller's catalog
+    // (for example an aggregate or a newer contract revision); omitting it
+    // here made the preflight underestimate wide sheets.
+    const configuredChecks = unique([
+      ...(options.checkCatalog?.(run, index).map(check => check.id) ?? options.checkIds?.(run, index) ?? []),
+      ...matrix.rows.flatMap(row => [...row.failed])
+    ]).length;
     const columns = 3 + new Set(matrix.rows.flatMap(row => Object.keys(row.values))).size
       + new Set(matrix.rows.flatMap(row => Object.keys(row.related))).size + configuredChecks;
     widestTarget = Math.max(widestTarget, columns);
@@ -613,9 +618,11 @@ function buildWorkbookSheets(runs: BadRowsRun[], options: BadRowsWorkbookOptions
     for (const issue of matrix.aggregateIssues) aggregates.push([run.member ?? "", runLabel(run, runIndex), issueCheckId(issue), issue.message, issue.actual, issue.expected]);
   });
   const sortedTargets = [...groupedTargets.values()].sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }));
-  for (const target of sortedTargets) {
+  for (const [targetIndex, target] of sortedTargets.entries()) {
     cancelled(options);
-    const targetNumber = sortedTargets.indexOf(target) + 1;
+    // Keep target progress linear for large suites. indexOf() made this
+    // otherwise quadratic in the number of distinct targets.
+    const targetNumber = targetIndex + 1;
     progress(options, { phase: "build", completed: targetNumber, total: sortedTargets.length,
       message: `Preparing target ${targetNumber.toLocaleString()} of ${sortedTargets.length.toLocaleString()}: ${target.label}` });
     const entries = [...target.entries].sort((left, right) => testLabel(left.run, left.index, options).localeCompare(testLabel(right.run, right.index, options), undefined, { sensitivity: "base" }) || left.index - right.index);

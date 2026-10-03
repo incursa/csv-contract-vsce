@@ -127,5 +127,7 @@ test("async validation package streams worksheet XML into a valid archive", asyn
   const bytes = await badRowsXlsxAsync([{ member: "streamed-test", target: "source.csv", status: "FAIL", result }], { title: "Streamed package" });
   assert.equal(String.fromCharCode(...bytes.slice(0, 2)), "PK");
   const files = unzipSync(bytes);
-  assert.match(strFromU8(files["xl/worksheets/sheet2.xml"]), /00123/);
+  // Rules is sheet 2 when configured checks are present; the target matrix is
+  // sheet 3, matching the deterministic workbook layout used by the sync path.
+  assert.match(strFromU8(files["xl/worksheets/sheet3.xml"]), /00123/);
 });
