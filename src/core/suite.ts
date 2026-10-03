@@ -275,7 +275,10 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
                 ? { ...completedIdentity, status: "CANCELED", error: "Canceled during execution; result discarded." }
                 : { ...completedIdentity, status: result.valid ? "PASS" : "FAIL", result, durationMs: Date.now() - started };
             } catch (error) {
-              outcomes[index] = { ...job.identity, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) };
+              const failedIdentity = job.sqlTarget
+                ? { ...job.identity, target: sqlServerTargetLabel(job.sqlTarget), displayTarget: sqlServerTargetLabel(job.sqlTarget) }
+                : job.identity;
+              outcomes[index] = { ...failedIdentity, status: controls.signal?.aborted ? "CANCELED" : "ERROR", error: errorDetails(error) };
             }
             controls.onProgress?.(outcomes[index], index);
           }

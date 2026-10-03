@@ -138,6 +138,18 @@ test("independent targets run concurrently with a limit and keep report order", 
   false, undefined, { parallelTargets: 1, onTargetStart: (_run, index) => singleStarts.push(index) });
   assert.deepEqual(singleStarts, [0]);
 });
+test("parallel SQL errors use the resolved execution target label", async () => {
+  const definition: CsvContract = { version: 1, schema: { columns: { Id: { presence: "required" } } },
+    sqlServer: { connection: "profile", schema: "dbo", table: "Orders" } };
+  const report = await runSuite({ id: "parallel-error", source: "parallel-error", isSuite: false,
+    members: [{ id: "orders", source: "orders", contract: definition }] }, async (_contract, target) => {
+    target.resolvedConnection = { server: "sql01", database: "Sales" };
+    throw new Error("metadata failed");
+  }, false, undefined, { parallelTargets: 1 });
+  assert.equal(report.runs[0].status, "ERROR");
+  assert.equal(report.runs[0].target, "sql01.Sales.dbo.Orders");
+  assert.equal(report.runs[0].displayTarget, "sql01.Sales.dbo.Orders");
+});
 test("suite member files run concurrently by default and keep declaration order", async () => {
   const makeContract = (table: string): CsvContract => ({ version: 1,
     schema: { columns: { Id: { presence: "required" } } },
