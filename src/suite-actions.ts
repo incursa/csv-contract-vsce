@@ -1,5 +1,6 @@
 import { yamlDocument, type SuiteConnection, type SuiteRun } from "./core/suite";
 import { rowsToCsv } from "./comparison/evidence";
+import { manifestFromRuns } from "./core/package-manifest";
 
 /** Edit only the selected connection mapping; retain YAML nodes and comments elsewhere. */
 export function updateSuiteConnection(text: string, path: (string | number)[], settings: SuiteConnection): string {
@@ -10,8 +11,9 @@ export function updateSuiteConnection(text: string, path: (string | number)[], s
   return doc.toString();
 }
 
-export function suiteErrorsCsv(runs: SuiteRun[], context?: unknown): string {
+export function suiteErrorsCsv(runs: SuiteRun[], context?: unknown, definition?: unknown): string {
   const rows: string[][] = [];
+  const manifest = manifestFromRuns(runs[0]?.suite ?? "validation-suite", runs, definition, "suite");
   const extended = context !== undefined || runs.some(run => run.runId);
   for (const run of runs) {
     const start = rows.length;
@@ -27,5 +29,7 @@ export function suiteErrorsCsv(runs: SuiteRun[], context?: unknown): string {
       for (let i = start; i < rows.length; i++) rows[i].push(run.runId ?? "", run.workId ?? "", run.evaluatedAt ?? "", run.scope ?? "", JSON.stringify(context ?? {}), String(run.result?.issueCount ?? 0), String(run.result?.issues.length ?? 0));
     }
   }
-  return rowsToCsv(["Suite", "Member", "Table/Target", "Status", "Severity", "Rule/Code", "Column", "Row", "Message", "Actual", "Expected", "PrimaryRows", "RelatedRows", "AggregateContext", "EvidenceLimited", ...(extended ? ["RunId", "WorkId", "EvaluatedAt", "EvaluationScope", "ExportScope", "TotalIssues", "RetainedIssues"] : [])], rows);
+  const manifestValues = [manifest.packageSchemaVersion, manifest.identity.definitionFingerprint, manifest.run.id, JSON.stringify(manifest.selectedScope), String(manifest.evidence.complete), JSON.stringify(manifest.completenessNotices)];
+  rows.forEach(row => row.push(...manifestValues));
+  return rowsToCsv(["Suite", "Member", "Table/Target", "Status", "Severity", "Rule/Code", "Column", "Row", "Message", "Actual", "Expected", "PrimaryRows", "RelatedRows", "AggregateContext", "EvidenceLimited", ...(extended ? ["RunId", "WorkId", "EvaluatedAt", "EvaluationScope", "ExportScope", "TotalIssues", "RetainedIssues"] : []), "PackageSchemaVersion", "DefinitionFingerprint", "PackageRunId", "SelectedScope", "EvidenceComplete", "CompletenessNotices"], rows);
 }

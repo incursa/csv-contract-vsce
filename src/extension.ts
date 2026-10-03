@@ -741,9 +741,9 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         const exportRuns = format.label === "Excel validation package" ? latestRuns : filterResultRuns(latestRuns, String(message.filter ?? ""), message.selectedIssues);
         const exportContext = { filter: message.filter ?? "", selectedIssues: message.selectedIssues ?? [], stale, runNotice, totals: "original target scope; exported details may be selected or filtered" };
         const content = format.label === "JSON"
-          ? JSON.stringify({ ...JSON.parse(validationRunExportJson(vscode.workspace.asRelativePath(document.uri, false), exportRuns)), exportScope: exportContext }, null, 2)
-          : format.label === "CSV" ? issueRunsToCsv(exportRuns, exportContext)
-          : badRowsXlsx(exportRuns, { title: `${contractFilename} validation results`, testLabel: contractFilename, checkCatalog: () => contractCheckCatalog(read()) });
+          ? JSON.stringify({ ...JSON.parse(validationRunExportJson(vscode.workspace.asRelativePath(document.uri, false), exportRuns, { definition: read() })), exportScope: exportContext }, null, 2)
+          : format.label === "CSV" ? issueRunsToCsv(exportRuns, exportContext, { identity: vscode.workspace.asRelativePath(document.uri, false), definition: read() })
+          : badRowsXlsx(exportRuns, { title: `${contractFilename} validation results`, definition: read(), testLabel: contractFilename, checkCatalog: () => contractCheckCatalog(read()) });
         await vscode.workspace.fs.writeFile(outputUri, typeof content === "string" ? new TextEncoder().encode(content) : content);
         const totalIssueCount = latestRuns.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
         if (totalIssueCount > retainedIssueCount) {

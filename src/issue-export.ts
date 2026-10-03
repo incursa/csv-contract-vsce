@@ -1,5 +1,6 @@
 import type { ValidationResult } from "./core/model";
 import { rowsToCsv } from "./comparison/evidence";
+import { manifestFromRuns, type PackageManifest } from "./core/package-manifest";
 
 export interface IssueExportRun {
   runId?: string;
@@ -14,6 +15,7 @@ export interface IssueExportRun {
 
 export interface ValidationRunExport {
   schema: "incursa.csv-contract-results/v1";
+  manifest: PackageManifest;
   contract: string;
   exportedAt?: string;
   totals: {
@@ -29,11 +31,12 @@ export interface ValidationRunExport {
   runs: IssueExportRun[];
 }
 
-export function createValidationRunExport(contract: string, runs: IssueExportRun[]): ValidationRunExport {
+export function createValidationRunExport(contract: string, runs: IssueExportRun[], options: { definition?: unknown; kind?: "contract" | "suite"; identity?: string } = {}): ValidationRunExport {
   const issues = runs.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
   const retainedIssueDetails = runs.reduce((total, run) => total + (run.result?.issues.length ?? 0), 0);
   return {
     schema: "incursa.csv-contract-results/v1",
+    manifest: manifestFromRuns(options.identity ?? contract, runs, options.definition, options.kind),
     contract,
     exportedAt: new Date().toISOString(),
     totals: {
@@ -131,14 +134,15 @@ export function parseValidationRunExport(text: string): ValidationRunExport {
   });
   if (!runs.length) throw new Error("Results JSON contains no target runs to review.");
   const parsed = createValidationRunExport(exportValue.contract, runs);
-  return { ...parsed, exportedAt: typeof exportValue.exportedAt === "string" ? exportValue.exportedAt : undefined };
+  return { ...parsed, manifest: exportValue.manifest && typeof exportValue.manifest === "object" ? exportValue.manifest as PackageManifest : parsed.manifest,
+    exportedAt: typeof exportValue.exportedAt === "string" ? exportValue.exportedAt : undefined };
 }
 
 export function validationRunExportJson(contract: string, runs: IssueExportRun[]): string {
   return `${JSON.stringify(createValidationRunExport(contract, runs), null, 2)}\n`;
 }
 
-export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown): string {
+export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown, options: { identity?: string; definition?: unknown; kind?: "contract" | "suite" } = {}): string {
   const columns = [
     "Target",
     "Severity",
@@ -155,6 +159,7 @@ export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown): strin
     "AggregateContext",
     "EvidenceLimited"
   ];
+  const manifest = manifestFromRuns(options.identity ?? (typeof context === "string" ? context : "validation-package"), runs, options.definition, options.kind);
   const extended = context !== undefined || runs.some(run => run.runId);
   const metadata = (run: IssueExportRun) => extended ? [run.runId ?? "", run.workId ?? "", run.evaluatedAt ?? "", run.scope ?? "", run.status ?? (run.result?.valid ? "PASS" : "FAIL"), JSON.stringify(context ?? {}), String(run.result?.issueCount ?? 0), String(run.result?.issues.length ?? 0), String(run.result?.truncated ?? false)] : [];
   const rows = runs.flatMap((run) => (run.result?.issues ?? []).map((issue) => [
@@ -177,6 +182,8 @@ export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown): strin
     if (run.error) rows.push([run.target, run.status ?? "ERROR", "execution", "", "", "", "", run.error, "", "", "[]", "[]", "{}", "false", ...metadata(run)]);
     else if (extended && !run.result?.issues.length) rows.push([run.target, "", "summary", "", "", "", "", "No retained issue details in this scope.", "", "", "[]", "[]", "{}", "false", ...metadata(run)]);
   }
-  if (extended) columns.push("RunId", "WorkId", "EvaluatedAt", "EvaluationScope", "Status", "ExportScope", "TotalIssues", "RetainedIssues", "DetailsLimited");
+  columns.push("PackageSchemaVersion", "DefinitionFingerprint", "PackageRunId", "SelectedScope", "EvidenceComplete", "CompletenessNotices");
+  const manifestValues = [manifest.packageSchemaVersion, manifest.identity.definitionFingerprint, manifest.run.id, JSON.stringify(manifest.selectedScope), String(manifest.evidence.complete), JSON.stringify(manifest.completenessNotices)];
+  rows.forEach(row => row.push(...manifestValues));
   return rowsToCsv(columns, rows);
 }

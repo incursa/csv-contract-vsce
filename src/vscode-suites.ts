@@ -20,6 +20,7 @@ import { filterResultRuns } from "./results-view";
 import { errorDetails } from "./core/error-details";
 import type { SuiteConnection } from "./core/suite";
 import type { ResultColorMode } from "./core/result-health";
+import { manifestFromRuns } from "./core/package-manifest";
 
 export async function editSuiteConnection(document: vscode.TextDocument, index?: number, standalone = false, memberId?: string, targetIndex?: number): Promise<void> {
   const suite = standalone ? { members: [] } : parseSuite(document.getText());
@@ -380,8 +381,9 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
           const extension = format === "CSV" ? "csv" : format === "JSON" ? "json" : "validation-package.xlsx";
           const destination = await vscode.window.showSaveDialog({ title: "Export suite results", defaultUri: vscode.Uri.joinPath(document.uri, "..", `${snapshot.suite}.results.${extension}`), filters: format === "CSV" ? { CSV: ["csv"] } : format === "JSON" ? { JSON: ["json"] } : { "Excel workbooks": ["xlsx"] } });
           if (!destination) return;
-          const content = format === "CSV" ? suiteErrorsCsv(snapshot.runs, exportScope) : format === "JSON" ? JSON.stringify({ schema: "incursa.csv-suite-results/v1", ...snapshot }, null, 2) + "\n"
-            : badRowsXlsx(scoped, { title: `${snapshot.suite} validation results`, checkCatalog: run => {
+          const manifest = manifestFromRuns(snapshot.suite, scoped, currentSuite, "suite");
+          const content = format === "CSV" ? suiteErrorsCsv(snapshot.runs, exportScope, currentSuite) : format === "JSON" ? JSON.stringify({ schema: "incursa.csv-suite-results/v1", manifest, ...snapshot }, null, 2) + "\n"
+            : badRowsXlsx(scoped, { title: `${snapshot.suite} validation results`, manifest, packageKind: "suite", checkCatalog: run => {
               if (run.member?.startsWith("cross:")) {
                 const id = run.member.slice("cross:".length);
                 return [{ id, category: "Cross-source check", description: `Validate the configured relationship or reconciliation between ${run.table ?? "suite sources"}.` }];

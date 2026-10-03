@@ -2,6 +2,7 @@ import { strToU8, zipSync } from "fflate";
 import { orderedChecks } from "./core/ordered-rule";
 import { aggregateResultHealth, resultHealth, resultHealthCategory, type ResultHealthBand } from "./core/result-health";
 import type { CsvContract, EvidenceValue, Predicate, SqlPredicate, ValidationIssue, ValidationResult } from "./core/model";
+import { manifestFromRuns, type PackageManifest } from "./core/package-manifest";
 
 export interface BadRowsRun {
   suite?: string;
@@ -26,6 +27,9 @@ export interface BadRowsWorkbookOptions {
   testLabel?: string;
   checkIds?: (run: BadRowsRun, index: number) => string[];
   checkCatalog?: (run: BadRowsRun, index: number) => WorkbookCheck[];
+  manifest?: PackageManifest;
+  definition?: unknown;
+  packageKind?: "contract" | "suite";
 }
 
 interface MatrixRow {
@@ -341,6 +345,7 @@ function workbookPackage(sheets: SheetDefinition[], title: string): Uint8Array {
 
 /** Build a workbook from retained evidence without querying the source again. */
 export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions): Uint8Array {
+  const manifest = options.manifest ?? manifestFromRuns(options.title, runs, options.definition, options.packageKind);
   const used = new Set<string>();
   const readmeName = safeSheetName("Read Me", used);
   const sheets: SheetDefinition[] = [overviewSheet(runs, options, used)];
@@ -400,6 +405,10 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
   }
   const readmeRows: Array<Array<EvidenceValue | undefined>> = [
     ["Workbook", options.title], ["Exported UTC", new Date().toISOString()], ["Target results", runs.length], ["Targets with bad rows", targetSheets.length], ["Retained bad rows", badRowCount],
+    ["Package schema version", manifest.packageSchemaVersion], ["Tool version", manifest.toolVersion], ["Identity", `${manifest.identity.kind}: ${manifest.identity.id}`], ["Definition fingerprint", manifest.identity.definitionFingerprint],
+    ["Run identity", manifest.run.id], ["Evaluation time", manifest.run.evaluatedAt ?? "not supplied"], ["Selected scope", JSON.stringify(manifest.selectedScope)],
+    ["Targets", JSON.stringify(manifest.targets)], ["Evidence retention", JSON.stringify(manifest.evidence.retention)], ["Sampled", manifest.evidence.sampled], ["Truncated", manifest.evidence.truncated],
+    ["Evidence complete", manifest.evidence.complete], ["Completeness notices", manifest.completenessNotices.join(" ") || "None"],
     ["Package layout", "Overview summarizes every test and target. Rules explains configured checks. Each Bad sheet consolidates retained failing rows for one target across all test files. Aggregate Findings contains findings without a primary row."],
     ["Aggregate-only findings", aggregateCount], ["Matrix meaning", "FALSE (red) means this check failed the retained row. Blank means not failed in retained evidence, not applicable, or not provably evaluated for that row."],
     ["Merged rows", "A source row is merged across test files only when its source label, row number, and source values match. Check columns include the test file name so repeated rule IDs remain separate."],
