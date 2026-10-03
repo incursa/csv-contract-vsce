@@ -86,6 +86,17 @@ function notice(options: PackageManifestOptions, sampled: boolean, truncated: bo
   ])];
 }
 
+function runIsSampled(run: { scope?: string; result?: ValidationResult }): boolean {
+  if (run.result?.preview?.scope === "sample" || run.scope === "sample") return true;
+  if (!run.scope) return false;
+  try {
+    const scope = JSON.parse(run.scope) as { preview?: { scope?: string } };
+    return scope.preview?.scope === "sample";
+  } catch {
+    return false;
+  }
+}
+
 export function createPackageManifest(options: PackageManifestOptions = {}): PackageManifest {
   const sampled = options.sampled ?? false;
   const truncated = options.truncated ?? false;
@@ -121,7 +132,7 @@ export function manifestFromRuns(identity: string, runs: Array<{ target?: string
   return createPackageManifest({ kind, identity, definition: definition ?? identity, runId: runs.find(run => run.runId)?.runId,
     evaluatedAt: runs.find(run => run.evaluatedAt)?.evaluatedAt ?? runs.find(run => run.result?.evaluatedAt)?.result?.evaluatedAt, scope: runs.find(run => run.scope)?.scope ?? "all",
     targetIdentities: targetSources.map(target => target.id), targetSources, sourceLabels: runs.map(run => run.spec ?? ""),
-    sampled: results.some(result => result.preview?.scope === "sample"), truncated: results.some(result => result.truncated) || retained < reported,
+    sampled: runs.some(runIsSampled), truncated: results.some(result => result.truncated) || retained < reported,
     retainedIssueDetails: retained, reportedIssues: reported,
     evidenceSettings: { runCount: runs.length, statuses: [...new Set(runs.map(run => run.status).filter(Boolean))].sort() } });
 }

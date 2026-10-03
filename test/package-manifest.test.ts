@@ -18,6 +18,16 @@ test("sampled and truncated evidence is explicit in the shared manifest", () => 
   assert.equal(manifest.completenessNotices.length, 2);
 });
 
+test("manifest detects sampling recorded on the exported run scope", () => {
+  const result: ValidationResult = { valid: true, rowCount: 1, columnCount: 1, testCount: 1, issueCount: 0, errorCount: 0, warningCount: 0, truncated: false, issues: [] };
+  const direct = manifestFromRuns("contract-a", [{ scope: "sample", result }]);
+  const serialized = manifestFromRuns("suite-a", [{ scope: JSON.stringify({ preview: { scope: "sample", rowLimit: 10 } }), result }], undefined, "suite");
+  assert.equal(direct.evidence.sampled, true);
+  assert.equal(serialized.evidence.sampled, true);
+  assert.match(direct.completenessNotices[0], /sampled evidence/);
+  assert.match(serialized.completenessNotices[0], /sampled evidence/);
+});
+
 test("manifest targets and source labels are stable across suite execution order", () => {
   const result: ValidationResult = { valid: true, rowCount: 0, columnCount: 0, testCount: 0, issueCount: 0, errorCount: 0, warningCount: 0, truncated: false, issues: [] };
   const first = manifestFromRuns("suite-a", [
