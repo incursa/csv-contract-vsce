@@ -15,6 +15,7 @@ import type {
   ValidationResult
 } from "./model";
 import { rulePresentation } from "./rule-presentation";
+import { RowOutcomeCollector } from "./row-outcomes";
 import { createPredicateRuntime, evaluatePredicate, predicateColumns, predicateDescription } from "./predicate";
 import { OrderedRuleEvaluator, orderedChecks, orderedColumns, validateOrderedDefinition, compareOrderedRows } from "./ordered-rule";
 
@@ -472,11 +473,47 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
   const errorCount = issues.filter((issue) => issue.severity !== "warning").length;
   const warningCount = issues.length - errorCount;
 
+  // Row outcomes are deliberately a separate bounded projection. This keeps
+  // the legacy issue list and aggregate pass/fail semantics unchanged.
+  const rowCollector = new RowOutcomeCollector({ maxRows: preview?.rowLimit ?? 10000, sampled: preview?.rowLimit !== undefined });
+  parsed.rows.forEach((row, rowIndex) => {
+    rowCollector.beginRow(parsed.sourceRowNumbers[rowIndex]);
+    for (const [column, definition] of Object.entries(contract.schema.columns)) {
+      const index = headerIndex.get(column);
+      if (index === undefined) { rowCollector.set(`schema.${column}`, "not-evaluated", "unsupported"); continue; }
+      const value = row[index] ?? "";
+      const constraints = definition.constraints ?? {};
+      const passed = (!constraints.notNull || !isNull(value, options)) &&
+        (isNull(value, options) || constraints.minLength === undefined || value.length >= constraints.minLength) &&
+        (isNull(value, options) || constraints.maxLength === undefined || value.length <= constraints.maxLength) &&
+        (isNull(value, options) || !constraints.allowedValues || constraints.allowedValues.some(item => normalized(item, options) === normalized(value, options))) &&
+        (isNull(value, options) || !constraints.matches || (() => { try { return new RegExp(constraints.matches!, options.caseSensitive ? "" : "i").test(value); } catch { return false; } })());
+      rowCollector.set(`schema.${column}`, passed ? "pass" : "fail");
+    }
+    for (const test of contract.rowTests ?? []) {
+      const matches = Object.entries(test.select).every(([column, expected]) => headerIndex.has(column) && normalized(row[headerIndex.get(column)!] ?? "", options) === normalized(expected, options));
+      if (!matches) { rowCollector.set(`row.${test.id}`, "not-applicable", "condition-false"); continue; }
+      const passed = Object.entries(test.expect.cells ?? {}).every(([column, expected]) => normalized(row[headerIndex.get(column)!] ?? "", options) === normalized(expected.equals, options));
+      rowCollector.set(`row.${test.id}`, passed ? "pass" : "fail");
+    }
+    for (const rule of contract.rules ?? []) {
+      const runtime = createPredicateRuntime((column) => row[headerIndex.get(column)!] ?? "", options, nullValues);
+      if (nativeDates) runtime.dateValue = column => nativeDates[column]?.[rowIndex];
+      if (rule.when && !evaluatePredicate(rule.when, runtime)) { rowCollector.set(`rule.${rule.id}`, "not-applicable", "condition-false"); continue; }
+      rowCollector.set(`rule.${rule.id}`, evaluatePredicate(rule.expect, runtime) ? "pass" : "fail");
+    }
+    for (const rule of contract.groupRules ?? []) rowCollector.set(`group.${rule.id}`, "not-evaluated", "not-retained");
+    for (const rule of contract.orderedRules ?? []) for (const check of orderedChecks(rule)) rowCollector.set(`ordered.${check.id}`, "not-evaluated", "not-retained");
+    rowCollector.endRow();
+  });
+  const rowEvidence = rowCollector.result();
+
   return {
     valid: errorCount === 0,
     ruleOutcomes,
     ...(groupOutcomes.length ? { groupOutcomes } : {}),
     ...(preview ? { examples } : {}),
+    ...rowEvidence,
     rowCount: parsed.rows.length,
     columnCount: parsed.headers.length,
     testCount: Object.keys(contract.schema.columns).length + (contract.rowTests?.length ?? 0) +

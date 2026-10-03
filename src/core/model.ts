@@ -364,12 +364,43 @@ export interface ValidationIssue {
   evidence?: FailureEvidence;
 }
 
+/** Stable per-row state. An empty/missing cell is never interpreted as pass. */
+export type RowCheckOutcomeState = "pass" | "fail" | "not-applicable" | "not-evaluated" | "unknown";
+
+export interface RowCheckOutcome {
+  state: RowCheckOutcomeState;
+  /** Present for not-applicable, not-evaluated, and unknown outcomes. */
+  reason?: "condition-false" | "unsupported" | "not-retained" | "truncated" | "sampled";
+}
+
+export interface RowOutcomeEvidence {
+  /** Source row number, when the source exposes one. */
+  row: number;
+  /** Check id to outcome. Only retained rows are included here. */
+  checks: Record<string, RowCheckOutcome>;
+}
+
+export interface RowOutcomeSummary {
+  /** Maximum number of row records retained for this result. */
+  retentionLimit: number;
+  retainedRows: number;
+  /** Exact number of source rows for which a row record was not retained. */
+  omittedRows: number;
+  /** True when every configured row outcome could be represented. */
+  complete: boolean;
+  /** Why complete is false. */
+  incompleteBecause?: "truncated" | "sampled" | "not-evaluated";
+}
+
 export interface ValidationResult {
   preview?: { scope: "sample" | "complete"; rowLimit?: number; exampleLimit: number };
   examples?: { id: string; outcome: "passed" | "failed"; row: number; values: Record<string, string> }[];
   evaluatedAt?: string;
   ruleOutcomes?: { id: string; name?: string; selected: number; passed: number; failed: number }[];
   groupOutcomes?: { id: string; name?: string; groups: number; passed: number; failed: number }[];
+  /** Bounded, explicit row/check evidence for exporters and UI consumers. */
+  rowOutcomes?: RowOutcomeEvidence[];
+  rowOutcomeSummary?: RowOutcomeSummary;
   valid: boolean;
   rowCount: number;
   columnCount: number;

@@ -24,6 +24,7 @@ import { RowSortStore } from "./row-sort-store";
 import { GroupTestRunner } from "./group-runner";
 import { resolveGroupContracts } from "../core/group-contracts";
 import { rulePresentation } from "../core/rule-presentation";
+import { RowOutcomeCollector } from "../core/row-outcomes";
 
 const csvDefaults: Required<CsvOptions> = {
   delimiter: ",",
@@ -63,6 +64,10 @@ export interface StreamingValidationOptions {
   onRunProgress?: (progress: import("../core/run-progress").ValidationProgress) => void;
   signal?: AbortSignal;
   totalBytes?: number;
+  /** Maximum source rows retained in rowOutcomes (independent of issue retention). */
+  maxRowOutcomes?: number;
+  /** Marks row evidence incomplete when the caller intentionally samples input. */
+  rowOutcomesSampled?: boolean;
 }
 
 class IssueCollector {
@@ -153,6 +158,7 @@ interface ContractState {
   rowCount: number;
   initialized: boolean;
   nullValues: Set<string>;
+  rowOutcomes: RowOutcomeCollector;
 }
 
 function resolveOptions(contract: CsvContract): Required<CsvOptions> {
@@ -205,11 +211,11 @@ function countIssues(
   return issues;
 }
 
-function createState(input: ContractRunInput, maxIssues: number): ContractState {
-  const options = resolveOptions(input.contract);
+function createState(input: ContractRunInput, maxIssues: number, options: StreamingValidationOptions = {}): ContractState {
+  const csvOptions = resolveOptions(input.contract);
   return {
     input,
-    options,
+    options: csvOptions,
     collector: new IssueCollector(maxIssues),
     headers: [],
     headerIndex: new Map(),
@@ -222,7 +228,8 @@ function createState(input: ContractRunInput, maxIssues: number): ContractState 
     groupRunners: [],
     rowCount: 0,
     initialized: false,
-    nullValues: new Set(options.nullValues.map((value) => normalize(value, options)))
+    nullValues: new Set(csvOptions.nullValues.map((value) => normalize(value, csvOptions))),
+    rowOutcomes: new RowOutcomeCollector({ maxRows: options.maxRowOutcomes ?? 1000, sampled: options.rowOutcomesSampled })
   };
 }
 
@@ -403,6 +410,7 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
   uniqueness?: PartitionedUniquenessStore, groups?: PartitionedGroupStore): void {
   state.collector.atRow(recordNumber, Object.fromEntries(state.headers.map((header, index) => [header, fields[index] ?? ""])));
   state.rowCount += 1;
+  state.rowOutcomes.beginRow(recordNumber);
   state.groupRunners.forEach(runner => runner.add(recordNumber, fields));
   for (const sequence of state.sequenceStores) sequence.store.add({ row: recordNumber,
     values: Object.fromEntries(sequence.columns.map(column => [column, fields[state.headerIndex.get(column)!] ?? ""])) });
@@ -419,27 +427,34 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
   }
 
   for (const column of state.columns) {
+    let columnPassed = true;
     const raw = fields[column.index] ?? "";
     const value = state.options.trimValues ? raw.trim() : raw;
     const nullValue = isNull(state, value);
     if (column.constraints.notNull && nullValue) {
+      columnPassed = false;
       state.collector.add({ level: "cell", code: "NULL_VALUE", message: `"${column.name}" contains a configured null value.`, column: column.name, row: recordNumber });
     }
-    if (nullValue) continue;
+    if (nullValue) { state.rowOutcomes.set(`schema.${column.name}`, columnPassed ? "pass" : "fail"); continue; }
     if (column.constraints.minLength !== undefined && value.length < column.constraints.minLength) {
+      columnPassed = false;
       state.collector.add({ level: "cell", code: "MIN_LENGTH", message: `"${column.name}" is shorter than ${column.constraints.minLength} characters.`, column: column.name, row: recordNumber, actual: value.length, expected: column.constraints.minLength });
     }
     if (column.constraints.maxLength !== undefined && value.length > column.constraints.maxLength) {
+      columnPassed = false;
       state.collector.add({ level: "cell", code: "MAX_LENGTH", message: `"${column.name}" exceeds ${column.constraints.maxLength} characters.`, column: column.name, row: recordNumber, actual: value.length, expected: column.constraints.maxLength });
     }
     const normalized = normalize(value, state.options);
     if (column.allowedValues && !column.allowedValues.has(normalized)) {
+      columnPassed = false;
       state.collector.add({ level: "cell", code: "NOT_ALLOWED", message: `"${column.name}" value "${displayValue(value)}" is not allowed.`, column: column.name, row: recordNumber, actual: displayValue(value) });
     }
     if (column.expression && !column.expression.test(value)) {
+      columnPassed = false;
       state.collector.add({ level: "cell", code: "REGEX_MISMATCH", message: `"${column.name}" value "${displayValue(value)}" does not match ${column.constraints.matches}.`, column: column.name, row: recordNumber, actual: displayValue(value) });
     }
     if (column.uniqueTargetId !== undefined) uniqueness?.add(column.uniqueTargetId, normalized, recordNumber);
+    state.rowOutcomes.set(`schema.${column.name}`, columnPassed ? "pass" : "fail");
   }
 
   const identity = state.input.contract.identity;
@@ -451,13 +466,15 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
   }
 
   for (const prepared of state.rowTests) {
-    if (!prepared.valid) continue;
+    if (!prepared.valid) { state.rowOutcomes.set(`row.${prepared.test.id}`, "not-evaluated", "unsupported"); continue; }
     const matches = prepared.selectors.every(({ index, expected }) => normalize(fields[index] ?? "", state.options) === expected);
-    if (!matches) continue;
+    if (!matches) { state.rowOutcomes.set(`row.${prepared.test.id}`, "not-applicable", "condition-false"); continue; }
     prepared.matchCount += 1;
+    let rowTestPassed = true;
     for (const cell of prepared.cells) {
       const actual = state.options.trimValues ? (fields[cell.index] ?? "").trim() : (fields[cell.index] ?? "");
       if (normalize(actual, state.options) !== cell.expected) {
+        rowTestPassed = false;
         const expected = prepared.test.expect.cells![cell.column].equals;
         const diagnostic = `Test "${prepared.test.name ?? prepared.test.id}" expected "${cell.column}" to equal "${displayValue(expected)}", found "${displayValue(actual)}".`;
         state.collector.add({
@@ -472,6 +489,7 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
         });
       }
     }
+    state.rowOutcomes.set(`row.${prepared.test.id}`, rowTestPassed ? "pass" : "fail");
   }
 
   const runtime = createPredicateRuntime(
@@ -480,12 +498,16 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
     state.nullValues
   );
   for (const prepared of state.rules) {
-    if (!prepared.valid) continue;
-    if (prepared.rule.when && !evaluatePredicate(prepared.rule.when, runtime)) continue;
+    if (!prepared.valid) { state.rowOutcomes.set(`rule.${prepared.rule.id}`, "not-evaluated", "unsupported"); continue; }
+    if (prepared.rule.when && !evaluatePredicate(prepared.rule.when, runtime)) {
+      state.rowOutcomes.set(`rule.${prepared.rule.id}`, "not-applicable", "condition-false");
+      continue;
+    }
     const outcome = prepared.outcome ??= { id: prepared.rule.id, ...(prepared.rule.name ? { name: prepared.rule.name } : {}), selected: 0, passed: 0, failed: 0 };
     outcome.selected++;
-    if (evaluatePredicate(prepared.rule.expect, runtime)) { outcome.passed++; continue; }
+    if (evaluatePredicate(prepared.rule.expect, runtime)) { outcome.passed++; state.rowOutcomes.set(`rule.${prepared.rule.id}`, "pass"); continue; }
     outcome.failed++;
+    state.rowOutcomes.set(`rule.${prepared.rule.id}`, "fail");
     const diagnostic = `Rule "${prepared.rule.name ?? prepared.rule.id}" expected ${predicateDescription(prepared.rule.expect)}.`;
     state.collector.add({
       level: "row",
@@ -498,8 +520,13 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
   }
 
   for (const prepared of state.groupRules) {
-    if (!prepared.valid || prepared.targetId === undefined) continue;
-    if (prepared.rule.when && !evaluatePredicate(prepared.rule.when, runtime)) continue;
+    if (!prepared.valid || prepared.targetId === undefined) { state.rowOutcomes.set(`group.${prepared.rule.id}`, "not-evaluated", "unsupported"); continue; }
+    if (prepared.rule.when && !evaluatePredicate(prepared.rule.when, runtime)) {
+      state.rowOutcomes.set(`group.${prepared.rule.id}`, "not-applicable", "condition-false");
+      continue;
+    }
+    // Group requirements are finalized after streaming; this row participated in evaluation.
+    state.rowOutcomes.set(`group.${prepared.rule.id}`, "not-evaluated", "not-retained");
     const labels = prepared.rule.groupBy.map((column) => fields[state.headerIndex.get(column)!] ?? "");
     const normalizedLabels = labels.map((value) => normalize(value, state.options));
     const key = normalizedLabels.map((value) => `${value.length}:${value}`).join("");
@@ -508,6 +535,7 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
     groups?.add(prepared.targetId, key, display, observed, recordNumber);
   }
   state.collector.leaveRow();
+  state.rowOutcomes.endRow();
 }
 
 function addDuplicateIssue(duplicate: DuplicateValue, checks: Map<number, UniqueCheck>): void {
@@ -589,6 +617,7 @@ function finalizeState(state: ContractState): ContractRunOutput {
       warningCount: state.collector.warnings,
       truncated: state.collector.total > state.collector.issues.length,
       issues: state.collector.issues
+      ,...state.rowOutcomes.result()
     }
   };
 }
@@ -600,7 +629,7 @@ async function validateGroup(
   totalPasses: number,
   options: Required<Pick<StreamingValidationOptions, "maxIssues" | "progressInterval" | "uniquePartitions">> & StreamingValidationOptions
 ): Promise<ContractRunOutput[]> {
-  const states = inputs.map((input) => createState(input, options.maxIssues));
+  const states = inputs.map((input) => createState(input, options.maxIssues, options));
   const uniqueChecks = new Map<number, UniqueCheck>();
   const groupChecks = new Map<number, GroupCheck>();
   let nextTarget = 0;

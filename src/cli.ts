@@ -21,6 +21,7 @@ interface ParsedArgs {
   out?: string;
   format: "text" | "json";
   maxIssues: number;
+  maxRowOutcomes: number;
   progressInterval: number;
   uniquePartitions: number;
   tempDirectory?: string;
@@ -43,7 +44,7 @@ Usage:
   csv-contract split --spec <portable.csvsuite.yaml> --out <directory> [--force]
   csv-contract dbtest --spec <suite.csvsuite.yaml> [--fail-fast] [--format json]
   csv-contract test [--csv <file-or-url>] --spec <contract.csvtest.yaml> [--spec <spot-check.yaml>]
-                    [--format text|json] [--max-issues 1000] [--progress-interval 250000]
+                    [--format text|json] [--max-issues 1000] [--max-row-outcomes 1000] [--progress-interval 250000]
                     [--unique-partitions 128] [--temp-directory <path>]
   csv-contract init --csv <file.csv> --out <contract.csvtest.yaml>
                     [--sample-rows 10000] [--infer-constraints] [--no-sample-tests]
@@ -78,6 +79,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     specs: [],
     format: "text",
     maxIssues: 1000,
+    maxRowOutcomes: 1000,
     progressInterval: 250000,
     uniquePartitions: 128,
     sampleRows: 10000,
@@ -105,6 +107,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (token === "--out") result.out = value;
     else if (token === "--format" && (value === "text" || value === "json")) result.format = value;
     else if (token === "--max-issues") result.maxIssues = positiveInteger(value, "maxIssues");
+    else if (token === "--max-row-outcomes") result.maxRowOutcomes = positiveInteger(value, "maxRowOutcomes", true);
     else if (token === "--progress-interval") result.progressInterval = positiveInteger(value, "progressInterval", true);
     else if (token === "--unique-partitions") result.uniquePartitions = positiveInteger(value, "uniquePartitions");
     else if (token === "--temp-directory") result.tempDirectory = value;
@@ -178,6 +181,7 @@ async function testCsv(args: ParsedArgs): Promise<void> {
       tempDirectory: args.tempDirectory ? resolve(args.tempDirectory) : undefined
     }, (localPath) => validateCsvFile(localPath, plan.inputs, {
       maxIssues: args.maxIssues,
+      maxRowOutcomes: args.maxRowOutcomes,
       progressInterval: args.progressInterval,
       tempDirectory: args.tempDirectory ? resolve(args.tempDirectory) : undefined,
       uniquePartitions: args.uniquePartitions,
