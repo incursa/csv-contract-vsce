@@ -57,10 +57,12 @@ const sqlConnectionProfilesKey = "csvContract.sqlServer.connectionProfiles";
 const sqlConnectionSecretPrefix = "csvContract.sqlServer.connection.";
 export const sqlConnectionSecretKey = (profile: string): string => `${sqlConnectionSecretPrefix}${profile}`;
 
-async function writeExportAtomically(uri: vscode.Uri, data: Uint8Array): Promise<void> {
+async function writeExportAtomically(uri: vscode.Uri, data: Uint8Array, signal?: AbortSignal): Promise<void> {
   const temporary = uri.with({ path: `${uri.path}.partial-${Date.now()}-${Math.random().toString(36).slice(2)}` });
   try {
+    if (signal?.aborted) throw new Error("Excel validation package export canceled.");
     await vscode.workspace.fs.writeFile(temporary, data);
+    if (signal?.aborted) throw new Error("Excel validation package export canceled.");
     await vscode.workspace.fs.rename(temporary, uri, { overwrite: true });
   } finally {
     try { await vscode.workspace.fs.delete(temporary, { useTrash: false }); } catch { /* renamed successfully or already absent */ }
@@ -751,15 +753,17 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         const exportRuns = format.label === "Excel validation package" ? latestRuns : filterResultRuns(latestRuns, String(message.filter ?? ""), message.selectedIssues);
         const exportContext = { filter: message.filter ?? "", selectedIssues: message.selectedIssues ?? [], stale, runNotice, totals: "original target scope; exported details may be selected or filtered" };
         let content: string | Uint8Array;
+        let exportSignal: AbortSignal | undefined;
         if (format.label === "JSON") content = JSON.stringify({ ...JSON.parse(validationRunExportJson(vscode.workspace.asRelativePath(document.uri, false), exportRuns)), exportScope: exportContext }, null, 2);
         else if (format.label === "CSV") content = issueRunsToCsv(exportRuns, exportContext);
         else content = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Exporting Excel validation package", cancellable: true }, async (uiProgress, token) => {
           const controller = new AbortController();
+          exportSignal = controller.signal;
           token.onCancellationRequested(() => controller.abort());
           return badRowsXlsxAsync(exportRuns, { title: `${contractFilename} validation results`, testLabel: contractFilename, signal: controller.signal,
             checkCatalog: () => contractCheckCatalog(read()), onProgress: update => uiProgress.report({ message: update.message }) });
         });
-        await writeExportAtomically(outputUri, typeof content === "string" ? new TextEncoder().encode(content) : content);
+        await writeExportAtomically(outputUri, typeof content === "string" ? new TextEncoder().encode(content) : content, exportSignal);
         const totalIssueCount = latestRuns.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
         if (totalIssueCount > retainedIssueCount) {
           void vscode.window.showWarningMessage(

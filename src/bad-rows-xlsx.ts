@@ -44,6 +44,7 @@ export interface BadRowsWorkbookEstimate {
   runs: number;
   retainedRows: number;
   aggregateFindings: number;
+  omittedEvidenceRuns: number;
   estimatedCells: number;
   estimatedBytes: number;
   targetSheets: number;
@@ -457,6 +458,7 @@ async function workbookPackageAsync(sheets: SheetDefinition[], title: string, op
       outputLength += chunk.length;
     };
     let finished = false;
+    const cancelError = () => new Error("Excel validation package export canceled.");
     const archive = new Zip((error, chunk, final) => {
       if (error) {
         finished = true;
@@ -469,11 +471,11 @@ async function workbookPackageAsync(sheets: SheetDefinition[], title: string, op
         resolve(output.subarray(0, outputLength));
       }
     });
-    const abort = () => {
+    const abort = (error: unknown = cancelError()) => {
       if (finished) return;
       finished = true;
       archive.terminate();
-      reject(new Error("Excel validation package export canceled."));
+      reject(error);
     };
     options.signal?.addEventListener("abort", abort, { once: true });
     void (async () => {
@@ -501,8 +503,9 @@ async function workbookPackageAsync(sheets: SheetDefinition[], title: string, op
         cancelled(options);
         archive.end();
       } catch (error) {
-        abort();
-        if (!finished) reject(error);
+        // Preserve validation, limit, and ZIP errors. Cancellation has its own
+        // stable message, while the archive is still terminated exactly once.
+        abort(error);
       }
     })();
   });
@@ -513,11 +516,13 @@ export function estimateBadRowsWorkbook(runs: BadRowsRun[], options: BadRowsWork
   const configuredLimits = limits(options);
   let retainedRows = 0;
   let aggregateFindings = 0;
+  let omittedEvidenceRuns = 0;
   const targets = new Set<string>();
   let estimatedCells = 0;
   let widestTarget = 0;
   for (const [index, run] of runs.entries()) {
     cancelled(options);
+    if (run.result?.truncated || run.result?.preview?.scope === "sample") omittedEvidenceRuns++;
     const target = targetLabel(run, index);
     targets.add(target.trim().toLocaleLowerCase());
     const matrix = matrixRows(run);
@@ -538,8 +543,9 @@ export function estimateBadRowsWorkbook(runs: BadRowsRun[], options: BadRowsWork
   if (estimatedBytes > 50 * 1024 * 1024) warnings.push("The estimated package is larger than 50 MiB; export may take a while.");
   if (retainedRows > configuredLimits.rows - 1) warnings.push(`Rows will be split into deterministic sheets at ${configuredLimits.rows.toLocaleString()} rows per sheet.`);
   if (widestTarget > configuredLimits.columns) warnings.push(`Wide target matrices will be split into deterministic sheets at ${configuredLimits.columns.toLocaleString()} columns per sheet.`);
+  if (omittedEvidenceRuns) warnings.push(`${omittedEvidenceRuns.toLocaleString()} result(s) contain sampled or truncated evidence; the workbook cannot reconstruct omitted findings.`);
   progress(options, { phase: "estimate", completed: runs.length, total: runs.length, message: `Estimated ${estimatedBytes.toLocaleString()} bytes across ${targets.size.toLocaleString()} targets.` });
-  return { runs: runs.length, retainedRows, aggregateFindings, estimatedCells, estimatedBytes, targetSheets: targets.size, warnings };
+  return { runs: runs.length, retainedRows, aggregateFindings, omittedEvidenceRuns, estimatedCells, estimatedBytes, targetSheets: targets.size, warnings };
 }
 
 function shardSheets(sheet: SheetDefinition, options: BadRowsWorkbookOptions, used: Set<string>): SheetDefinition[] {
@@ -642,15 +648,16 @@ function buildWorkbookSheets(runs: BadRowsRun[], options: BadRowsWorkbookOptions
         ...sourceColumns.map(column => row.values[column]), ...relatedColumns.map(column => row.related[column]), ...distinctCheckIds.map(id => row.failed.has(id) ? false : undefined)])
     });
   }
+  const estimate = estimateBadRowsWorkbook(runs, { ...options, onProgress: undefined });
   const readmeRows: Array<Array<EvidenceValue | undefined>> = [
     ["Workbook", options.title], ["Exported UTC", new Date().toISOString()], ["Target results", runs.length], ["Targets with bad rows", targetSheets.length], ["Retained bad rows", badRowCount],
     ["Package layout", "Overview summarizes every test and target. Rules explains configured checks. Each Bad sheet consolidates retained failing rows for one target across all test files. Aggregate Findings contains findings without a primary row."],
     ["Aggregate-only findings", aggregateCount], ["Matrix meaning", "FALSE (red) means this check failed the retained row. Blank means not failed in retained evidence, not applicable, or not provably evaluated for that row."],
     ["Merged rows", "A source row is merged across test files only when its source label, row number, and source values match. Check columns include the test file name so repeated rule IDs remain separate."],
     ["Data handling", "Sheets can contain every retained source and joined value. Protect this workbook like the source data."],
-    ["Evidence boundary", "The workbook uses retained run evidence and does not query the source again. Limited or sampled evidence remains limited; omitted source rows and unretained findings cannot be reconstructed by this export."],
+    ["Evidence boundary", estimate.omittedEvidenceRuns ? `${estimate.omittedEvidenceRuns.toLocaleString()} result(s) contain sampled or truncated evidence. The workbook uses retained run evidence and cannot reconstruct omitted source rows or unretained findings.` : "The workbook uses retained run evidence and does not query the source again. Omitted source rows and unretained findings cannot be reconstructed by this export."],
     ["Excel limits", "At most 1,048,575 data rows and 16,384 columns per sheet. Oversized target matrices are split deterministically by rows and columns; every shard repeats Test files, Source, and Source row. Text cells are limited to 32,767 characters and truncated cells are reported in export progress."],
-    ["Export estimate", `${estimateBadRowsWorkbook(runs, { ...options, onProgress: undefined }).estimatedBytes.toLocaleString()} bytes estimated before XML generation.`]
+    ["Export estimate", `${estimate.estimatedBytes.toLocaleString()} bytes estimated before XML generation.`]
   ];
   const shardedTargets = targetSheets.flatMap(sheet => shardSheets(sheet, options, used));
   sheets.push(...shardedTargets);
