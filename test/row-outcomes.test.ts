@@ -84,5 +84,5 @@ test("streaming deferred checks update retained rows without changing aggregate 
   assert.equal(result.issues.some(issue => issue.code === "NOT_UNIQUE"), true);
   assert.equal(result.rowOutcomes?.find(row => row.row === 3)?.checks["schema.Id"].state, "fail");
   assert.equal(result.rowOutcomes?.find(row => row.row === 4)?.checks["ordered.increasing"].state, "pass");
-  assert.equal(result.rowOutcomes?.find(row => row.row === 2)?.checks["ordered.increasing"], undefined);
+  assert.equal(result.rowOutcomes?.find(row => row.row === 2)?.checks["ordered.increasing"].state, "not-applicable");
 });

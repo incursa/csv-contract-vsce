@@ -704,7 +704,8 @@ async function validateGroup(
           state.sequenceStores.push({ columns,
             store: new RowSortStore((a, b) => compareOrderedRows(a, b, rule, state.options), options.tempDirectory),
             evaluator: new OrderedRuleEvaluator(rule, state.options, issue => state.collector.add(issue),
-              (row, checkId, passed) => state.rowOutcomes.update(row, `ordered.${checkId}`, passed ? "pass" : "fail")) });
+              (row, checkId, passed) => state.rowOutcomes.update(row, `ordered.${checkId}`, passed ? "pass" : "fail"),
+              (row, checkId, outcome, reason) => state.rowOutcomes.update(row, `ordered.${checkId}`, outcome, reason)) });
         }
         if (uniqueChecks.size > 0) {
           uniqueness = new PartitionedUniquenessStore(options.tempDirectory, options.uniquePartitions);

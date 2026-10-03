@@ -1,8 +1,9 @@
-import type { CsvOptions, OrderedCheck, OrderedRelation, OrderedRule, ValidationIssue } from "./model";
+import type { CsvOptions, OrderedCheck, OrderedRelation, OrderedRule, RowCheckOutcomeState, ValidationIssue } from "./model";
 import { evaluatePredicate, predicateColumns } from "./predicate";
 
 export interface OrderedRow { row: number; values: Record<string, string> }
 export type OrderedOutcomeObserver = (row: number, checkId: string, passed: boolean) => void;
+export type OrderedStateObserver = (row: number, checkId: string, state: RowCheckOutcomeState, reason?: "condition-false") => void;
 
 function duplicateCheck(rule: OrderedRule): OrderedCheck { return rule.duplicateOrder ?? { id: `${rule.id}.duplicate_order`, message: "Order keys must be unique." }; }
 function invalidCheck(rule: OrderedRule): OrderedCheck { return rule.invalidOrder ?? { id: `${rule.id}.invalid_order`, message: "Order keys must be valid." }; }
@@ -124,7 +125,8 @@ export class OrderedRuleEvaluator {
 
   public constructor(private readonly rule: OrderedRule, private readonly options: CsvOptions,
     private readonly issue: (issue: ValidationIssue) => void,
-    private readonly observeOutcome?: OrderedOutcomeObserver) {
+    private readonly observeOutcome?: OrderedOutcomeObserver,
+    private readonly observeState?: OrderedStateObserver) {
     validateOrderedDefinition(rule, new Set(orderedColumns(rule)));
     for (const check of orderedChecks(rule)) this.outcomes.set(check.id, { id: check.id, selected: 0, passed: 0, failed: 0 });
   }
@@ -165,6 +167,14 @@ export class OrderedRuleEvaluator {
     });
   }
 
+  private notApplicable(check: OrderedCheck, row: OrderedRow): void {
+    this.observeState?.(row.row, check.id, "not-applicable", "condition-false");
+  }
+
+  private initializeRowOutcomes(row: OrderedRow): void {
+    for (const check of orderedChecks(this.rule)) this.observeState?.(row.row, check.id, "not-evaluated");
+  }
+
   private checkRelations(row: OrderedRow): void {
     for (const relation of this.rule.relations ?? []) {
       const prior = relation.requirePrior ?? relation.forbidPrior;
@@ -192,19 +202,21 @@ export class OrderedRuleEvaluator {
           if (pending.head > 1024) { pending.items = pending.items.slice(pending.head); pending.head = 0; }
         }
         if (this.matches(relation.when, row)) pending.items.push({ row, ordinal: this.ordinal });
+        else this.notApplicable(relation, row);
         this.pending.set(relation.id, pending);
       } else {
         if (this.matches(relation.when, row)) {
           const gap = seen ? this.ordinal - seen.ordinal - 1 : Infinity;
           this.check(relation, relation.requirePrior ? !!seen && (relation.maxGap === undefined || gap <= relation.maxGap) : !seen,
             row, relation.requirePrior ? "Required prior row was not found within the allowed gap." : "Forbidden prior row was found.", seen ? [seen.row.row] : []);
-        }
+        } else this.notApplicable(relation, row);
         if (prior && this.matches(prior, row)) this.seen.set(relation.id, { row, ordinal: this.ordinal });
       }
     }
   }
 
   public add(row: OrderedRow): void {
+    this.initializeRowOutcomes(row);
     const key = partitionKey(row, this.rule, this.options);
     if (key !== this.partition) { this.finishPartition(); this.partition = key; this.state = this.rule.initial?.state ?? ""; this.ordinal = 0; this.counts.clear(); this.seen.clear(); this.pending.clear(); this.first = row; this.priorOrder = undefined; }
     this.ordinal++;
