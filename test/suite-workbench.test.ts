@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { renderSuiteWorkbench, type SuiteRunProgress } from "../src/suite-workbench";
-import type { LoadedSuite } from "../src/core/suite";
+import type { LoadedSuite, SuiteRun } from "../src/core/suite";
 import { runSuite, yamlDocument } from "../src/core/suite";
 import { errorDetails } from "../src/core/error-details";
 import { suiteErrorsCsv, updateSuiteConnection } from "../src/suite-actions";
@@ -102,6 +102,15 @@ test("ODBC objects retain diagnostics through execution, rendering and CSV expor
   const circular: Record<string, unknown> = { message: "Pwd=secret; failed" }; circular.cause = circular;
   assert.doesNotMatch(errorDetails(circular), /secret/);
   assert.match(errorDetails(circular), /Circular/);
+});
+
+test("suite CSV ordering is independent of the caller run order", () => {
+  const makeRun = (member: string): SuiteRun => ({ suite: "hcm", member, spec: `${member}.yaml`, status: "PASS", target: `${member}.csv`, result: {
+    valid: true, rowCount: 1, columnCount: 1, testCount: 1, issueCount: 0, errorCount: 0, warningCount: 0, truncated: false, issues: []
+  } });
+  const first = makeRun("employees");
+  const second = makeRun("departments");
+  assert.equal(suiteErrorsCsv([first, second], "selected"), suiteErrorsCsv([second, first], "selected"));
 });
 
 test("connection edits replace alternatives only at selected scope and preserve rules and comments", () => {

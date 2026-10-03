@@ -50,6 +50,12 @@ test("issue export includes every retained issue with target context", () => {
   assert.match(csv, /CustomerId.*C-3/);
 });
 
+test("issue CSV ordering is independent of the caller run order", () => {
+  const second = { ...runs[0], target: "exports/accounts.csv" };
+  assert.equal(issueRunsToCsv([runs[0], second], undefined, { identity: "contract" }),
+    issueRunsToCsv([second, runs[0]], undefined, { identity: "contract" }));
+});
+
 test("JSON export preserves complete run results and reports detail completeness", () => {
   const output = createValidationRunExport("contracts/customers.csvtest.yaml", runs);
   assert.deepEqual(output.totals, {

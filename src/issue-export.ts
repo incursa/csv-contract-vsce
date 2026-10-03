@@ -161,10 +161,11 @@ export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown, option
     "AggregateContext",
     "EvidenceLimited"
   ];
-  const manifest = manifestFromRuns(options.identity ?? (typeof context === "string" ? context : "validation-package"), runs, options.definition, options.kind);
-  const extended = context !== undefined || runs.some(run => run.runId);
+  const orderedRuns = [...runs].sort((left, right) => left.target.localeCompare(right.target) || (left.spec ?? "").localeCompare(right.spec ?? "") || (left.runId ?? "").localeCompare(right.runId ?? "") || (left.workId ?? "").localeCompare(right.workId ?? ""));
+  const manifest = manifestFromRuns(options.identity ?? (typeof context === "string" ? context : "validation-package"), orderedRuns, options.definition, options.kind);
+  const extended = context !== undefined || orderedRuns.some(run => run.runId);
   const metadata = (run: IssueExportRun) => extended ? [run.runId ?? "", run.workId ?? "", run.evaluatedAt ?? "", run.scope ?? "", run.status ?? (run.result?.valid ? "PASS" : "FAIL"), JSON.stringify(context ?? {}), String(run.result?.issueCount ?? 0), String(run.result?.issues.length ?? 0), String(run.result?.truncated ?? false)] : [];
-  const rows = runs.flatMap((run) => (run.result?.issues ?? []).map((issue) => [
+  const rows = orderedRuns.flatMap((run) => (run.result?.issues ?? []).map((issue) => [
     run.target,
     issue.severity ?? "error",
     issue.level,
@@ -180,7 +181,7 @@ export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown, option
     JSON.stringify(issue.evidence?.aggregate ?? {}),
     String(issue.evidence?.limited ?? false), ...metadata(run)
   ]));
-  for (const run of runs) {
+  for (const run of orderedRuns) {
     if (run.error) rows.push([run.target, run.status ?? "ERROR", "execution", "", "", "", "", run.error, "", "", "[]", "[]", "{}", "false", ...metadata(run)]);
     else if (extended && !run.result?.issues.length) rows.push([run.target, "", "summary", "", "", "", "", "No retained issue details in this scope.", "", "", "[]", "[]", "{}", "false", ...metadata(run)]);
   }

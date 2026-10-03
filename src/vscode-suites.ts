@@ -375,7 +375,8 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
           const scoped = message.memberIds ? report.runs.filter(r => message.memberIds!.includes(r.member)) : report.runs;
           const exportScope = { members: message.memberIds ?? "all", filter: message.resultFilter ?? "", selectedIssues: message.selectedIssues ?? [], stale, totals: "original scope; retained details may be filtered or selected" };
           const filtered = filterResultRuns(scoped, message.resultFilter ?? "", message.selectedIssues);
-          const snapshot = { ...report, runs: filtered, members: report.members.map(member => ({ id: member.id, runs: filtered.filter(run => run.member === member.id) })).filter(member => member.runs.length), exportScope, stale };
+          const exportRuns = filtered;
+          const snapshot = { ...report, runs: exportRuns, members: report.members.map(member => ({ id: member.id, runs: exportRuns.filter(run => run.member === member.id) })).filter(member => member.runs.length), exportScope, stale };
           const format = await vscode.window.showQuickPick(["CSV", "JSON", "Excel validation package"], { title: "Export suite errors and results" });
           if (!format) return;
           const extension = format === "CSV" ? "csv" : format === "JSON" ? "json" : "validation-package.xlsx";
@@ -385,9 +386,9 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
           // same filtered run set as the payload.  Using `scoped` here caused
           // selected-member and issue-filtered exports to claim provenance for
           // runs that were not present in the package.
-          const manifest = manifestFromRuns(snapshot.suite, filtered, currentSuite, "suite");
-          const content = format === "CSV" ? suiteErrorsCsv(snapshot.runs, exportScope, currentSuite) : format === "JSON" ? JSON.stringify({ schema: "incursa.csv-suite-results/v1", manifest, ...snapshot }, null, 2) + "\n"
-            : badRowsXlsx(filtered, { title: `${snapshot.suite} validation results`, manifest, packageKind: "suite", checkCatalog: run => {
+          const manifest = manifestFromRuns(snapshot.suite, exportRuns, currentSuite, "suite");
+          const content = format === "CSV" ? suiteErrorsCsv(exportRuns, exportScope, currentSuite) : format === "JSON" ? JSON.stringify({ schema: "incursa.csv-suite-results/v1", manifest, ...snapshot }, null, 2) + "\n"
+            : badRowsXlsx(exportRuns, { title: `${snapshot.suite} validation results`, manifest, packageKind: "suite", checkCatalog: run => {
               if (run.member?.startsWith("cross:")) {
                 const id = run.member.slice("cross:".length);
                 return [{ id, category: "Cross-source check", description: `Validate the configured relationship or reconciliation between ${run.table ?? "suite sources"}.` }];

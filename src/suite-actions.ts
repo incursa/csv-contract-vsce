@@ -13,9 +13,10 @@ export function updateSuiteConnection(text: string, path: (string | number)[], s
 
 export function suiteErrorsCsv(runs: SuiteRun[], context?: unknown, definition?: unknown): string {
   const rows: string[][] = [];
-  const manifest = manifestFromRuns(runs[0]?.suite ?? "validation-suite", runs, definition, "suite");
-  const extended = context !== undefined || runs.some(run => run.runId);
-  for (const run of runs) {
+  const orderedRuns = [...runs].sort((left, right) => left.suite.localeCompare(right.suite) || left.member.localeCompare(right.member) || (left.table ?? left.target ?? "").localeCompare(right.table ?? right.target ?? "") || left.status.localeCompare(right.status) || (left.runId ?? "").localeCompare(right.runId ?? "") || (left.workId ?? "").localeCompare(right.workId ?? ""));
+  const manifest = manifestFromRuns(orderedRuns[0]?.suite ?? "validation-suite", orderedRuns, definition, "suite");
+  const extended = context !== undefined || orderedRuns.some(run => run.runId);
+  for (const run of orderedRuns) {
     const start = rows.length;
     const identity = [run.suite, run.member, run.table ?? run.target ?? "", run.status];
     if (run.error) rows.push([...identity, "execution", "", "", "", run.error, "", "", "[]", "[]", "{}", "false"]);
