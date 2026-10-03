@@ -1,5 +1,6 @@
 import type { ValidationResult } from "./core/model";
 import { rowsToCsv } from "./comparison/evidence";
+import { redactValidationResult, type EvidenceProfile } from "./evidence-profile";
 
 export interface IssueExportRun {
   runId?: string;
@@ -27,26 +28,29 @@ export interface ValidationRunExport {
     issueDetailsComplete: boolean;
   };
   runs: IssueExportRun[];
+  evidence?: { profileId?: string; profileName?: string; redacted: boolean };
 }
 
-export function createValidationRunExport(contract: string, runs: IssueExportRun[]): ValidationRunExport {
-  const issues = runs.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
-  const retainedIssueDetails = runs.reduce((total, run) => total + (run.result?.issues.length ?? 0), 0);
+export function createValidationRunExport(contract: string, runs: IssueExportRun[], profile?: EvidenceProfile): ValidationRunExport {
+  const exportedRuns = profile ? runs.map((run, index) => ({ ...run, result: redactValidationResult(run.result, profile, `${contract}:${index}`) })) : runs;
+  const issues = exportedRuns.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
+  const retainedIssueDetails = exportedRuns.reduce((total, run) => total + (run.result?.issues.length ?? 0), 0);
   return {
     schema: "incursa.csv-contract-results/v1",
     contract,
     exportedAt: new Date().toISOString(),
     totals: {
-      targets: runs.length,
-      passed: runs.filter((run) => (run.result?.valid && run.result.preview?.scope !== "sample" && (!run.status || run.status === "PASS"))).length,
-      rowsScanned: runs.reduce((total, run) => total + (run.result?.rowCount ?? 0), 0),
-      errors: runs.reduce((total, run) => total + (run.result?.errorCount ?? 0), 0),
-      warnings: runs.reduce((total, run) => total + (run.result?.warningCount ?? 0), 0),
+      targets: exportedRuns.length,
+      passed: exportedRuns.filter((run) => (run.result?.valid && run.result.preview?.scope !== "sample" && (!run.status || run.status === "PASS"))).length,
+      rowsScanned: exportedRuns.reduce((total, run) => total + (run.result?.rowCount ?? 0), 0),
+      errors: exportedRuns.reduce((total, run) => total + (run.result?.errorCount ?? 0), 0),
+      warnings: exportedRuns.reduce((total, run) => total + (run.result?.warningCount ?? 0), 0),
       issues,
       retainedIssueDetails,
       issueDetailsComplete: issues === retainedIssueDetails
     },
-    runs
+    runs: exportedRuns,
+    ...(profile ? { evidence: { profileId: profile.id, profileName: profile.name, redacted: true } } : {})
   };
 }
 
@@ -134,11 +138,12 @@ export function parseValidationRunExport(text: string): ValidationRunExport {
   return { ...parsed, exportedAt: typeof exportValue.exportedAt === "string" ? exportValue.exportedAt : undefined };
 }
 
-export function validationRunExportJson(contract: string, runs: IssueExportRun[]): string {
-  return `${JSON.stringify(createValidationRunExport(contract, runs), null, 2)}\n`;
+export function validationRunExportJson(contract: string, runs: IssueExportRun[], profile?: EvidenceProfile): string {
+  return `${JSON.stringify(createValidationRunExport(contract, runs, profile), null, 2)}\n`;
 }
 
-export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown): string {
+export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown, profile?: EvidenceProfile): string {
+  const exportRuns = profile ? runs.map((run, index) => ({ ...run, result: redactValidationResult(run.result, profile, `${run.target}:${index}`) })) : runs;
   const columns = [
     "Target",
     "Severity",
@@ -155,9 +160,9 @@ export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown): strin
     "AggregateContext",
     "EvidenceLimited"
   ];
-  const extended = context !== undefined || runs.some(run => run.runId);
-  const metadata = (run: IssueExportRun) => extended ? [run.runId ?? "", run.workId ?? "", run.evaluatedAt ?? "", run.scope ?? "", run.status ?? (run.result?.valid ? "PASS" : "FAIL"), JSON.stringify(context ?? {}), String(run.result?.issueCount ?? 0), String(run.result?.issues.length ?? 0), String(run.result?.truncated ?? false)] : [];
-  const rows = runs.flatMap((run) => (run.result?.issues ?? []).map((issue) => [
+  const extended = context !== undefined || exportRuns.some(run => run.runId) || Boolean(profile);
+  const metadata = (run: IssueExportRun) => extended ? [run.runId ?? "", run.workId ?? "", run.evaluatedAt ?? "", run.scope ?? "", run.status ?? (run.result?.valid ? "PASS" : "FAIL"), JSON.stringify(context ?? {}), String(run.result?.issueCount ?? 0), String(run.result?.issues.length ?? 0), String(run.result?.truncated ?? false), profile?.name ?? profile?.id ?? "", String(Boolean(profile))] : [];
+  const rows = exportRuns.flatMap((run) => (run.result?.issues ?? []).map((issue) => [
     run.target,
     issue.severity ?? "error",
     issue.level,
@@ -173,10 +178,10 @@ export function issueRunsToCsv(runs: IssueExportRun[], context?: unknown): strin
     JSON.stringify(issue.evidence?.aggregate ?? {}),
     String(issue.evidence?.limited ?? false), ...metadata(run)
   ]));
-  for (const run of runs) {
+  for (const run of exportRuns) {
     if (run.error) rows.push([run.target, run.status ?? "ERROR", "execution", "", "", "", "", run.error, "", "", "[]", "[]", "{}", "false", ...metadata(run)]);
     else if (extended && !run.result?.issues.length) rows.push([run.target, "", "summary", "", "", "", "", "No retained issue details in this scope.", "", "", "[]", "[]", "{}", "false", ...metadata(run)]);
   }
-  if (extended) columns.push("RunId", "WorkId", "EvaluatedAt", "EvaluationScope", "Status", "ExportScope", "TotalIssues", "RetainedIssues", "DetailsLimited");
+  if (extended) columns.push("RunId", "WorkId", "EvaluatedAt", "EvaluationScope", "Status", "ExportScope", "TotalIssues", "RetainedIssues", "DetailsLimited", "EvidenceProfile", "EvidenceRedacted");
   return rowsToCsv(columns, rows);
 }

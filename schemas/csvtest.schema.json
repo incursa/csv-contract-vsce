@@ -10,6 +10,21 @@
     "schema"
   ],
   "properties": {
+    "evidenceProfile": {
+      "description": "Export-only row evidence policy. It never affects validation and must not contain credentials.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "include": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "exclude": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "mask": {
+          "type": "object",
+          "additionalProperties": { "enum": ["hash", "redact", "partial", "zero"] }
+        }
+      }
+    },
     "baseline": {
       "description": "Versioned schema expectation or a sidecar path relative to the containing contract/suite. Never updated by validation.",
       "oneOf": [

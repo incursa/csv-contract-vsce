@@ -37,6 +37,7 @@ import { hasSqlServerConnection, resolveSqlServerTargets, sqlServerTargetLabel, 
 import { suggestSqlColumnMappings } from "./core/sql-server-column-mapping";
 import { issueRunsToCsv, parseValidationRunExport, validationRunExportJson } from "./issue-export";
 import { badRowsXlsx, contractCheckCatalog } from "./bad-rows-xlsx";
+import { previewEvidenceProfile, profileHasCredentials } from "./evidence-profile";
 
 const viewType = "csv-contract-vsce.contractEditor";
 
@@ -731,6 +732,23 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         ], { title: "Export validation results", placeHolder: "Choose a machine-readable format" });
         if (!format) return;
         const contractFilename = document.uri.path.split("/").at(-1) ?? "contract.csvtest.yaml";
+        const contract = read();
+        const profile = contract.evidenceProfile;
+        if (profileHasCredentials(profile)) throw new Error("Evidence profiles cannot contain connection credentials.");
+        const evidenceColumns = [...new Set(latestRuns.flatMap(run => run.result?.issues.flatMap(issue => [
+          ...Object.keys(issue.evidence?.aggregate ?? {}),
+          ...(issue.evidence?.samples.flatMap(sample => [
+            ...Object.keys(sample.primary?.values ?? {}),
+            ...(sample.related ?? []).flatMap(record => Object.keys(record.values))
+          ]) ?? [])
+        ]) ?? []))];
+        const evidencePreview = previewEvidenceProfile(profile, evidenceColumns);
+        if (profile && evidencePreview.warning) void vscode.window.showWarningMessage(evidencePreview.warning);
+        if (profile) {
+          void vscode.window.showInformationMessage(`Evidence preview: ${evidencePreview.included.length} included, ${evidencePreview.excluded.length} excluded, ${evidencePreview.masked.length} masked${evidencePreview.profileName ? ` (${evidencePreview.profileName})` : ""}.`);
+        } else {
+          void vscode.window.showWarningMessage("This export includes full row values. Add an evidenceProfile to the contract to limit or mask source columns.");
+        }
         const exportFilename = contractFilename.replace(/\.csvtest\.ya?ml$/i, "") + `.${format.extension}`;
         const outputUri = await vscode.window.showSaveDialog({
           title: "Export validation results",
@@ -739,11 +757,11 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         });
         if (!outputUri) return;
         const exportRuns = format.label === "Excel validation package" ? latestRuns : filterResultRuns(latestRuns, String(message.filter ?? ""), message.selectedIssues);
-        const exportContext = { filter: message.filter ?? "", selectedIssues: message.selectedIssues ?? [], stale, runNotice, totals: "original target scope; exported details may be selected or filtered" };
+        const exportContext = { filter: message.filter ?? "", selectedIssues: message.selectedIssues ?? [], stale, runNotice, totals: "original target scope; exported details may be selected or filtered", evidenceProfile: profile?.name ?? profile?.id ?? "default", evidenceRedacted: Boolean(profile) };
         const content = format.label === "JSON"
-          ? JSON.stringify({ ...JSON.parse(validationRunExportJson(vscode.workspace.asRelativePath(document.uri, false), exportRuns)), exportScope: exportContext }, null, 2)
-          : format.label === "CSV" ? issueRunsToCsv(exportRuns, exportContext)
-          : badRowsXlsx(exportRuns, { title: `${contractFilename} validation results`, testLabel: contractFilename, checkCatalog: () => contractCheckCatalog(read()) });
+          ? JSON.stringify({ ...JSON.parse(validationRunExportJson(vscode.workspace.asRelativePath(document.uri, false), exportRuns, profile)), exportScope: exportContext }, null, 2)
+          : format.label === "CSV" ? issueRunsToCsv(exportRuns, exportContext, profile)
+          : badRowsXlsx(exportRuns, { title: `${contractFilename} validation results`, testLabel: contractFilename, evidenceProfile: profile, checkCatalog: () => contractCheckCatalog(contract) });
         await vscode.workspace.fs.writeFile(outputUri, typeof content === "string" ? new TextEncoder().encode(content) : content);
         const totalIssueCount = latestRuns.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
         if (totalIssueCount > retainedIssueCount) {

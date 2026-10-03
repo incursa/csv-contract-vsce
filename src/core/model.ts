@@ -275,6 +275,8 @@ export type CsvTarget =
 
 export interface CsvContract {
   version: 1;
+  /** Optional export-only evidence policy; never used during validation. */
+  evidenceProfile?: import("../evidence-profile").EvidenceProfile;
   baseline?: import("./baseline").BaselineBinding;
   /** Opaque annotations, preserved without execution behavior. */
   metadata?: Record<string, unknown>;

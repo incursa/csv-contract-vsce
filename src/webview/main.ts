@@ -8,6 +8,7 @@ import { predicateDescription } from "../core/predicate";
 import { renderPredicate, readPredicate, editPredicateTree } from "./rule-editor";
 import { insertPreset, presetCatalog, type PresetInput } from "../core/presets";
 import { resultHealthCategory, resultHealthTitle, type ResultColorMode, type ResultHealth } from "../core/result-health";
+import { redactValidationResult } from "../evidence-profile";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 
@@ -833,7 +834,7 @@ window.addEventListener("message", (event) => {
     fileTargetCount = message.fileTargetCount ?? targetNames.length;
     configuredTargetCount = message.configuredTargetCount ?? 0;
     usingConfiguredTargets = message.usingConfiguredTargets ?? false;
-    runs = message.runs ?? [];
+    runs = (message.runs ?? []).map((run: DisplayRun, index: number) => ({ ...run, result: redactValidationResult(run.result, contract?.evidenceProfile, `${contractName}:${index}`) }));
     resultColorMode = message.resultColorMode === "graded" ? "graded" : "binary";
     stale = message.stale ?? false; live = message.live ?? false; runNotice = message.runNotice ?? "";
     resultsSource = message.resultsSource ?? "run";

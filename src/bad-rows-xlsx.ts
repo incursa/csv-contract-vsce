@@ -2,6 +2,7 @@ import { strToU8, zipSync } from "fflate";
 import { orderedChecks } from "./core/ordered-rule";
 import { aggregateResultHealth, resultHealth, resultHealthCategory, type ResultHealthBand } from "./core/result-health";
 import type { CsvContract, EvidenceValue, Predicate, SqlPredicate, ValidationIssue, ValidationResult } from "./core/model";
+import { redactValidationResult, type EvidenceProfile } from "./evidence-profile";
 
 export interface BadRowsRun {
   suite?: string;
@@ -26,6 +27,7 @@ export interface BadRowsWorkbookOptions {
   testLabel?: string;
   checkIds?: (run: BadRowsRun, index: number) => string[];
   checkCatalog?: (run: BadRowsRun, index: number) => WorkbookCheck[];
+  evidenceProfile?: EvidenceProfile;
 }
 
 interface MatrixRow {
@@ -341,17 +343,20 @@ function workbookPackage(sheets: SheetDefinition[], title: string): Uint8Array {
 
 /** Build a workbook from retained evidence without querying the source again. */
 export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions): Uint8Array {
+  const exportRuns = options.evidenceProfile
+    ? runs.map((run, index) => ({ ...run, result: redactValidationResult(run.result, options.evidenceProfile, `${run.target ?? run.member ?? index}`) }))
+    : runs;
   const used = new Set<string>();
   const readmeName = safeSheetName("Read Me", used);
-  const sheets: SheetDefinition[] = [overviewSheet(runs, options, used)];
-  const ruleSummary = rulesSheet(runs, options, used);
+  const sheets: SheetDefinition[] = [overviewSheet(exportRuns, options, used)];
+  const ruleSummary = rulesSheet(exportRuns, options, used);
   if (ruleSummary) sheets.push(ruleSummary);
   let badRowCount = 0;
   let aggregateCount = 0;
   const aggregates: Array<Array<EvidenceValue | undefined>> = [];
   const targetSheets: SheetDefinition[] = [];
   const groupedTargets = new Map<string, { label: string; entries: Array<{ run: BadRowsRun; index: number }> }>();
-  runs.forEach((run, runIndex) => {
+  exportRuns.forEach((run, runIndex) => {
     const label = targetLabel(run, runIndex);
     const key = label.trim().toLocaleLowerCase();
     const group = groupedTargets.get(key) ?? { label, entries: [] };
@@ -399,12 +404,13 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
     });
   }
   const readmeRows: Array<Array<EvidenceValue | undefined>> = [
-    ["Workbook", options.title], ["Exported UTC", new Date().toISOString()], ["Target results", runs.length], ["Targets with bad rows", targetSheets.length], ["Retained bad rows", badRowCount],
+    ["Workbook", options.title], ["Exported UTC", new Date().toISOString()], ["Target results", exportRuns.length], ["Targets with bad rows", targetSheets.length], ["Retained bad rows", badRowCount],
     ["Package layout", "Overview summarizes every test and target. Rules explains configured checks. Each Bad sheet consolidates retained failing rows for one target across all test files. Aggregate Findings contains findings without a primary row."],
     ["Aggregate-only findings", aggregateCount], ["Matrix meaning", "FALSE (red) means this check failed the retained row. Blank means not failed in retained evidence, not applicable, or not provably evaluated for that row."],
     ["Merged rows", "A source row is merged across test files only when its source label, row number, and source values match. Check columns include the test file name so repeated rule IDs remain separate."],
     ["Data handling", "Sheets can contain every retained source and joined value. Protect this workbook like the source data."],
     ["Evidence boundary", "The workbook uses retained run evidence and does not query the source again. Limited evidence remains limited."],
+    ["Evidence profile", options.evidenceProfile?.name ?? options.evidenceProfile?.id ?? "default"], ["Evidence redacted", Boolean(options.evidenceProfile)],
     ["Excel limits", "At most 1,048,575 data rows and 16,384 columns per sheet. Text cells are limited to 32,767 characters."]
   ];
   sheets.push(...targetSheets);
