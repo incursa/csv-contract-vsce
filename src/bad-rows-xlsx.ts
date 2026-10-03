@@ -146,12 +146,13 @@ function issueCheckId(issue: ValidationIssue): string {
   return `${issue.column}.${suffix[issue.code] ?? issue.code.toLowerCase().replaceAll("_", "-")}`;
 }
 
-function runLabel(run: BadRowsRun, index: number): string {
-  return run.displayTarget ?? run.target ?? run.table ?? run.member ?? `Result ${index + 1}`;
+/** One reviewer-facing label for every location in the validation package. */
+export function targetDisplayLabel(run: BadRowsRun, index: number): string {
+  return run.displayTarget ?? run.target ?? run.table ?? run.member ?? `Target ${index + 1}`;
 }
 
-function targetLabel(run: BadRowsRun, index: number): string {
-  return run.displayTarget ?? run.target ?? run.table ?? run.member ?? `Target ${index + 1}`;
+function runLabel(run: BadRowsRun, index: number): string {
+  return targetDisplayLabel(run, index);
 }
 
 function testLabel(run: BadRowsRun, index: number, options: BadRowsWorkbookOptions): string {
@@ -236,12 +237,13 @@ function rulesSheet(runs: BadRowsRun[], options: BadRowsWorkbookOptions, used: S
       const targetFailures = entries.filter(({ run }) => checkFailures(run, check.id) > 0).length;
       const failureEvents = entries.reduce((total, { run }) => total + checkFailures(run, check.id), 0);
       const status = targetFailures ? "FAILED" : complete === entries.length ? "PASSED" : evaluated ? "PARTIAL" : "NOT RUN";
-      rows.push([label, check.id, check.category, check.description, status, evaluated, targetFailures, failureEvents]);
-      styles.push([6, 6, 6, 13, status === "FAILED" ? 10 : status === "PASSED" ? 7 : status === "PARTIAL" ? 8 : 11]);
+      const targets = unique(entries.map(({ run, index }) => targetDisplayLabel(run, index))).join(", ");
+      rows.push([label, targets, check.id, check.category, check.description, status, evaluated, targetFailures, failureEvents]);
+      styles.push([6, 6, 6, 6, 13, status === "FAILED" ? 10 : status === "PASSED" ? 7 : status === "PARTIAL" ? 8 : 11]);
     }
   }
   if (!rows.length) return undefined;
-  return { name: safeSheetName("Rules", used), headers: ["Test file", "Rule", "Type", "What was tested", "Status", "Targets evaluated", "Targets failed", "Failure events"], rows, styles, wrapColumns: [3] };
+  return { name: safeSheetName("Rules", used), headers: ["Test file", "Target", "Rule", "Type", "What was tested", "Status", "Targets evaluated", "Targets failed", "Failure events"], rows, styles, wrapColumns: [4] };
 }
 
 function matrixRows(run: BadRowsRun): { rows: MatrixRow[]; aggregateIssues: ValidationIssue[] } {
@@ -353,16 +355,17 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
   const targetSheets: SheetDefinition[] = [];
   const groupedTargets = new Map<string, { label: string; entries: Array<{ run: BadRowsRun; index: number }> }>();
   runs.forEach((run, runIndex) => {
-    const label = targetLabel(run, runIndex);
+    const label = targetDisplayLabel(run, runIndex);
     const key = label.trim().toLocaleLowerCase();
     const group = groupedTargets.get(key) ?? { label, entries: [] };
     group.entries.push({ run, index: runIndex });
     groupedTargets.set(key, group);
     const matrix = matrixRows(run);
     aggregateCount += matrix.aggregateIssues.length;
-    for (const issue of matrix.aggregateIssues) aggregates.push([run.member ?? "", runLabel(run, runIndex), issueCheckId(issue), issue.message, issue.actual, issue.expected]);
+    for (const issue of matrix.aggregateIssues) aggregates.push([run.member ?? "", targetDisplayLabel(run, runIndex), issueCheckId(issue), issue.message, issue.actual, issue.expected]);
   });
-  const sortedTargets = [...groupedTargets.values()].sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }));
+  const sortedTargets = [...groupedTargets.values()].sort((left, right) =>
+    left.label.localeCompare(right.label, undefined, { sensitivity: "base" }) || (left.label < right.label ? -1 : left.label > right.label ? 1 : 0));
   for (const target of sortedTargets) {
     const entries = [...target.entries].sort((left, right) => testLabel(left.run, left.index, options).localeCompare(testLabel(right.run, right.index, options), undefined, { sensitivity: "base" }) || left.index - right.index);
     const rows = new Map<string, ConsolidatedMatrixRow>();
@@ -401,7 +404,7 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
     });
   }
   const readmeRows: Array<Array<EvidenceValue | undefined>> = [
-    ["Workbook", options.title], ["Exported UTC", new Date().toISOString()], ["Target results", runs.length], ["Targets with bad rows", targetSheets.length], ["Retained bad rows", badRowCount],
+    ["Workbook", options.title], ["Exported UTC", new Date().toISOString()], ["Target results", runs.length], ["Targets", unique(runs.map((run, index) => targetDisplayLabel(run, index))).join(", ")], ["Targets with bad rows", targetSheets.length], ["Retained bad rows", badRowCount],
     ["Package layout", "Overview summarizes every test and target. Rules explains configured checks. Each Bad sheet consolidates retained failing rows for one target across all test files. Aggregate Findings contains findings without a primary row."],
     ["Aggregate-only findings", aggregateCount], ["Matrix meaning", "FALSE (red) means this check failed the retained row. Blank means not failed in retained evidence, not applicable, or not provably evaluated for that row."],
     ["Merged rows", "A source row is merged across test files only when its source label, row number, and source values match. Check columns include the test file name so repeated rule IDs remain separate."],

@@ -578,7 +578,12 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
             status: run.status, rows: run.result?.rowCount, groups: run.result?.groupOutcomes, error: run.error,
             health: resultHealth(run.result, run.status, "graded") }); }
         });
-        return report.runs.map((run, index) => ({ ...run, target: labels[index] ?? run.table ?? files[Number(run.target)]?.label ?? run.target }));
+        return report.runs.map((run, index) => ({
+          ...run,
+          // runSuite refreshes SQL labels after the connection profile has been resolved.
+          // Keep that canonical value instead of replacing it with the pre-run profile name.
+          target: run.displayTarget ?? run.target ?? labels[index] ?? run.table ?? files[Number(run.target)]?.label
+        }));
       } finally { await panel.webview.postMessage({ type: "runState", running: false }); }
     }, (runs, key) => { completedRuns++; stale = false; resultsSource = "run"; importedResultsName = "";
       const completed = runs.map(r => ({ ...r, target: r.target ?? r.member }));

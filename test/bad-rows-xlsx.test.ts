@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { strFromU8, unzipSync } from "fflate";
-import { badRowsXlsx, contractCheckCatalog } from "../src/bad-rows-xlsx";
+import { badRowsXlsx, contractCheckCatalog, targetDisplayLabel } from "../src/bad-rows-xlsx";
 import { sqlServerTargetLabel } from "../src/core/sql-server-targets";
 import type { CsvContract, ValidationResult } from "../src/core/model";
 
@@ -33,6 +33,25 @@ const result: ValidationResult = {
 test("SQL target labels use the resolved execution endpoint and ignore display names", () => {
   assert.equal(sqlServerTargetLabel({ connection: "profile", resolvedConnection: { server: "sql01", database: "Sales" }, schema: "dbo", table: "Orders", name: "friendly name" }), "sql01.Sales.dbo.Orders");
   assert.equal(sqlServerTargetLabel({ connection: "unused", integratedConnection: { server: "sql02", database: "Warehouse" }, schema: "stage", table: "Orders" }), "sql02.Warehouse.stage.Orders");
+});
+
+test("validation package uses one canonical target label across reviewer sheets", () => {
+  const canonical = "sql01.Sales.dbo.Orders";
+  assert.equal(targetDisplayLabel({ target: canonical, displayTarget: canonical, member: "sql-test" }, 0), canonical);
+  const files = unzipSync(badRowsXlsx([{
+    member: "sql-test", target: canonical, displayTarget: canonical, status: "FAIL", result: {
+      ...result,
+      issues: [{ level: "file", code: "ROW_COUNT_MIN", message: "Too few rows.", actual: 0, expected: 1, evidence: { samples: [], aggregate: { actual: 0, expected: 1 } } }]
+    }
+  }], { title: "SQL package", checkCatalog: () => [{ id: "row-count-min", category: "File", description: "At least one row." }] }));
+  const overview = strFromU8(files["xl/worksheets/sheet1.xml"]);
+  const rules = strFromU8(files["xl/worksheets/sheet2.xml"]);
+  const aggregate = strFromU8(files["xl/worksheets/sheet3.xml"]);
+  const readme = strFromU8(files["xl/worksheets/sheet4.xml"]);
+  assert.equal((overview.match(new RegExp(canonical, "g")) ?? []).length, 1);
+  assert.match(rules, new RegExp(canonical));
+  assert.match(aggregate, new RegExp(canonical));
+  assert.match(readme, new RegExp(canonical));
 });
 
 test("bad-row workbook consolidates one target across test files with qualified sparse checks", () => {
