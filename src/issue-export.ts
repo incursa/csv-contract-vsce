@@ -32,14 +32,17 @@ export interface ValidationRunExport {
 }
 
 function evidenceColumns(runs: IssueExportRun[]): string[] {
-  return [...new Set(runs.flatMap(run => run.result?.issues.flatMap(issue => [
-    ...(issue.column ? [issue.column] : []), ...Object.keys(issue.group ?? {}),
-    ...Object.keys(issue.evidence?.aggregate ?? {}),
-    ...(issue.evidence?.samples.flatMap(sample => [
-      ...Object.keys(sample.primary?.values ?? {}),
-      ...(sample.related ?? []).flatMap(record => Object.keys(record.values))
-    ]) ?? [])
-  ]) ?? []))];
+  return [...new Set(runs.flatMap(run => [
+    ...(run.result?.issues.flatMap(issue => [
+      ...(issue.column ? [issue.column] : []), ...Object.keys(issue.group ?? {}),
+      ...Object.keys(issue.evidence?.aggregate ?? {}),
+      ...(issue.evidence?.samples.flatMap(sample => [
+        ...Object.keys(sample.primary?.values ?? {}),
+        ...(sample.related ?? []).flatMap(record => Object.keys(record.values))
+      ]) ?? [])
+    ]) ?? []),
+    ...(run.result?.examples?.flatMap(example => Object.keys(example.values)) ?? [])
+  ]))];
 }
 
 export function createValidationRunExport(contract: string, runs: IssueExportRun[], profile?: EvidenceProfile): ValidationRunExport {

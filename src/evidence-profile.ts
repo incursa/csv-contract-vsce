@@ -46,6 +46,14 @@ function masked(value: EvidenceValue, strategy: EvidenceMaskStrategy, seed: stri
   return "[REDACTED]";
 }
 
+function redactValues(values: Record<string, EvidenceValue>, profile: EvidenceProfile, seed: string): Record<string, EvidenceValue> {
+  const preview = policy(profile, Object.keys(values));
+  return Object.fromEntries(preview.included.map(column => {
+    const strategy = profile.mask?.[column];
+    return [column, strategy ? masked(values[column], strategy, seed) : values[column]];
+  }));
+}
+
 function policy(profile: EvidenceProfile | undefined, columns: string[]): EvidenceProfilePreview {
   // An omitted include list preserves the legacy full-row behavior. An
   // explicitly supplied list, including an empty one, is an allowlist.
@@ -81,11 +89,9 @@ export function evidenceProfileRedacts(profile: EvidenceProfile | undefined, col
 
 export function redactEvidenceRecord(record: FailureEvidenceRecord, profile: EvidenceProfile | undefined, seed = "default"): FailureEvidenceRecord {
   if (!profile) return record;
-  const columns = Object.keys(record.values);
-  const preview = policy(profile, columns);
-  const masks = profile.mask ?? {};
-  const values = Object.fromEntries(preview.included.map(column => [column, masks[column] ? masked(record.values[column], masks[column], profile.id ?? profile.name ?? "profile") : record.values[column]]));
-  return { ...record, values };
+  // The profile identity is the package-level salt: the same identifier must
+  // produce the same masked value in primary, related, and aggregate evidence.
+  return { ...record, values: redactValues(record.values, profile, profile.id ?? profile.name ?? "profile") };
 }
 
 export function redactFailureEvidence(evidence: FailureEvidence | undefined, profile: EvidenceProfile | undefined, seed = "default"): FailureEvidence | undefined {
@@ -113,13 +119,21 @@ export function redactValidationResult(result: ValidationResult | undefined, pro
       }));
     const actualIncluded = !issue.column || issuePolicy.included.includes(issue.column);
     const actualStrategy = issue.column ? profile.mask?.[issue.column] : undefined;
+    const redactIssueValue = (value: string | number | undefined): string | number | undefined => {
+      if (value === undefined || !issue.column || !actualIncluded) return actualIncluded ? value : undefined;
+      return actualStrategy ? (masked(value, actualStrategy, profile.id ?? profile.name ?? "profile") as string | number) : value;
+    };
     return {
       ...issue,
       group,
       evidence: redactFailureEvidence(issue.evidence, profile, `${seed}:issue:${index}`),
-      actual: !actualIncluded ? undefined : issue.actual === undefined || !actualStrategy ? issue.actual : masked(issue.actual, actualStrategy, profile.id ?? profile.name ?? "profile")
+      actual: redactIssueValue(issue.actual),
+      expected: redactIssueValue(issue.expected)
     };
-  }) };
+  }), examples: result.examples?.map((example, index) => ({
+    ...example,
+    values: redactValues(example.values, profile, profile.id ?? profile.name ?? "profile") as Record<string, string>
+  })) };
 }
 
 export function profileHasCredentials(profile: EvidenceProfile | undefined): boolean {

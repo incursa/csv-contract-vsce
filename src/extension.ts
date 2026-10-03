@@ -735,13 +735,16 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         const contract = read();
         const profile = contract.evidenceProfile;
         if (profileHasCredentials(profile)) throw new Error("Evidence profiles cannot contain connection credentials.");
-        const evidenceColumns = [...new Set(latestRuns.flatMap(run => run.result?.issues.flatMap(issue => [
-          ...Object.keys(issue.evidence?.aggregate ?? {}),
-          ...(issue.evidence?.samples.flatMap(sample => [
-            ...Object.keys(sample.primary?.values ?? {}),
-            ...(sample.related ?? []).flatMap(record => Object.keys(record.values))
-          ]) ?? [])
-        ]) ?? []))];
+        const evidenceColumns = [...new Set(latestRuns.flatMap(run => [
+          ...(run.result?.issues.flatMap(issue => [
+            ...Object.keys(issue.evidence?.aggregate ?? {}),
+            ...(issue.evidence?.samples.flatMap(sample => [
+              ...Object.keys(sample.primary?.values ?? {}),
+              ...(sample.related ?? []).flatMap(record => Object.keys(record.values))
+            ]) ?? [])
+          ]) ?? []),
+          ...(run.result?.examples?.flatMap(example => Object.keys(example.values)) ?? [])
+        ]))];
         const evidencePreview = previewEvidenceProfile(profile, evidenceColumns);
         if (profile && evidencePreview.warning) void vscode.window.showWarningMessage(evidencePreview.warning);
         if (profile) {
