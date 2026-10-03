@@ -159,6 +159,22 @@ function testLabel(run: BadRowsRun, index: number, options: BadRowsWorkbookOptio
   return run.member && run.member !== "contract" ? run.member : options.testLabel ?? run.member ?? `Test ${index + 1}`;
 }
 
+function compareText(left: string, right: string): number {
+  return left.localeCompare(right, undefined, { sensitivity: "base" }) || (left < right ? -1 : left > right ? 1 : 0);
+}
+
+/**
+ * Keep workbook rows stable even when the executor completes targets in a
+ * different order. The original index is retained for callbacks and is only
+ * the final tie-breaker for otherwise indistinguishable runs.
+ */
+function orderedRuns(runs: BadRowsRun[], options: BadRowsWorkbookOptions): Array<{ run: BadRowsRun; index: number }> {
+  return runs.map((run, index) => ({ run, index })).sort((left, right) =>
+    compareText(targetDisplayLabel(left.run, left.index), targetDisplayLabel(right.run, right.index)) ||
+    compareText(testLabel(left.run, left.index, options), testLabel(right.run, right.index, options)) ||
+    compareText(left.run.status ?? "", right.run.status ?? "") || left.index - right.index);
+}
+
 function humanize(value: string): string {
   return value.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[._/-]+/g, " ").replace(/\b\w/g, letter => letter.toUpperCase());
 }
@@ -198,7 +214,7 @@ function overviewSheet(runs: BadRowsRun[], options: BadRowsWorkbookOptions, used
     runs.map(run => run.evaluatedAt ?? run.result?.evaluatedAt).filter(Boolean).sort().at(-1), "Overall health uses the same graded calculation as the Workbench."]];
   const aggregateStyle = aggregateSampled ? 8 : healthStyle(aggregate.band);
   const styles: number[][] = [[6, 6, aggregateStyle, aggregateStyle, aggregateStyle]];
-  runs.forEach((run, index) => {
+  orderedRuns(runs, options).forEach(({ run, index }) => {
     const health = resultHealth(run.result, run.status, "graded");
     const sampled = run.result?.preview?.scope === "sample";
     rows.push([testLabel(run, index, options), runLabel(run, index), run.status ?? (run.result?.valid ? "PASS" : run.result ? "FAIL" : "ERROR"),
@@ -213,7 +229,7 @@ function overviewSheet(runs: BadRowsRun[], options: BadRowsWorkbookOptions, used
 
 function rulesSheet(runs: BadRowsRun[], options: BadRowsWorkbookOptions, used: Set<string>): SheetDefinition | undefined {
   const byTest = new Map<string, Array<{ run: BadRowsRun; index: number }>>();
-  runs.forEach((run, index) => {
+  orderedRuns(runs, options).forEach(({ run, index }) => {
     const label = testLabel(run, index, options);
     const values = byTest.get(label) ?? [];
     values.push({ run, index });
@@ -354,7 +370,7 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
   const aggregates: Array<Array<EvidenceValue | undefined>> = [];
   const targetSheets: SheetDefinition[] = [];
   const groupedTargets = new Map<string, { label: string; entries: Array<{ run: BadRowsRun; index: number }> }>();
-  runs.forEach((run, runIndex) => {
+  orderedRuns(runs, options).forEach(({ run, index: runIndex }) => {
     const label = targetDisplayLabel(run, runIndex);
     const key = label.trim().toLocaleLowerCase();
     const group = groupedTargets.get(key) ?? { label, entries: [] };
@@ -404,7 +420,7 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
     });
   }
   const readmeRows: Array<Array<EvidenceValue | undefined>> = [
-    ["Workbook", options.title], ["Exported UTC", new Date().toISOString()], ["Target results", runs.length], ["Targets", unique(runs.map((run, index) => targetDisplayLabel(run, index))).join(", ")], ["Targets with bad rows", targetSheets.length], ["Retained bad rows", badRowCount],
+    ["Workbook", options.title], ["Exported UTC", new Date().toISOString()], ["Target results", runs.length], ["Targets", unique(orderedRuns(runs, options).map(({ run, index }) => targetDisplayLabel(run, index))).join(", ")], ["Targets with bad rows", targetSheets.length], ["Retained bad rows", badRowCount],
     ["Package layout", "Overview summarizes every test and target. Rules explains configured checks. Each Bad sheet consolidates retained failing rows for one target across all test files. Aggregate Findings contains findings without a primary row."],
     ["Aggregate-only findings", aggregateCount], ["Matrix meaning", "FALSE (red) means this check failed the retained row. Blank means not failed in retained evidence, not applicable, or not provably evaluated for that row."],
     ["Merged rows", "A source row is merged across test files only when its source label, row number, and source values match. Check columns include the test file name so repeated rule IDs remain separate."],
@@ -413,7 +429,13 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
     ["Excel limits", "At most 1,048,575 data rows and 16,384 columns per sheet. Text cells are limited to 32,767 characters."]
   ];
   sheets.push(...targetSheets);
-  if (aggregates.length) sheets.push({ name: safeSheetName("Aggregate Findings", used), headers: ["Member", "Target", "Check", "Message", "Actual", "Expected"], rows: aggregates });
+  if (aggregates.length) {
+    aggregates.sort((left, right) => compareText(String(left[1] ?? ""), String(right[1] ?? "")) ||
+      compareText(String(left[0] ?? ""), String(right[0] ?? "")) ||
+      compareText(String(left[2] ?? ""), String(right[2] ?? "")) ||
+      compareText(String(left[3] ?? ""), String(right[3] ?? "")));
+    sheets.push({ name: safeSheetName("Aggregate Findings", used), headers: ["Member", "Target", "Check", "Message", "Actual", "Expected"], rows: aggregates });
+  }
   if (!targetSheets.length && !aggregates.length) sheets.push({ name: safeSheetName("No bad rows", used), headers: ["Status"], rows: [["No retained bad-row evidence was available in the selected results."]] });
   sheets.push({ name: readmeName, headers: ["Item", "Details"], rows: readmeRows, readme: true });
   return workbookPackage(sheets, options.title);
