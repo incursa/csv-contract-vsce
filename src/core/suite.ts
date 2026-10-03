@@ -236,6 +236,12 @@ export async function loadSuite(source: string, io: SuiteIO, ancestors: string[]
   return { id: suite.id, source, isSuite: true, members, ...(suite.crossChecks ? { crossChecks: suite.crossChecks } : {}), ...(suite.targetPolicy ? { targetPolicy: suite.targetPolicy } : {}), ...(warnings.length ? { warnings } : {}) };
 }
 
+function resolveSuiteSqlTargets(suite: LoadedSuite, member: LoadedSuite["members"][number]): ResolvedSqlServerTarget[] {
+  if (!member.contract) throw new Error(`Member '${member.id}' is unavailable.`);
+  return resolveSqlServerTargetPolicies(member.contract, true, suite.targetPolicy?.sqlServer, member.targetOverrides)
+    .filter(entry => entry.enabled).map(entry => entry.target);
+}
+
 export type SuiteStatus = "PASS" | "FAIL" | "ERROR" | "SKIPPED" | "CANCELED" | "SAMPLED";
 export interface SuiteRun {
   workId?: string;
@@ -379,7 +385,13 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
     if (controls.signal?.aborted) { runs.push({ ...base, status: "CANCELED", error: "Canceled before cross-check execution." }); continue; }
     if (stopped || (controls.members && !controls.members.some(id => id === check.from || id === check.to))) { runs.push({ ...base, status: "SKIPPED", error: "Cross-check outside selected scope or stopped by fail-fast." }); continue; }
     try {
-      const plan = planCrossCheck(check, suite.members);
+      const plan = planCrossCheck(check, suite.members, {
+        resolveSqlTargets: ({ id }) => {
+          const member = suite.members.find(candidate => candidate.id === id);
+          if (!member) throw new Error(`Cross-check ${check.id}: member '${id}' is unavailable.`);
+          return resolveSuiteSqlTargets(suite, member);
+        }
+      });
       if (!controls.crossExecutor) throw new Error("Cross-table execution is unavailable in this host.");
       const result = await controls.crossExecutor(plan, controls.signal);
       runs.push(controls.signal?.aborted ? { ...base, status: "CANCELED", error: "Cross-check canceled; result discarded." } : { ...base, status: result.valid ? "PASS" : "FAIL", result });
@@ -408,7 +420,13 @@ export function generateSuiteSql(suite: LoadedSuite) {
       ...generateSqlServerValidation(member.contract!, { target, includeDetailQueries: false, suite: { id: suite.id, member: member.id } }) }));
   });
   for (const check of suite.crossChecks ?? []) {
-    const plan = planCrossCheck(check, suite.members);
+    const plan = planCrossCheck(check, suite.members, {
+      resolveSqlTargets: ({ id }) => {
+        const member = suite.members.find(candidate => candidate.id === id);
+        if (!member) throw new Error(`Cross-check ${check.id}: member '${id}' is unavailable.`);
+        return resolveSuiteSqlTargets(suite, member);
+      }
+    });
     if (plan.mode !== "sql") throw new Error(`Standalone SQL generation cannot include CSV cross-check ${check.id}; run the suite instead.`);
     const parameters = [plan.from, plan.to].flatMap(target => target.scope ? [`DECLARE @${target.scope.parameter} nvarchar(max) = NULL; -- Set this participant's runtime scope value.\nIF @${target.scope.parameter} IS NULL THROW 50001, 'Set @${target.scope.parameter} before running this cross-check.', 1;`] : []).join("\n");
     batches.push({ member: `cross:${check.id}`, table: `${check.from} → ${check.to}`, connection: plan.from.connection, integratedConnection: plan.from.integratedConnection,

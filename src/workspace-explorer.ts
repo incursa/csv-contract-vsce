@@ -14,7 +14,7 @@ import {
   type ResolvedTarget
 } from "./vscode-targets";
 import { renderWorkspaceReportHtml } from "./workspace-report";
-import { hasSqlServerConnection, resolveSqlServerTargets, sqlServerConnectionKey, sqlServerConnectionLabel, sqlServerTargetLabel, type ResolvedSqlServerTarget } from "./core/sql-server-targets";
+import { hasSqlServerConnection, resolveSqlServerTargetPolicies, resolveSqlServerTargets, sqlServerConnectionKey, sqlServerConnectionLabel, sqlServerTargetLabel, type ResolvedSqlServerTarget } from "./core/sql-server-targets";
 import type { DesktopSqlServerRunner } from "./extension";
 import type { ResultColorMode } from "./core/result-health";
 
@@ -457,7 +457,10 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
           const text = await vscodeSuiteIO.read(uri.toString());
           if (isSuiteText(text)) {
             const suite = await loadSuite(uri.toString(), vscodeSuiteIO);
-            const sqlTargets = suite.members.flatMap((m) => m.contract ? resolveSqlServerTargets(m.contract, false) : []);
+            const sqlTargets = suite.members.flatMap((m) => m.contract
+              ? resolveSqlServerTargetPolicies(m.contract, false, suite.targetPolicy?.sqlServer, m.targetOverrides)
+                .filter(entry => entry.enabled).map(entry => entry.target)
+              : []);
             const targets = suite.members.flatMap((m) => m.contract ? configuredTargets(vscode.Uri.parse(m.source), m.contract) : []);
             snapshots.push({ uri, folder, relativePath, targetCount: sqlTargets.length + targets.length, targets, sqlTargets,
               parseError: suite.members.filter((m) => m.error).map((m) => m.id + ": " + m.error).join("; ") || undefined });

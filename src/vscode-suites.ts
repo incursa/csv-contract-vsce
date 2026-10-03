@@ -11,7 +11,7 @@ import { generateSuiteSql, loadSuite, parseSuite, runSuite, yamlDocument, type S
 import type { DesktopSqlServerRunner } from "./extension";
 import { renderWorkspaceReportHtml } from "./workspace-report";
 import { configuredTargets, readTargetText } from "./vscode-targets";
-import { resolveSqlServerTargets } from "./core/sql-server-targets";
+import { resolveSqlServerTargetPolicies } from "./core/sql-server-targets";
 import { parseCsv, validateCsv } from "./core/contract";
 import { renderSuiteWorkbench, type SuiteMemberProgress, type SuiteRunProgress, type SuiteTargetProgress } from "./suite-workbench";
 import { suiteErrorsCsv, updateSuiteConnection } from "./suite-actions";
@@ -134,7 +134,9 @@ function suiteProgressPlan(suite: LoadedSuite, selected?: string[]): SuiteRunPro
       const targets: SuiteTargetProgress[] = [];
       if (member.contract) {
         try {
-          targets.push(...resolveSqlServerTargets(member.contract, false).map(target => ({ label: target.name ?? `${target.schema}.${target.table}`, status: "queued" as const })));
+          targets.push(...resolveSqlServerTargetPolicies(member.contract, false, suite.targetPolicy?.sqlServer, member.targetOverrides)
+            .filter(entry => entry.enabled)
+            .map(entry => ({ label: entry.target.name ?? `${entry.target.schema}.${entry.target.table}`, status: "queued" as const })));
           targets.push(...configuredTargets(vscode.Uri.parse(member.source), member.contract).map(target => ({ label: target.label, status: "queued" as const })));
         } catch { /* The member-level execution result carries the configuration error. */ }
       }

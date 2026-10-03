@@ -35,11 +35,12 @@ export interface CsvCrossParticipant { contract: CsvContract; source: string; ta
 export interface CsvCrossPlan { mode: "csv"; check: CrossCheck; from: CsvCrossParticipant; to: CsvCrossParticipant }
 export type CrossPlan = SqlCrossPlan | CsvCrossPlan;
 export type CrossExecutor = (plan: CrossPlan, signal?: AbortSignal) => Promise<ValidationResult>;
-export function planCrossCheck(check: CrossCheck, members: { id: string; source?: string; contract?: CsvContract; error?: string }[]): CrossPlan {
+export function planCrossCheck(check: CrossCheck, members: { id: string; source?: string; contract?: CsvContract; error?: string }[],
+  options: { resolveSqlTargets?: (member: { id: string; contract: CsvContract }) => ResolvedSqlServerTarget[] } = {}): CrossPlan {
   const find = (id: string) => {
     const member = members.find(m => m.id === id);
     if (!member?.contract || member.error) throw new Error(`Cross-check ${check.id}: member '${id}' is unavailable.`);
-    const targets = resolveSqlServerTargets(member.contract);
+    const targets = options.resolveSqlTargets ? options.resolveSqlTargets({ id: member.id, contract: member.contract }) : resolveSqlServerTargets(member.contract);
     const files = (member.contract.targets ?? []).filter(target => target.enabled !== false);
     if (targets.length + files.length !== 1) throw new Error(`Cross-check ${check.id}: '${id}' requires exactly one enabled SQL or CSV target.`);
     return { target: targets[0], file: files[0], contract: member.contract, source: member.source ?? "" };
