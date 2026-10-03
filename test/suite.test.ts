@@ -11,6 +11,23 @@ import type { CsvContract } from "../src/core/model";
 import { assertCompleteSqlSummaries } from "../src/core/sql-server-results";
 import { spawnSync } from "node:child_process";
 import { resolveBaseline, resolveTargetBaseline, baselineReferences } from "../src/core/baseline";
+import { resolveSqlServerTargetPolicies } from "../src/core/sql-server-targets";
+
+test("suite SQL target policies resolve precedence without mutating contracts", () => {
+  const c = contract();
+  c.sqlServer = { targets: [
+    { id: "dev", environment: "dev", enabled: true, connection: "test", schema: "dbo", table: "Dev" },
+    { id: "prod", environment: "prod", enabled: false, connection: "test", schema: "dbo", table: "Prod" },
+    { id: "implicit", connection: "test", schema: "dbo", table: "Implicit" }
+  ] };
+  const before = structuredClone(c);
+  const resolved = resolveSqlServerTargetPolicies(c, true, { environments: { dev: false, prod: true } }, [{ target: "prod", enabled: false }]);
+  assert.deepEqual(resolved.map(entry => [entry.target.id, entry.enabled, entry.enabledSource]), [
+    ["dev", false, "suite-policy"], ["prod", false, "member-override"], ["implicit", true, "default"]
+  ]);
+  assert.deepEqual(c, before);
+  assert.throws(() => resolveSqlServerTargetPolicies(c, true, undefined, [{ target: "missing", enabled: true }]), /Unknown SQL Server target id/);
+});
 
 test("target baseline dependencies retain relative meaning through combine and split", async (t) => {
   const { root, master } = await fixture(t);

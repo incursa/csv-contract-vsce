@@ -39,6 +39,22 @@
     "defaults": {
       "$ref": "#/$defs/connection"
     },
+    "targetPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sqlServer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "environments": {
+              "type": "object",
+              "additionalProperties": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
     "members": {
       "type": "array",
       "minItems": 1,
@@ -71,6 +87,18 @@
           },
           "contract": {
             "$ref": "./csvtest.schema.json"
+          },
+          "targetOverrides": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["target", "enabled"],
+              "properties": {
+                "target": {"type": "string", "minLength": 1},
+                "enabled": {"type": "boolean"}
+              }
+            }
           },
           "name": {
             "type": "string"

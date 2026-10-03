@@ -1,8 +1,24 @@
 import type { CsvContract, SqlServerIntegratedConnection, SqlServerScope, SqlServerTableTarget } from "./model";
 
+export type SqlTargetEnabledSource = "member-override" | "suite-policy" | "contract" | "default";
+export interface SqlTargetPolicy {
+  environments?: Record<string, boolean>;
+}
+export interface SqlTargetOverride {
+  target: string;
+  enabled: boolean;
+}
+export interface ResolvedSqlServerTargetPolicy {
+  target: ResolvedSqlServerTarget;
+  enabled: boolean;
+  enabledSource: SqlTargetEnabledSource;
+}
+
 export interface ResolvedSqlServerTarget {
   baseline?: import("./baseline").BaselineBinding;
   name?: string;
+  id?: string;
+  environment?: string;
   connection: string;
   integratedConnection?: SqlServerIntegratedConnection;
   schema: string;
@@ -32,6 +48,12 @@ export function sqlServerTargetLabel(target: ResolvedSqlServerTarget): string {
 }
 
 export function resolveSqlServerTargets(contract: CsvContract, requireConnection = true): ResolvedSqlServerTarget[] {
+  return resolveSqlServerTargetPolicies(contract, requireConnection).filter(entry => entry.enabled).map(entry => entry.target);
+}
+
+/** Resolves target enablement without changing the contract. Suite policy is runtime-only. */
+export function resolveSqlServerTargetPolicies(contract: CsvContract, requireConnection = true,
+  policy?: SqlTargetPolicy, overrides?: SqlTargetOverride[]): ResolvedSqlServerTargetPolicy[] {
   const sqlServer = contract.sqlServer;
   if (!sqlServer) return [];
   const configured: SqlServerTableTarget[] = sqlServer.targets?.length
@@ -51,9 +73,18 @@ export function resolveSqlServerTargets(contract: CsvContract, requireConnection
   if (configured.length === 0) {
     throw new Error("sqlServer must declare schema and table, or at least one targets entry.");
   }
-  const candidates = configured.filter(target => target.enabled !== false);
-  if (candidates.length === 0) return [];
-  return candidates.map((target, index) => {
+  const ids = new Set<string>();
+  for (const target of configured) if (target.id !== undefined) {
+    if (ids.has(target.id)) throw new Error(`Duplicate SQL Server target id '${target.id}'.`);
+    ids.add(target.id);
+  }
+  for (const override of overrides ?? []) if (!ids.has(override.target)) throw new Error(`Unknown SQL Server target id '${override.target}'.`);
+  const overrideMap = new Map((overrides ?? []).map(override => [override.target, override.enabled]));
+  const candidates = configured.map((target, index) => ({ target, index })).filter(({ target }) =>
+    (target.id !== undefined && overrideMap.has(target.id)) ||
+    (target.environment !== undefined && policy?.environments?.[target.environment] !== undefined) ||
+    target.enabled !== false);
+  return candidates.map(({ target, index }) => {
     if (!target.schema?.trim() || !target.table?.trim()) {
       throw new Error(`SQL Server target ${index + 1} must declare non-empty schema and table names.`);
     }
@@ -78,9 +109,11 @@ export function resolveSqlServerTargets(contract: CsvContract, requireConnection
     const physicalNames = Object.values(columnMap).map((value) => value.trim().toLowerCase());
     const duplicatePhysical = physicalNames.filter((value, position) => physicalNames.indexOf(value) !== position);
     if (duplicatePhysical.length) throw new Error(`SQL Server target ${target.schema}.${target.table} maps more than one contract column to the same physical column.`);
-    return {
+    const resolvedTarget = {
       baseline: target.baseline,
       name: target.name,
+      id: target.id,
+      environment: target.environment,
       connection,
       integratedConnection: integrated ? {
         server: integrated.server.trim(),
@@ -95,6 +128,10 @@ export function resolveSqlServerTargets(contract: CsvContract, requireConnection
       columnMap: Object.keys(columnMap).length ? Object.fromEntries(Object.entries(columnMap).map(([column, physical]) => [column, physical.trim()])) : undefined,
       scope: target.scope ?? sqlServer.scope
     };
+    const override = target.id === undefined ? undefined : overrideMap.get(target.id);
+    const policyEnabled = target.environment === undefined ? undefined : policy?.environments?.[target.environment];
+    return { target: resolvedTarget, enabled: override ?? policyEnabled ?? target.enabled ?? true,
+      enabledSource: override !== undefined ? "member-override" : policyEnabled !== undefined ? "suite-policy" : target.enabled !== undefined ? "contract" : "default" };
   });
 }
 

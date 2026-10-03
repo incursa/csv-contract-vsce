@@ -723,6 +723,16 @@
           "default": true,
           "description": "Set to false to retain this SQL Server target without executing it."
         },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "description": "Stable target identity within this contract."
+        },
+        "environment": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Explicit deployment environment used by suite target policies."
+        },
         "name": {
           "type": "string",
           "minLength": 1

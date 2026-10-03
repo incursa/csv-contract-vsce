@@ -208,6 +208,10 @@ export interface SqlServerIntegratedConnection {
 }
 
 export interface SqlServerTableTarget {
+  /** Stable identity within the containing contract. */
+  id?: string;
+  /** Deployment environment used by suite policies; never inferred from connection details. */
+  environment?: string;
   /** Disabled targets remain configured but are excluded from execution. */
   enabled?: boolean;
   baseline?: import("./baseline").BaselineBinding;
