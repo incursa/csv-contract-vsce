@@ -621,12 +621,14 @@ function buildWorkbookSheets(runs: BadRowsRun[], options: BadRowsWorkbookOptions
     const entries = [...target.entries].sort((left, right) => testLabel(left.run, left.index, options).localeCompare(testLabel(right.run, right.index, options), undefined, { sensitivity: "base" }) || left.index - right.index);
     const rows = new Map<string, ConsolidatedMatrixRow>();
     const checkIds: string[] = [];
-    for (const { run, index } of entries) {
+    for (const [entryIndex, { run, index }] of entries.entries()) {
+      if ((entryIndex & 31) === 0) cancelled(options);
       const test = testLabel(run, index, options);
       const matrix = matrixRows(run);
       const configured = options.checkCatalog?.(run, index).map(check => check.id) ?? options.checkIds?.(run, index) ?? [];
       for (const checkId of unique([...configured, ...matrix.rows.flatMap(row => [...row.failed])])) checkIds.push(`${test}\u0000${checkId}`);
-      for (const item of matrix.rows) {
+      for (const [itemIndex, item] of matrix.rows.entries()) {
+        if ((itemIndex & 255) === 0) cancelled(options);
         const valuesKey = Object.entries(item.values).sort(([left], [right]) => left.localeCompare(right)).map(([column, value]) => [column, value]);
         const key = JSON.stringify([item.source, item.row ?? null, valuesKey]);
         const row = rows.get(key) ?? { source: item.source, row: item.row, values: item.values, related: {}, failed: new Set<string>(), tests: new Set<string>() };
