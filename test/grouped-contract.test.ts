@@ -112,6 +112,19 @@ test("generic grouped counts and direct ordered relations produce normal finding
   });
 });
 
+test("forbidPrior maxGap limits the forbidden match to adjacent ordered rows", () => {
+  const definition = simpleRelations();
+  definition.groupTests![0].contract!.orderedRules![0].relations!.push({
+    id: "no_adjacent_note", message: "A note cannot immediately follow another note.",
+    when: { column: "Event", operator: "equals", value: "NOTE" },
+    forbidPrior: { column: "Event", operator: "equals", value: "NOTE" }, maxGap: 0
+  });
+  const separated = [headers, "alpha,NOTE,2026-01-01,1,x", "alpha,CREATED,2026-01-01,2,x", "alpha,NOTE,2026-01-01,3,x"].join("\n") + "\n";
+  const adjacent = [headers, "alpha,CREATED,2026-01-01,1,x", "alpha,NOTE,2026-01-01,2,x", "alpha,NOTE,2026-01-01,3,x"].join("\n") + "\n";
+  assert.equal(validateCsv(definition, separated).issues.some(issue => issue.testId === "events/no_adjacent_note"), false);
+  assert.equal(validateCsv(definition, adjacent).issues.some(issue => issue.testId === "events/no_adjacent_note"), true);
+});
+
 test("string ordering uses sorted rows and child predicates resolve at run start", () => {
   const definition = simpleRelations();
   const childContract = definition.groupTests![0].contract!;

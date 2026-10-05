@@ -902,7 +902,11 @@
                 "isBlank",
                 "notBlank",
                 "equalsColumn",
-                "notEqualsColumn"
+                "notEqualsColumn",
+                "contains",
+                "notContains",
+                "startsWith",
+                "endsWith"
               ]
             },
             "value": {

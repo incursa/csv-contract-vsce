@@ -64,3 +64,49 @@ test("suite parsing rejects ambiguous relationship predicates and nondeterminist
   assert.throws(() => parseSuite(`${prefix}crossChecks: [{id: bad, kind: relationship, from: payments, to: classifications, keys: [{from: RecordId, to: RecordId}], expect: {side: from, column: Amount, operator: equals, value: 1}}]\n`), /lookup and expectation/);
   assert.throws(() => parseSuite(`${prefix}crossChecks: [{id: bad, kind: relationship, from: payments, to: classifications, keys: [{from: RecordId, to: RecordId}], lookup: {orderBy: [{column: ChangedAt, type: date}]}, expect: {side: from, column: Amount, operator: equals, value: 1, other: {side: to, column: Sequence}}}]\n`), /ambiguous/);
 });
+
+test("row selections rank, filter, join required participants, and normalize keys for CSV", () => {
+  const source: CsvContract = { version: 1, targets: [{ path: "source.csv" }], schema: { columns: {
+    Person: { presence: "required" }, Changed: { presence: "required" }, Status: { presence: "required" }, Company: { presence: "required" }
+  } } };
+  const target: CsvContract = { version: 1, targets: [{ path: "target.csv" }], schema: { columns: { Person: { presence: "required" } } } };
+  const eligibility: CsvContract = { version: 1, targets: [{ path: "eligibility.csv" }], schema: { columns: { Company: { presence: "required" }, Eligible: { presence: "required" } } } };
+  const check: CrossCheck = {
+    id: "selected-source", kind: "foreignKey", from: "source", to: "target",
+    keys: [{ from: "Person", to: "Person", normalizers: ["trim", "trimLeadingZeros"] }], nulls: "fail", evidence: "aggregate",
+    fromSelections: [{
+      partitionBy: ["Person"], orderBy: [{ column: "Changed", type: "date", direction: "desc" }],
+      having: { side: "from", column: "Status", operator: "equals", value: "A" },
+      requires: [{ member: "eligibility", keys: [{ from: "Company", to: "Company" }], where: { side: "to", column: "Eligible", operator: "equals", value: "Y" } }]
+    }]
+  };
+  const plan = planCrossCheck(check, [{ id: "source", contract: source }, { id: "target", contract: target }, { id: "eligibility", contract: eligibility }]);
+  assert.equal(plan.mode, "csv");
+  if (plan.mode !== "csv") throw new Error("Expected CSV plan.");
+  const result = evaluateCsvCrossCheck(plan,
+    parseCsv("Person,Changed,Status,Company\n0001,2025-01-01,I,10\n0001,2026-01-01,A,10\n0002,2026-01-01,A,20\n0003,2026-01-01,I,10\n"),
+    parseCsv("Person\n1\n"),
+    { eligibility: parseCsv("Company,Eligible\n10,Y\n20,N\n") });
+  assert.equal(result.issueCount, 0);
+  assert.equal(plan.check.evidence, "aggregate");
+});
+
+test("SQL row selections stay generic and use ranked and required member subqueries", () => {
+  const source: CsvContract = { version: 1, schema: { columns: {
+    Person: { presence: "required" }, Changed: { presence: "required" }, Status: { presence: "required" }, Company: { presence: "required" }
+  }, }, sqlServer: { connection: "portable", schema: "a", table: "Source" } };
+  const target: CsvContract = { version: 1, schema: { columns: { Person: { presence: "required" } }, }, sqlServer: { connection: "portable", schema: "b", table: "Target" } };
+  const eligibility: CsvContract = { version: 1, schema: { columns: { Company: { presence: "required" }, Eligible: { presence: "required" } }, }, sqlServer: { connection: "portable", schema: "c", table: "Eligibility" } };
+  const check: CrossCheck = { id: "selected-source-sql", kind: "foreignKey", from: "source", to: "target",
+    keys: [{ from: "Person", to: "Person", normalizers: ["trimLeadingZeros"] }], evidence: "aggregate",
+    fromSelections: [{ partitionBy: ["Person"], orderBy: [{ column: "Changed", type: "date", direction: "desc" }],
+      having: { side: "from", column: "Status", operator: "equals", value: "A" },
+      requires: [{ member: "eligibility", keys: [{ from: "Company", to: "Company" }] }] }] };
+  const plan = planCrossCheck(check, [{ id: "source", contract: source }, { id: "target", contract: target }, { id: "eligibility", contract: eligibility }]);
+  assert.equal(plan.mode, "sql");
+  if (plan.mode !== "sql") throw new Error("Expected SQL plan.");
+  assert.match(plan.sql, /ROW_NUMBER\(\) OVER \(PARTITION BY/);
+  assert.match(plan.sql, /EXISTS \(SELECT 1 FROM \[c\]\.\[Eligibility\]/);
+  assert.match(plan.sql, /PATINDEX\(N'%\[\^0\]%'/);
+  assert.equal(plan.detailSql, undefined);
+});

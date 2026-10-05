@@ -458,9 +458,12 @@ async function executeLoadedSuite(suite: LoadedSuite, runner?: DesktopSqlServerR
       const resolved = configuredTargets(vscode.Uri.parse(participant.source), { ...participant.contract, targets: [participant.target] })[0];
       return parseCsv(await readTargetText(resolved), participant.contract.csv);
     };
-    const [from, to] = await Promise.all([read(plan.from), read(plan.to)]);
+    const [from, to, participants] = await Promise.all([
+      read(plan.from), read(plan.to),
+      Promise.all(Object.entries(plan.participants).map(async ([id, participant]) => [id, await read(participant)] as const)).then(Object.fromEntries)
+    ]);
     signal?.throwIfAborted();
-    return evaluateCsvCrossCheck(plan, from, to);
+    return evaluateCsvCrossCheck(plan, from, to, participants);
   };
   return runSuite(suite, async (contract, target, source, _index, onProgress) => {
     if (!runner) throw new Error("Database suite execution requires the desktop extension host.");

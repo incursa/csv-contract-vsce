@@ -15,10 +15,12 @@
       "tolerance":{"type":"string","pattern":"^(?:0|[1-9]\\d{0,17})(?:\\.\\d{1,10})?$"},
       "valueColumns":{"type":"object","additionalProperties":false,"required":["from","to"],"properties":{"from":{"type":"string"},"to":{"type":"string"}}},
       "valueMappings":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["from","to"],"anyOf":[{"required":["blankTo"]},{"required":["otherwise"]}],"properties":{"from":{"type":"string"},"to":{"type":"string"},"blankTo":{"type":"string"},"otherwise":{"const":"preserve"}}}},
-      "from":{"type":"string"},"to":{"type":"string"},"nulls":{"enum":["ignore","fail"]},"severity":{"enum":["error","warning"]},"missing":{"enum":["fail","ignore"]},
+      "from":{"type":"string"},"to":{"type":"string"},"nulls":{"enum":["ignore","fail"]},"severity":{"enum":["error","warning"]},"missing":{"enum":["fail","ignore"]},"evidence":{"enum":["rows","aggregate"]},
       "lookup":{"type":"object","additionalProperties":false,"required":["orderBy"],"properties":{"orderBy":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["column","type"],"properties":{"column":{"type":"string","minLength":1},"type":{"enum":["date","number","string"]},"direction":{"enum":["asc","desc"]}}}}}},
+      "fromSelections":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/crossSelection"}},
+      "toSelections":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/crossSelection"}},
       "when":{"$ref":"#/$defs/crossPredicate"},"expect":{"$ref":"#/$defs/crossPredicate"},
-      "keys":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["from","to"],"properties":{"from":{"type":"string"},"to":{"type":"string"}}}}
+      "keys":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/crossKey"}}
     }}},
     "suiteVersion": {
       "const": 1
@@ -86,6 +88,14 @@
     }
   },
   "$defs": {
+    "crossKey": {"type":"object","additionalProperties":false,"required":["from","to"],"properties":{"from":{"type":"string"},"to":{"type":"string"},"normalizers":{"type":"array","minItems":1,"uniqueItems":true,"items":{"enum":["trim","lowercase","trimLeadingZeros"]}}}},
+    "crossOrder": {"type":"object","additionalProperties":false,"required":["column","type"],"properties":{"column":{"type":"string","minLength":1},"type":{"enum":["date","number","string"]},"direction":{"enum":["asc","desc"]}}},
+    "crossSelection": {"type":"object","additionalProperties":false,"properties":{
+      "where":{"$ref":"#/$defs/crossPredicate"},"having":{"$ref":"#/$defs/crossPredicate"},
+      "partitionBy":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string","minLength":1}},
+      "orderBy":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/crossOrder"}},
+      "requires":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["member","keys"],"properties":{"member":{"type":"string","minLength":1},"keys":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/crossKey"}},"where":{"$ref":"#/$defs/crossPredicate"}}}}
+    }},
     "crossPredicate": {
       "oneOf": [
         {"type":"object","additionalProperties":false,"required":["side","column","operator"],"properties":{"side":{"enum":["from","to"]},"column":{"type":"string","minLength":1},"operator":{"enum":["equals","notEquals","in","notIn","isNull","notNull","isBlank","notBlank","equalsColumn","notEqualsColumn","greaterThan","greaterThanOrEqual","lessThan","lessThanOrEqual","dateOnOrAfter","dateOnOrBefore","dateAfter","dateBefore"]},"value":{"type":["string","number"]},"values":{"type":"array","minItems":1,"items":{"type":"string"}},"valueType":{"enum":["string","number"]},"other":{"type":"object","additionalProperties":false,"required":["side","column"],"properties":{"side":{"enum":["from","to"]},"column":{"type":"string","minLength":1}}}}},

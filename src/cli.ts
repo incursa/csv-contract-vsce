@@ -268,8 +268,11 @@ async function testSqlServer(args: ParsedArgs): Promise<void> {
           if (plan.mode === "sql") return session.validateCross(plan);
           const read = async (participant: typeof plan.from) => withMaterializedTarget(resolveConfiguredTarget(participant.source, participant.target),
             { tempDirectory: args.tempDirectory ? resolve(args.tempDirectory) : undefined }, async localPath => parseCsv(await readFile(localPath, "utf8"), participant.contract.csv));
-          const [from, to] = await Promise.all([read(plan.from), read(plan.to)]);
-          return evaluateCsvCrossCheck(plan, from, to);
+          const [from, to, participants] = await Promise.all([
+            read(plan.from), read(plan.to),
+            Promise.all(Object.entries(plan.participants).map(async ([id, participant]) => [id, await read(participant)] as const)).then(Object.fromEntries)
+          ]);
+          return evaluateCsvCrossCheck(plan, from, to, participants);
         } }));
       } catch (error) {
         reports.push(await runSuite({ id: specInput, source: specInput, isSuite: true,

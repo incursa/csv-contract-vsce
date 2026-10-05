@@ -135,6 +135,7 @@ export class SqlServerValidationSession {
     const request = handle.pool.request();
     bindScope(request, handle.api, plan.from, fromValue);
     bindScope(request, handle.api, plan.to, toValue);
+    for (const target of Object.values(plan.participants)) bindScope(request, handle.api, target, resolveScopeValue(target));
     const result = await queryWithCancellation<{ FailureCount: number | string; PrimaryRowJson?: string | null; RelatedRowJson?: string | null }>(request, `${plan.sql}${plan.detailSql ? `\n${plan.detailSql}` : ""}`, signal);
     if (result.recordset.length !== 1) throw new Error("Cross-check did not return one aggregate summary.");
     const count = Number(result.recordset[0].FailureCount);

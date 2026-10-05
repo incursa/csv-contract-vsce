@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.23.0
+
+- Select cross-check rows with reusable prefilters, per-key ranking, postfilters, and unioned eligibility branches for both CSV and SQL Server participants.
+- Require matches from additional suite members before a source row participates, enabling generic three-file or three-table validation without embedded client SQL.
+- Normalize cross-check keys with portable trim, lowercase, and leading-zero removal operations.
+- Allow aggregate-only cross-check evidence and bounded `forbidPrior` gaps for immediate ordered-event validation.
+
 ## 0.22.0
 
 - Attach bounded primary-row snapshots to retained CSV and SQL findings and show them in an expandable **Row evidence** section.

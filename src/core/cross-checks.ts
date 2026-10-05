@@ -6,7 +6,7 @@ export interface CrossCheck {
   kind: "foreignKey" | "equalPopulation" | "equalTotal" | "rowReconciliation" | "relationship";
   from: string;
   to: string;
-  keys?: { from: string; to: string }[];
+  keys?: CrossKey[];
   valueColumns?: { from: string; to: string };
   valueMappings?: { from: string; to: string; blankTo?: string; otherwise?: "preserve" }[];
   /** Nonnegative decimal tolerance, retained as a literal string. */
@@ -17,6 +17,29 @@ export interface CrossCheck {
   when?: CrossPredicate;
   expect?: CrossPredicate;
   missing?: "fail" | "ignore";
+  evidence?: "rows" | "aggregate";
+  /** Optional reusable row-set shaping applied before the cross-check. Multiple selections are unioned. */
+  fromSelections?: CrossSelection[];
+  toSelections?: CrossSelection[];
+}
+export type CrossNormalizer = "trim" | "lowercase" | "trimLeadingZeros";
+export interface CrossKey { from: string; to: string; normalizers?: CrossNormalizer[] }
+export interface CrossOrder { column: string; type: "date" | "number" | "string"; direction?: "asc" | "desc" }
+export interface CrossRequiredMatch {
+  member: string;
+  keys: CrossKey[];
+  where?: CrossPredicate;
+}
+export interface CrossSelection {
+  /** Candidate filter evaluated before ranking. */
+  where?: CrossPredicate;
+  /** Partition columns used with orderBy to retain one row per group. */
+  partitionBy?: string[];
+  orderBy?: CrossOrder[];
+  /** Filter evaluated after ranking. */
+  having?: CrossPredicate;
+  /** Inner-match requirements against other suite members. */
+  requires?: CrossRequiredMatch[];
 }
 export interface CrossPredicateLeaf {
   side: "from" | "to";
@@ -30,9 +53,9 @@ export interface CrossPredicateLeaf {
   other?: { side: "from" | "to"; column: string };
 }
 export type CrossPredicate = CrossPredicateLeaf | { all: CrossPredicate[] } | { any: CrossPredicate[] };
-export interface SqlCrossPlan { mode: "sql"; check: CrossCheck; from: ResolvedSqlServerTarget; to: ResolvedSqlServerTarget; sql: string; detailSql?: string }
+export interface SqlCrossPlan { mode: "sql"; check: CrossCheck; from: ResolvedSqlServerTarget; to: ResolvedSqlServerTarget; participants: Record<string, ResolvedSqlServerTarget>; sql: string; detailSql?: string }
 export interface CsvCrossParticipant { contract: CsvContract; source: string; target: CsvTarget }
-export interface CsvCrossPlan { mode: "csv"; check: CrossCheck; from: CsvCrossParticipant; to: CsvCrossParticipant }
+export interface CsvCrossPlan { mode: "csv"; check: CrossCheck; from: CsvCrossParticipant; to: CsvCrossParticipant; participants: Record<string, CsvCrossParticipant> }
 export type CrossPlan = SqlCrossPlan | CsvCrossPlan;
 export type CrossExecutor = (plan: CrossPlan, signal?: AbortSignal) => Promise<ValidationResult>;
 export function planCrossCheck(check: CrossCheck, members: { id: string; source?: string; contract?: CsvContract; error?: string }[]): CrossPlan {
@@ -45,22 +68,31 @@ export function planCrossCheck(check: CrossCheck, members: { id: string; source?
     return { target: targets[0], file: files[0], contract: member.contract, source: member.source ?? "" };
   };
   const left = find(check.from), right = find(check.to);
-  validateCrossCheckColumns(check, left.contract, right.contract);
-  if (left.file || right.file) {
-    if (!left.file || !right.file) throw new Error(`Cross-check ${check.id}: mixed CSV and SQL participants are not supported; use two CSV targets or two compatible SQL targets.`);
-    return { mode: "csv", check, from: { contract: left.contract, source: left.source, target: left.file }, to: { contract: right.contract, source: right.source, target: right.file } };
+  const requiredIds = [...new Set([...(check.fromSelections ?? []), ...(check.toSelections ?? [])].flatMap(selection => selection.requires ?? []).map(required => required.member))];
+  const required = Object.fromEntries(requiredIds.map(id => [id, find(id)]));
+  validateCrossCheckColumns(check, left.contract, right.contract, Object.fromEntries(Object.entries(required).map(([id, participant]) => [id, participant.contract])));
+  if (left.file || right.file || Object.values(required).some(participant => participant.file)) {
+    if (!left.file || !right.file || Object.values(required).some(participant => !participant.file)) throw new Error(`Cross-check ${check.id}: mixed CSV and SQL participants are not supported; use compatible participants of one source type.`);
+    return { mode: "csv", check,
+      from: { contract: left.contract, source: left.source, target: left.file },
+      to: { contract: right.contract, source: right.source, target: right.file },
+      participants: Object.fromEntries(Object.entries(required).map(([id, participant]) => [id, { contract: participant.contract, source: participant.source, target: participant.file! }])) };
   }
   // Parameter namespaces are independent even when both contracts call theirs LoadId.
   const scoped = (target: ResolvedSqlServerTarget, parameter: string): ResolvedSqlServerTarget => ({ ...target, scope: target.scope ? { ...target.scope, parameter } : undefined });
   const from = scoped(left.target!, "cross_from"), to = scoped(right.target!, "cross_to");
-  if (JSON.stringify(from.integratedConnection ?? from.connection) !== JSON.stringify(to.integratedConnection ?? to.connection)) throw new Error(`Cross-check ${check.id}: targets must use the same connection and database.`);
+  const participants = Object.fromEntries(Object.entries(required).map(([id, participant], index) => [id, scoped(participant.target!, `cross_required_${index}`)]));
+  const connection = JSON.stringify(from.integratedConnection ?? from.connection);
+  if ([to, ...Object.values(participants)].some(target => JSON.stringify(target.integratedConnection ?? target.connection) !== connection)) throw new Error(`Cross-check ${check.id}: targets must use the same connection and database.`);
   const object = (t: ResolvedSqlServerTarget) => {
     const name = `${sqlIdentifier(t.schema)}.${sqlIdentifier(t.table)}`;
     return t.scope ? `(SELECT * FROM ${name} WHERE CONVERT(nvarchar(max), ${sqlIdentifier(physicalSqlServerColumn(t, t.scope.column))}) = CONVERT(nvarchar(max), @${t.scope.parameter}))` : name;
   };
+  const fromObject = selectedSqlObject(check, "from", from, to, participants, object);
+  const toObject = selectedSqlObject(check, "to", from, to, participants, object);
   let sql: string;
   let detailSql: string | undefined;
-  if (check.kind === "equalPopulation") sql = `SELECT ABS((SELECT COUNT_BIG(*) FROM ${object(from)} AS a) - (SELECT COUNT_BIG(*) FROM ${object(to)} AS b)) AS FailureCount;`;
+  if (check.kind === "equalPopulation") sql = `SELECT ABS((SELECT COUNT_BIG(*) FROM ${fromObject} AS a) - (SELECT COUNT_BIG(*) FROM ${toObject} AS b)) AS FailureCount;`;
   else if (check.kind === "equalTotal") {
     const columns = check.valueColumns;
     if (!columns || !left.contract.schema.columns[columns.from] || !right.contract.schema.columns[columns.to]) throw new Error(`Cross-check ${check.id}: equalTotal requires declared valueColumns.`);
@@ -69,20 +101,21 @@ export function planCrossCheck(check: CrossCheck, members: { id: string; source?
     const aggregate = (target: ResolvedSqlServerTarget, column: string) => {
       const field = sqlIdentifier(physicalSqlServerColumn(target, column));
       // Invalid values must not disappear through SUM's null-elision behavior.
-      return `SELECT CAST(COALESCE(SUM(TRY_CONVERT(decimal(28,10), ${field})), 0) AS decimal(28,10)) AS Total, SUM(CAST(CASE WHEN ${field} IS NULL THEN ${check.nulls === "fail" ? 1 : 0} WHEN NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(max), ${field}))), N'') IS NULL OR TRY_CONVERT(decimal(28,10), ${field}) IS NULL THEN 1 ELSE 0 END AS bigint)) AS Invalid FROM ${object(target)} AS scoped_total`;
+      const source = target === from ? fromObject : toObject;
+      return `SELECT CAST(COALESCE(SUM(TRY_CONVERT(decimal(28,10), ${field})), 0) AS decimal(28,10)) AS Total, SUM(CAST(CASE WHEN ${field} IS NULL THEN ${check.nulls === "fail" ? 1 : 0} WHEN NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(max), ${field}))), N'') IS NULL OR TRY_CONVERT(decimal(28,10), ${field}) IS NULL THEN 1 ELSE 0 END AS bigint)) AS Invalid FROM ${source} AS scoped_total`;
     };
     sql = `SELECT CASE WHEN COALESCE(a.Invalid,0) + COALESCE(b.Invalid,0) > 0 OR ABS(a.Total-b.Total) > CAST('${tolerance}' AS decimal(38,10)) THEN 1 ELSE 0 END AS FailureCount FROM (${aggregate(from, columns.from)}) a CROSS JOIN (${aggregate(to, columns.to)}) b;`;
   }
   else if (check.kind === "foreignKey") {
     if (!check.keys?.length) throw new Error(`Cross-check ${check.id}: foreignKey requires keys.`);
     for (const key of check.keys) if (!left.contract.schema.columns[key.from] || !right.contract.schema.columns[key.to]) throw new Error(`Cross-check ${check.id}: undeclared key column.`);
-    const keys = check.keys.map(k => ({ from: `a.${sqlIdentifier(physicalSqlServerColumn(from, k.from))}`, to: `b.${sqlIdentifier(physicalSqlServerColumn(to, k.to))}` }));
+    const keys = check.keys.map(k => ({ from: normalizedSql(`a.${sqlIdentifier(physicalSqlServerColumn(from, k.from))}`, k.normalizers), to: normalizedSql(`b.${sqlIdentifier(physicalSqlServerColumn(to, k.to))}`, k.normalizers) }));
     const present = keys.map(k => `${k.from} IS NOT NULL`).join(" AND ");
     const equality = keys.map(k => `${k.from} = ${k.to}`).join(" AND ");
-    const missing = `NOT EXISTS (SELECT 1 FROM ${object(to)} AS b WHERE ${equality})`;
+    const missing = `NOT EXISTS (SELECT 1 FROM ${toObject} AS b WHERE ${equality})`;
     const failure = check.nulls === "fail" ? `NOT (${present}) OR (${missing})` : `(${present}) AND (${missing})`;
-    sql = `SELECT COUNT_BIG(*) AS FailureCount FROM ${object(from)} AS a WHERE ${failure};`;
-    detailSql = `SELECT TOP (100) (SELECT a.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS PrimaryRowJson, CAST(NULL AS nvarchar(max)) AS RelatedRowJson FROM ${object(from)} AS a WHERE ${failure};`;
+    sql = `SELECT COUNT_BIG(*) AS FailureCount FROM ${fromObject} AS a WHERE ${failure};`;
+    detailSql = `SELECT TOP (100) (SELECT a.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS PrimaryRowJson, CAST(NULL AS nvarchar(max)) AS RelatedRowJson FROM ${fromObject} AS a WHERE ${failure};`;
   }
   else if (check.kind === "rowReconciliation") {
     if (!check.keys?.length || !check.valueMappings?.length) throw new Error(`Cross-check ${check.id}: rowReconciliation requires keys and valueMappings.`);
@@ -91,7 +124,7 @@ export function planCrossCheck(check: CrossCheck, members: { id: string; source?
       if (!left.contract.schema.columns[mapping.from] || !right.contract.schema.columns[mapping.to]) throw new Error(`Cross-check ${check.id}: undeclared value-mapping column.`);
       if (mapping.blankTo === undefined && mapping.otherwise !== "preserve") throw new Error(`Cross-check ${check.id}: each value mapping requires blankTo, otherwise: preserve, or both.`);
     }
-    const keys = check.keys.map(k => ({ from: `a.${sqlIdentifier(physicalSqlServerColumn(from, k.from))}`, to: `b.${sqlIdentifier(physicalSqlServerColumn(to, k.to))}` }));
+    const keys = check.keys.map(k => ({ from: normalizedSql(`a.${sqlIdentifier(physicalSqlServerColumn(from, k.from))}`, k.normalizers), to: normalizedSql(`b.${sqlIdentifier(physicalSqlServerColumn(to, k.to))}`, k.normalizers) }));
     const present = keys.map(k => `${k.from} IS NOT NULL`).join(" AND ");
     const equality = keys.map(k => `${k.from} = ${k.to}`).join(" AND ");
     const literal = (value: string) => `N'${value.replaceAll("'", "''")}' COLLATE Latin1_General_100_BIN2`;
@@ -105,21 +138,21 @@ export function planCrossCheck(check: CrossCheck, members: { id: string; source?
       if (mapping.otherwise === "preserve") rules.push(`(NOT ${blank} AND CASE WHEN ${text(target)} = ${text(source)} THEN 0 ELSE 1 END = 1)`);
       return rules;
     });
-    const missing = `NOT EXISTS (SELECT 1 FROM ${object(to)} AS b WHERE ${equality})`;
-    const mismatch = `EXISTS (SELECT 1 FROM ${object(to)} AS b WHERE ${equality} AND (${violations.join(" OR ")}))`;
+    const missing = `NOT EXISTS (SELECT 1 FROM ${toObject} AS b WHERE ${equality})`;
+    const mismatch = `EXISTS (SELECT 1 FROM ${toObject} AS b WHERE ${equality} AND (${violations.join(" OR ")}))`;
     const failure = `(${missing}) OR (${mismatch})`;
-    sql = `SELECT COUNT_BIG(*) AS FailureCount FROM ${object(from)} AS a WHERE ${check.nulls === "fail" ? `NOT (${present}) OR (${failure})` : `(${present}) AND (${failure})`};`;
+    sql = `SELECT COUNT_BIG(*) AS FailureCount FROM ${fromObject} AS a WHERE ${check.nulls === "fail" ? `NOT (${present}) OR (${failure})` : `(${present}) AND (${failure})`};`;
     const detailEquality = equality.replaceAll("b.", "candidate.");
     const detailViolations = violations.join(" OR ").replaceAll("b.", "candidate.");
-    const selected = `OUTER APPLY (SELECT TOP (1) candidate.* FROM ${object(to)} AS candidate WHERE ${detailEquality} ORDER BY CASE WHEN ${detailViolations} THEN 0 ELSE 1 END) AS b`;
+    const selected = `OUTER APPLY (SELECT TOP (1) candidate.* FROM ${toObject} AS candidate WHERE ${detailEquality} ORDER BY CASE WHEN ${detailViolations} THEN 0 ELSE 1 END) AS b`;
     const matched = `b.${sqlIdentifier(physicalSqlServerColumn(to, check.keys[0].to))} IS NOT NULL`;
     const detailFailure = `(NOT (${matched})) OR (${violations.join(" OR ")})`;
     const detailWhere = check.nulls === "fail" ? `NOT (${present}) OR (${detailFailure})` : `(${present}) AND (${detailFailure})`;
-    detailSql = `SELECT TOP (100) (SELECT a.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS PrimaryRowJson, CASE WHEN ${matched} THEN (SELECT b.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) END AS RelatedRowJson FROM ${object(from)} AS a ${selected} WHERE ${detailWhere};`;
+    detailSql = `SELECT TOP (100) (SELECT a.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS PrimaryRowJson, CASE WHEN ${matched} THEN (SELECT b.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) END AS RelatedRowJson FROM ${fromObject} AS a ${selected} WHERE ${detailWhere};`;
   }
   else {
     if (!check.keys?.length || !check.expect || !check.lookup?.orderBy.length) throw new Error(`Cross-check ${check.id}: relationship requires keys, lookup.orderBy, and expect.`);
-    const keys = check.keys.map(k => ({ from: `a.${sqlIdentifier(physicalSqlServerColumn(from, k.from))}`, to: `candidate.${sqlIdentifier(physicalSqlServerColumn(to, k.to))}` }));
+    const keys = check.keys.map(k => ({ from: normalizedSql(`a.${sqlIdentifier(physicalSqlServerColumn(from, k.from))}`, k.normalizers), to: normalizedSql(`candidate.${sqlIdentifier(physicalSqlServerColumn(to, k.to))}`, k.normalizers) }));
     const present = keys.map(k => `${k.from} IS NOT NULL`).join(" AND ");
     const equality = keys.map(k => `${k.from} = ${k.to}`).join(" AND ");
     const order = (check.lookup?.orderBy ?? []).map(item => {
@@ -127,16 +160,68 @@ export function planCrossCheck(check: CrossCheck, members: { id: string; source?
       const expression = item.type === "date" ? `TRY_CONVERT(datetime2, ${column})` : item.type === "number" ? `TRY_CONVERT(decimal(38,10), ${column})` : column;
       return `${expression} ${(item.direction ?? "asc").toUpperCase()}`;
     }).join(", ");
-    const lookup = `OUTER APPLY (SELECT TOP (1) CONVERT(bit, 1) AS [__csv_contract_match], candidate.* FROM ${object(to)} AS candidate WHERE ${equality}${order ? ` ORDER BY ${order}` : ""}) AS b`;
+    const lookup = `OUTER APPLY (SELECT TOP (1) CONVERT(bit, 1) AS [__csv_contract_match], candidate.* FROM ${toObject} AS candidate WHERE ${equality}${order ? ` ORDER BY ${order}` : ""}) AS b`;
     const when = crossPredicateSql(check.when, from, to, "a", "b") ?? "1 = 1";
     const expect = crossPredicateSql(check.expect, from, to, "a", "b")!;
     const missing = check.missing === "ignore" ? "1 = 0" : "b.[__csv_contract_match] IS NULL";
     const violation = `(b.[__csv_contract_match] = 1 AND (${when}) AND NOT (${expect}))`;
     const failure = check.nulls === "fail" ? `NOT (${present}) OR (${missing}) OR ${violation}` : `((${present}) AND ((${missing}) OR ${violation}))`;
-    sql = `SELECT COUNT_BIG(*) AS FailureCount FROM ${object(from)} AS a ${lookup} WHERE ${failure};`;
-    detailSql = `SELECT TOP (100) (SELECT a.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS PrimaryRowJson, CASE WHEN b.[__csv_contract_match] = 1 THEN (SELECT b.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) END AS RelatedRowJson FROM ${object(from)} AS a ${lookup} WHERE ${failure};`;
+    sql = `SELECT COUNT_BIG(*) AS FailureCount FROM ${fromObject} AS a ${lookup} WHERE ${failure};`;
+    detailSql = `SELECT TOP (100) (SELECT a.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS PrimaryRowJson, CASE WHEN b.[__csv_contract_match] = 1 THEN (SELECT b.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) END AS RelatedRowJson FROM ${fromObject} AS a ${lookup} WHERE ${failure};`;
   }
-  return { mode: "sql", check, from, to, sql, detailSql };
+  return { mode: "sql", check, from, to, participants, sql, detailSql: check.evidence === "aggregate" ? undefined : detailSql };
+}
+
+function normalizedSql(expression: string, normalizers: CrossNormalizer[] = []): string {
+  return normalizers.reduce((current, normalizer) => {
+    const text = `CONVERT(nvarchar(max), ${current})`;
+    if (normalizer === "trim") return `LTRIM(RTRIM(${text}))`;
+    if (normalizer === "lowercase") return `LOWER(${text})`;
+    return `(CASE WHEN ${text} NOT LIKE N'%[^0]%' THEN N'0' ELSE SUBSTRING(${text}, PATINDEX(N'%[^0]%', ${text}), LEN(${text})) END)`;
+  }, expression);
+}
+
+function selectedSqlObject(
+  check: CrossCheck,
+  side: "from" | "to",
+  from: ResolvedSqlServerTarget,
+  to: ResolvedSqlServerTarget,
+  participants: Record<string, ResolvedSqlServerTarget>,
+  object: (target: ResolvedSqlServerTarget) => string
+): string {
+  const selections = side === "from" ? check.fromSelections : check.toSelections;
+  const target = side === "from" ? from : to;
+  if (!selections?.length) return object(target);
+  const branch = (selection: CrossSelection, index: number): string => {
+    const baseAlias = `selection_${index}`;
+    const where = crossPredicateSql(selection.where, from, to, side === "from" ? baseAlias : "unused_from", side === "to" ? baseAlias : "unused_to") ?? "1 = 1";
+    const required = (selection.requires ?? []).map((match, requiredIndex) => {
+      const requiredTarget = participants[match.member];
+      const alias = `required_${index}_${requiredIndex}`;
+      const equality = match.keys.map(key => {
+        const sourceColumn = `${baseAlias}.${sqlIdentifier(physicalSqlServerColumn(target, key.from))}`;
+        const requiredColumn = `${alias}.${sqlIdentifier(physicalSqlServerColumn(requiredTarget, key.to))}`;
+        return `${normalizedSql(sourceColumn, key.normalizers)} = ${normalizedSql(requiredColumn, key.normalizers)}`;
+      }).join(" AND ");
+      const predicate = crossPredicateSql(match.where, target, requiredTarget, baseAlias, alias) ?? "1 = 1";
+      return `EXISTS (SELECT 1 FROM ${object(requiredTarget)} AS ${alias} WHERE ${equality} AND (${predicate}))`;
+    });
+    const candidate = [where, ...required].map(item => `(${item})`).join(" AND ");
+    if (!selection.partitionBy?.length) {
+      const having = crossPredicateSql(selection.having, from, to, side === "from" ? baseAlias : "unused_from", side === "to" ? baseAlias : "unused_to") ?? "1 = 1";
+      return `SELECT ${baseAlias}.* FROM ${object(target)} AS ${baseAlias} WHERE ${candidate} AND (${having})`;
+    }
+    const partition = selection.partitionBy.map(column => `${baseAlias}.${sqlIdentifier(physicalSqlServerColumn(target, column))}`).join(", ");
+    const order = (selection.orderBy ?? []).map(item => {
+      const column = `${baseAlias}.${sqlIdentifier(physicalSqlServerColumn(target, item.column))}`;
+      const expression = item.type === "date" ? `TRY_CONVERT(datetime2, ${column})` : item.type === "number" ? `TRY_CONVERT(decimal(38,10), ${column})` : column;
+      return `${expression} ${(item.direction ?? "asc").toUpperCase()}`;
+    }).join(", ");
+    const rankedAlias = `ranked_${index}`;
+    const having = crossPredicateSql(selection.having, from, to, side === "from" ? rankedAlias : "unused_from", side === "to" ? rankedAlias : "unused_to") ?? "1 = 1";
+    return `SELECT ${rankedAlias}.* FROM (SELECT ${baseAlias}.*, ROW_NUMBER() OVER (PARTITION BY ${partition} ORDER BY ${order}) AS [__csv_contract_rank] FROM ${object(target)} AS ${baseAlias} WHERE ${candidate}) AS ${rankedAlias} WHERE ${rankedAlias}.[__csv_contract_rank] = 1 AND (${having})`;
+  };
+  return `(${selections.map(branch).join(" UNION ")})`;
 }
 
 function predicateLeaves(predicate: CrossPredicate | undefined): CrossPredicateLeaf[] {
@@ -175,7 +260,25 @@ function validateCrossPredicate(check: CrossCheck, predicate: CrossPredicate | u
     }
   }
 }
-function validateCrossCheckColumns(check: CrossCheck, from: CsvContract, to: CsvContract): void {
+function validateCrossCheckColumns(check: CrossCheck, from: CsvContract, to: CsvContract, participants: Record<string, CsvContract> = {}): void {
+  const validateSelections = (selections: CrossSelection[] | undefined, side: "from" | "to") => {
+    const contract = side === "from" ? from : to;
+    for (const selection of selections ?? []) {
+      validateCrossPredicate(check, selection.where, from, to);
+      validateCrossPredicate(check, selection.having, from, to);
+      if (!!selection.partitionBy?.length !== !!selection.orderBy?.length) throw new Error(`Cross-check ${check.id}: selection partitionBy and orderBy must be supplied together.`);
+      for (const column of selection.partitionBy ?? []) if (!contract.schema.columns[column]) throw new Error(`Cross-check ${check.id}: undeclared ${side} partition column '${column}'.`);
+      for (const order of selection.orderBy ?? []) if (!contract.schema.columns[order.column]) throw new Error(`Cross-check ${check.id}: undeclared ${side} selection order column '${order.column}'.`);
+      for (const required of selection.requires ?? []) {
+        const requiredContract = participants[required.member];
+        if (!requiredContract) throw new Error(`Cross-check ${check.id}: required member '${required.member}' is unavailable.`);
+        for (const key of required.keys) if (!contract.schema.columns[key.from] || !requiredContract.schema.columns[key.to]) throw new Error(`Cross-check ${check.id}: undeclared required-match key column.`);
+        validateCrossPredicate(check, required.where, contract, requiredContract);
+      }
+    }
+  };
+  validateSelections(check.fromSelections, "from");
+  validateSelections(check.toSelections, "to");
   if (check.kind === "equalPopulation") return;
   if (check.kind === "equalTotal") {
     if (!check.valueColumns || !from.schema.columns[check.valueColumns.from] || !to.schema.columns[check.valueColumns.to]) throw new Error(`Cross-check ${check.id}: equalTotal requires declared valueColumns.`);
@@ -238,15 +341,17 @@ function crossPredicateSql(predicate: CrossPredicate | undefined, from: Resolved
   }
 }
 
-export function evaluateCsvCrossCheck(plan: CsvCrossPlan, fromCsv: ParsedCsv, toCsv: ParsedCsv): ValidationResult {
-  if (fromCsv.parseErrors.length || toCsv.parseErrors.length) throw new Error(`Cross-check ${plan.check.id}: CSV parsing failed.`);
+export function evaluateCsvCrossCheck(plan: CsvCrossPlan, fromCsv: ParsedCsv, toCsv: ParsedCsv, participantCsv: Record<string, ParsedCsv> = {}): ValidationResult {
+  if ([fromCsv, toCsv, ...Object.values(participantCsv)].some(csv => csv.parseErrors.length)) throw new Error(`Cross-check ${plan.check.id}: CSV parsing failed.`);
   const objects = (csv: ParsedCsv) => csv.rows.map(row => Object.fromEntries(csv.headers.map((header, index) => [header, row[index] ?? ""])));
-  const fromRows = objects(fromCsv), toRows = objects(toCsv), check = plan.check;
+  const allFromRows = objects(fromCsv), allToRows = objects(toCsv), participantRows = Object.fromEntries(Object.entries(participantCsv).map(([id, csv]) => [id, objects(csv)])), check = plan.check;
   const rowNumber = new WeakMap<Record<string, string>, number>();
-  fromRows.forEach((row, index) => rowNumber.set(row, fromCsv.sourceRowNumbers[index]));
-  toRows.forEach((row, index) => rowNumber.set(row, toCsv.sourceRowNumbers[index]));
+  allFromRows.forEach((row, index) => rowNumber.set(row, fromCsv.sourceRowNumbers[index]));
+  allToRows.forEach((row, index) => rowNumber.set(row, toCsv.sourceRowNumbers[index]));
+  for (const [id, rows] of Object.entries(participantRows)) rows.forEach((row, index) => rowNumber.set(row, participantCsv[id].sourceRowNumbers[index]));
   const evidenceSamples: FailureEvidence["samples"] = [];
   const retain = (primary: Record<string, string>, related: Record<string, string>[] = []) => {
+    if (check.evidence === "aggregate") return;
     if (evidenceSamples.length >= 100) return;
     evidenceSamples.push({
       primary: { label: check.from, row: rowNumber.get(primary), values: primary },
@@ -283,7 +388,29 @@ export function evaluateCsvCrossCheck(plan: CsvCrossPlan, fromCsv: ParsedCsv, to
       default: throw new Error(`Unsupported CSV relationship operator '${predicate.operator}'.`);
     }
   };
-  const key = (row: Record<string, string>, mappings: { from: string; to: string }[], side: "from" | "to") => mappings.map(mapping => row[side === "from" ? mapping.from : mapping.to] ?? "").join("\u0000");
+  const normalize = (candidate: string, normalizers: CrossNormalizer[] = []) => normalizers.reduce((value, normalizer) => normalizer === "trim" ? value.trim() : normalizer === "lowercase" ? value.toLowerCase() : value.replace(/^0+(?=.)/, ""), candidate);
+  const key = (row: Record<string, string>, mappings: CrossKey[], side: "from" | "to") => mappings.map(mapping => normalize(row[side === "from" ? mapping.from : mapping.to] ?? "", mapping.normalizers)).join("\u0000");
+  const select = (rows: Record<string, string>[], selections: CrossSelection[] | undefined, side: "from" | "to") => {
+    if (!selections?.length) return rows;
+    const selected = new Set<Record<string, string>>();
+    for (const selection of selections) {
+      let candidates = rows.filter(row => evaluate(selection.where, side === "from" ? row : {}, side === "to" ? row : {}));
+      for (const required of selection.requires ?? []) {
+        const requiredRows = participantRows[required.member] ?? [];
+        const index = new Map<string, Record<string, string>[]>();
+        for (const requiredRow of requiredRows) { const id = key(requiredRow, required.keys, "to"); const group = index.get(id) ?? []; group.push(requiredRow); index.set(id, group); }
+        candidates = candidates.filter(row => (index.get(key(row, required.keys, "from")) ?? []).some(match => evaluate(required.where, row, match)));
+      }
+      if (selection.partitionBy?.length) {
+        const groups = new Map<string, Record<string, string>[]>();
+        for (const row of candidates) { const id = selection.partitionBy.map(column => row[column] ?? "").join("\u0000"); const group = groups.get(id) ?? []; group.push(row); groups.set(id, group); }
+        candidates = [...groups.values()].map(group => [...group].sort((a, b) => compareLookupRows(a, b, selection.orderBy!))[0]);
+      }
+      for (const row of candidates) if (evaluate(selection.having, side === "from" ? row : {}, side === "to" ? row : {})) selected.add(row);
+    }
+    return [...selected];
+  };
+  const fromRows = select(allFromRows, check.fromSelections, "from"), toRows = select(allToRows, check.toSelections, "to");
   if (check.kind === "equalPopulation") {
     const failures = Math.abs(fromRows.length - toRows.length);
     return crossResult(check, failures, failures ? { samples: [], aggregate: { fromRows: fromRows.length, toRows: toRows.length } } : undefined);
@@ -330,7 +457,7 @@ export function evaluateCsvCrossCheck(plan: CsvCrossPlan, fromCsv: ParsedCsv, to
     if (failed) retain(row, selected);
     return failed;
   }).length;
-  return crossResult(check, failures, failures ? { samples: evidenceSamples, totalSamples: failures, limited: evidenceSamples.length < failures } : undefined);
+  return crossResult(check, failures, failures ? { samples: evidenceSamples, aggregate: { failureCount: failures }, totalSamples: failures, limited: evidenceSamples.length < failures } : undefined);
 }
 function compareLookupRows(left: Record<string, string>, right: Record<string, string>, order: NonNullable<CrossCheck["lookup"]>["orderBy"]): number {
   for (const item of order) {
