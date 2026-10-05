@@ -223,6 +223,8 @@ test("streaming validation preserves test importance in graded health", async ()
     assert.equal(result.valid, false);
     assert.equal(result.issues.find((issue) => issue.testId === "email-lowercase")?.importance, 0.25);
     assert.equal(result.issues.find((issue) => issue.testId === "required-data")?.importance, 1);
+    assert.equal(result.ruleOutcomes?.find((outcome) => outcome.id === "email-lowercase")?.importance, 0.25);
+    assert.equal(result.ruleOutcomes?.find((outcome) => outcome.id === "required-data")?.importance, 1);
     assert.ok(resultHealth(result, "FAIL", "graded").score < 85);
   });
 });

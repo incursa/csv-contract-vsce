@@ -105,7 +105,7 @@ interface PreparedRowTest {
 interface PreparedRule {
   rule: ConditionalRule;
   valid: boolean;
-  outcome?: { id: string; name?: string; selected: number; passed: number; failed: number };
+  outcome?: { id: string; name?: string; selected: number; passed: number; failed: number; importance?: number };
 }
 
 interface PreparedGroupRule {
@@ -475,7 +475,8 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
   for (const prepared of state.rules) {
     if (!prepared.valid) continue;
     if (prepared.rule.when && !evaluatePredicate(prepared.rule.when, runtime)) continue;
-    const outcome = prepared.outcome ??= { id: prepared.rule.id, ...(prepared.rule.name ? { name: prepared.rule.name } : {}), selected: 0, passed: 0, failed: 0 };
+    const outcome = prepared.outcome ??= { id: prepared.rule.id, ...(prepared.rule.name ? { name: prepared.rule.name } : {}), selected: 0, passed: 0, failed: 0,
+      ...(prepared.rule.importance === undefined ? {} : { importance: prepared.rule.importance }) };
     outcome.selected++;
     if (evaluatePredicate(prepared.rule.expect, runtime)) { outcome.passed++; continue; }
     outcome.failed++;
@@ -566,7 +567,8 @@ function finalizeState(state: ContractState): ContractRunOutput {
     spec: state.input.spec,
     result: {
       valid: state.collector.errors === 0,
-      ruleOutcomes: state.rules.filter(r => r.valid).map(r => r.outcome ?? { id: r.rule.id, ...(r.rule.name ? { name: r.rule.name } : {}), selected: 0, passed: 0, failed: 0 }),
+      ruleOutcomes: state.rules.filter(r => r.valid).map(r => r.outcome ?? { id: r.rule.id, ...(r.rule.name ? { name: r.rule.name } : {}), selected: 0, passed: 0, failed: 0,
+        ...(r.rule.importance === undefined ? {} : { importance: r.rule.importance }) }),
       rowCount: state.rowCount,
       columnCount: state.headers.length,
       testCount: Object.keys(state.input.contract.schema.columns).length + (state.input.contract.rowTests?.length ?? 0) +
