@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parseContract, validateCsv } from "../src/core/contract";
+import { resultHealth } from "../src/core/result-health";
 import type { CsvContract } from "../src/core/model";
 
 function base(): CsvContract {
@@ -65,6 +66,27 @@ test("rejects undeclared extras only when configured", () => {
 test("parses the example YAML shape", () => {
   const contract = parseContract("version: 1\nschema:\n  columns:\n    A:\n      presence: required\n");
   assert.equal(contract.schema.columns.A.presence, "required");
+});
+
+test("weights CSV rule failures without changing validation or default behavior", () => {
+  const contract: CsvContract = {
+    version: 1,
+    schema: { columns: { Email: { presence: "required" }, Required: { presence: "required" } } },
+    rules: [
+      { id: "email-lowercase", importance: 0.25, expect: { column: "Email", operator: "matches", value: "^[a-z0-9._%+-]+@[a-z0-9.-]+$" } },
+      { id: "required-data", expect: { column: "Required", operator: "notBlank" } }
+    ]
+  };
+  const result = validateCsv(contract, "Email,Required\nAlice@Example.com,\n");
+  assert.equal(result.valid, false);
+  assert.equal(result.issues.find((issue) => issue.testId === "email-lowercase")?.importance, 0.25);
+  assert.equal(result.issues.find((issue) => issue.testId === "required-data")?.importance, undefined);
+  assert.equal(result.ruleOutcomes?.find((outcome) => outcome.id === "required-data")?.importance, undefined);
+  const weighted = resultHealth(result, "FAIL", "graded");
+  const minorOnly = validateCsv({ ...contract, rules: [contract.rules![0]] }, "Email,Required\nAlice@Example.com,ok\n");
+  const majorOnly = validateCsv({ ...contract, rules: [contract.rules![1]] }, "Email,Required\nok,\n");
+  assert.ok(resultHealth(minorOnly, "FAIL", "graded").score > resultHealth(majorOnly, "FAIL", "graded").score);
+  assert.ok(weighted.score < resultHealth(minorOnly, "FAIL", "graded").score);
 });
 
 test("conditional warning rules use numeric predicates without failing the contract", () => {

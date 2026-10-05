@@ -20,8 +20,8 @@ export function resultHealthTitle(health: ResultHealth): string {
 
 /**
  * Produces a presentation score without changing validation semantics.
- * A clean result is the only way to receive 100. Any finding is capped at 85
- * so a minor problem remains visually distinct from a perfect pass.
+ * A clean result is the only way to receive 100. Findings retain a graded
+ * score so importance remains visible while validation semantics stay binary.
  */
 export function resultHealth(result?: ValidationResult, status?: string, mode: ResultColorMode = "binary"): ResultHealth {
   const executionFailed = status === "ERROR" || status === "CANCELED" || !result;
@@ -30,7 +30,9 @@ export function resultHealth(result?: ValidationResult, status?: string, mode: R
     return { score: passed ? 100 : 0, band: passed ? "perfect" : "critical", label: passed ? "PASS" : status ?? "FAIL" };
   }
   if (executionFailed) return { score: 0, band: "critical", label: status ?? "ERROR" };
-  if (result.errorCount === 0 && result.warningCount === 0 && result.issueCount === 0) {
+  const hasOutcomeFailure = (result.ruleOutcomes ?? []).some(outcome => outcome.failed > 0) ||
+    (result.groupOutcomes ?? []).some(outcome => outcome.failed > 0);
+  if (result.errorCount === 0 && result.warningCount === 0 && result.issueCount === 0 && !hasOutcomeFailure) {
     return { score: 100, band: "perfect", label: "PASS" };
   }
 
@@ -56,7 +58,7 @@ export function resultHealth(result?: ValidationResult, status?: string, mode: R
   const weightedEvents = result.issues.reduce((total, issue) => total + (issue.importance ?? 1) * (issue.severity === "warning" ? 0.25 : 1), 0);
   const eventRate = Math.min(1, weightedEvents / Math.max(1, result.rowCount, result.issueCount));
   const impact = 0.65 * Math.sqrt(checkRate) + 0.35 * Math.sqrt(eventRate);
-  const score = Math.max(0, Math.min(85, Math.round(100 * (1 - impact))));
+  const score = Math.max(0, Math.round(100 * (1 - impact)));
   const band: ResultHealthBand = score >= 75 ? "attention" : score >= 45 ? "concerning" : "critical";
   return { score, band, label: result.valid ? "PASS WITH WARNINGS" : "FAIL" };
 }
@@ -71,7 +73,7 @@ export function aggregateResultHealth(
     ? { score: 100, band: "perfect", label: "PASS" }
     : { score: 0, band: "critical", label: health.some(item => item.label === "ERROR") ? "ERROR" : "FAIL" };
   const perfect = health.every(item => item.band === "perfect");
-  const score = perfect ? 100 : Math.min(85, Math.round(health.reduce((total, item) => total + item.score, 0) / health.length));
+  const score = perfect ? 100 : Math.round(health.reduce((total, item) => total + item.score, 0) / health.length);
   const band: ResultHealthBand = perfect ? "perfect" : score >= 75 ? "attention" : score >= 45 ? "concerning" : "critical";
   return { score, band, label: band === "perfect" ? "PASS" : entries.some(entry => entry.status === "ERROR") ? "ERROR" : "ISSUES" };
 }

@@ -12,7 +12,7 @@ test("graded health reserves perfect green for a completely clean result", () =>
   assert.deepEqual(resultHealth(result(), "PASS", "graded"), { score: 100, band: "perfect", label: "PASS" });
   const minor = resultHealth(result({ valid: false, issueCount: 1, errorCount: 1,
     issues: [{ level: "row", code: "VALUE_INVALID", testId: "value-valid", message: "Review this value." }] }), "FAIL", "graded");
-  assert.ok(minor.score <= 85);
+  assert.ok(minor.score < 100);
   assert.notEqual(minor.band, "perfect");
   assert.equal(resultHealthCategory(minor), "Limited impact");
   assert.match(resultHealthTitle(minor), /Health score \d+\/100/);
