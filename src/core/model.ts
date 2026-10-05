@@ -270,8 +270,8 @@ export interface SqlServerImportedSchema {
 }
 
 export type CsvTarget =
-  | { path: string; url?: never; enabled?: boolean }
-  | { url: string; path?: never; enabled?: boolean };
+  | { path: string; url?: never; enabled?: boolean; name?: string }
+  | { url: string; path?: never; enabled?: boolean; name?: string };
 
 export interface CsvContract {
   version: 1;

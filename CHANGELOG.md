@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.24.0
+
+- Reuse one logical suite member across identically named CSV or SQL targets with a suite `targetMatrix`.
+- Expand each logical cross-check once per matrix entry while retaining the selected target and environment in run and generated-SQL identities.
+- Rerun matrix-expanded failures through their original logical member dependencies without cloning contracts.
+
 ## 0.23.0
 
 - Select cross-check rows with reusable prefilters, per-key ranking, postfilters, and unioned eligibility branches for both CSV and SQL Server participants.

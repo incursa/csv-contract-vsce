@@ -62,6 +62,34 @@ validation also uses them. `name`, `description`, and opaque object `metadata`
 are supported on suites and members; contracts also support `metadata`.
 Metadata never changes execution behavior.
 
+## Target matrices
+
+Use `targetMatrix` when the same logical members and cross-checks must run across
+multiple equivalent environments. Every member declares a target with each matrix
+target name. Member rules run normally against all enabled targets; each logical
+cross-check is planned once per matrix entry using only the matching named target.
+
+```yaml
+targetMatrix:
+  - { id: east, name: East environment, target: East staging }
+  - { id: west, name: West environment, target: West staging }
+members:
+  - id: employees
+    contract:
+      version: 1
+      schema: { columns: { EmployeeId: { presence: required } } }
+      sqlServer:
+        targets:
+          - { name: East staging, connection: east, schema: staging, table: Employees }
+          - { name: West staging, connection: west, schema: staging, table: Employees }
+```
+
+Matrix IDs are appended to cross-check run identities, such as
+`cross:employee-department@east`. Target names must resolve to exactly one enabled
+CSV or SQL target in every participating member, including required third-source
+members. A matrix never combines environments or changes individual contract
+rules. Use separate logical members where schemas or policies differ.
+
 ## Connection precedence and secrets
 
 From highest to lowest: explicit `sqlServer.targets[i]` connection settings,

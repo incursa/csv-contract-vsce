@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseCsv } from "../src/core/contract";
-import { evaluateCsvCrossCheck, planCrossCheck, type CrossCheck } from "../src/core/cross-checks";
+import { crossResult, evaluateCsvCrossCheck, planCrossCheck, type CrossCheck } from "../src/core/cross-checks";
 import type { CsvContract } from "../src/core/model";
-import { parseSuite } from "../src/core/suite";
+import { generateSuiteSql, parseSuite, runSuite } from "../src/core/suite";
 
 const paymentColumns = { RecordId: { presence: "required" as const }, Amount: { presence: "required" as const }, EffectiveDate: { presence: "required" as const } };
 const classificationColumns = { RecordId: { presence: "required" as const }, Category: { presence: "required" as const }, ChangedAt: { presence: "required" as const }, Sequence: { presence: "required" as const } };
@@ -109,4 +109,25 @@ test("SQL row selections stay generic and use ranked and required member subquer
   assert.match(plan.sql, /EXISTS \(SELECT 1 FROM \[c\]\.\[Eligibility\]/);
   assert.match(plan.sql, /PATINDEX\(N'%\[\^0\]%'/);
   assert.equal(plan.detailSql, undefined);
+});
+
+test("a suite target matrix reuses logical members across matching target names", async () => {
+  const make = (schema: string): CsvContract => ({ version: 1, schema: { columns: { Id: { presence: "required" } } }, sqlServer: { targets: [
+    { name: "Environment A", connection: "portable", schema, table: "Items" },
+    { name: "Environment B", connection: "portable", schema, table: "Items" }
+  ] } });
+  const check: CrossCheck = { id: "shared-members", kind: "foreignKey", from: "left", to: "right", keys: [{ from: "Id", to: "Id" }] };
+  const members = [{ id: "left", source: "suite", contract: make("a") }, { id: "right", source: "suite", contract: make("b") }];
+  const selected = planCrossCheck(check, members, { targetName: "Environment B" });
+  assert.equal(selected.mode, "sql");
+  if (selected.mode !== "sql") throw new Error("Expected SQL plan.");
+  assert.match(selected.sql, /\[b\]\.\[Items\]/);
+  const report = await runSuite({ id: "matrix", source: "suite", isSuite: true, members, crossChecks: [check], targetMatrix: [
+    { id: "a", target: "Environment A" }, { id: "b", target: "Environment B" }
+  ] }, async () => crossResult(check, 0), false, undefined, { crossExecutor: async plan => crossResult(plan.check, 0) });
+  assert.deepEqual(report.runs.filter(run => run.member.startsWith("cross:")).map(run => run.member), ["cross:shared-members@a", "cross:shared-members@b"]);
+  const generated = generateSuiteSql({ id: "matrix", source: "suite", isSuite: true, members, crossChecks: [check], targetMatrix: [
+    { id: "a", target: "Environment A" }, { id: "b", target: "Environment B" }
+  ] });
+  assert.deepEqual(generated.batches.filter(batch => batch.member.startsWith("cross:")).map(batch => batch.member), ["cross:shared-members@a", "cross:shared-members@b"]);
 });

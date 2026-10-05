@@ -19,6 +19,7 @@ export interface SuiteConnection {
 }
 export interface ContractSuite {
   crossChecks?: CrossCheck[];
+  targetMatrix?: SuiteTargetMatrixEntry[];
   suiteVersion: 1;
   id: string;
   name?: string;
@@ -27,6 +28,7 @@ export interface ContractSuite {
   defaults?: SuiteConnection;
   members: { id: string; ref?: string; contract?: CsvContract; name?: string; description?: string; metadata?: Record<string, unknown> }[];
 }
+export interface SuiteTargetMatrixEntry { id: string; name?: string; target: string }
 export interface SuiteIO {
   read(location: string): Promise<string>;
   resolve(containing: string, reference: string): string;
@@ -41,6 +43,7 @@ export interface LoadedMember {
 }
 export interface LoadedSuite {
   crossChecks?: CrossCheck[];
+  targetMatrix?: SuiteTargetMatrixEntry[];
   id: string;
   source: string;
   isSuite: boolean;
@@ -146,7 +149,7 @@ function crossSelections(value: unknown, ids: Set<string>, context: string): voi
 export function parseSuite(text: string): ContractSuite {
   const suite = yamlDocument(text).toJS({ maxAliasCount: 100 }) as ContractSuite;
   if (!suite || suite.suiteVersion !== 1 || typeof suite.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(suite.id)) throw new Error("Suite requires suiteVersion: 1 and a non-empty id using letters, numbers, dots, underscores or hyphens.");
-  keys(suite, ["suiteVersion", "id", "name", "description", "metadata", "defaults", "members", "crossChecks"], `Suite ${suite.id}`);
+  keys(suite, ["suiteVersion", "id", "name", "description", "metadata", "defaults", "members", "crossChecks", "targetMatrix"], `Suite ${suite.id}`);
   if (suite.defaults) connectionSettings(suite.defaults, `Suite ${suite.id} defaults`);
   if (!Array.isArray(suite.members) || !suite.members.length) throw new Error(`Suite ${suite.id} requires at least one member.`);
   const ids = new Set<string>();
@@ -157,6 +160,16 @@ export function parseSuite(text: string): ContractSuite {
     keys(member, ["id", "ref", "contract", "name", "description", "metadata"], `Member ${member.id}`);
     if ((member.ref !== undefined) === (member.contract !== undefined)) throw new Error(`Member ${member.id}: declare exactly one of ref or contract.`);
     if (member.ref !== undefined && (typeof member.ref !== "string" || !member.ref.trim())) throw new Error(`Member ${member.id}: ref must be a non-empty file path.`);
+  }
+  if (suite.targetMatrix !== undefined) {
+    if (!Array.isArray(suite.targetMatrix) || !suite.targetMatrix.length) throw new Error(`Suite ${suite.id}: targetMatrix must be a non-empty array.`);
+    const matrixIds = new Set<string>();
+    for (const entry of suite.targetMatrix) {
+      if (!entry || typeof entry !== "object") throw new Error(`Suite ${suite.id}: invalid targetMatrix entry.`);
+      keys(entry, ["id", "name", "target"], `Suite ${suite.id} targetMatrix`);
+      if (typeof entry.id !== "string" || !/^[a-z0-9][a-z0-9._-]*$/.test(entry.id) || matrixIds.has(entry.id) || typeof entry.target !== "string" || !entry.target.trim() || entry.name !== undefined && typeof entry.name !== "string") throw new Error(`Suite ${suite.id}: invalid or duplicate targetMatrix entry.`);
+      matrixIds.add(entry.id);
+    }
   }
   const checks = new Set<string>();
   if (suite.crossChecks !== undefined && !Array.isArray(suite.crossChecks)) throw new Error("crossChecks must be an array.");
@@ -233,7 +246,7 @@ export async function loadSuite(source: string, io: SuiteIO, ancestors: string[]
       members.push({ id: member.id, source: location, error: errorDetails(error) });
     }
   }
-  return { id: suite.id, source, isSuite: true, members, ...(suite.crossChecks ? { crossChecks: suite.crossChecks } : {}) };
+  return { id: suite.id, source, isSuite: true, members, ...(suite.crossChecks ? { crossChecks: suite.crossChecks } : {}), ...(suite.targetMatrix ? { targetMatrix: suite.targetMatrix } : {}) };
 }
 
 export type SuiteStatus = "PASS" | "FAIL" | "ERROR" | "SKIPPED" | "CANCELED" | "SAMPLED";
@@ -373,12 +386,13 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
     }));
     outcomes.forEach(memberRuns => runs.push(...memberRuns));
   }
-  for (const check of suite.crossChecks ?? []) {
-    const base = { suite: suite.id, member: `cross:${check.id}`, spec: suite.source, target: `${check.from} → ${check.to}` };
+  for (const { check, matrix } of (suite.crossChecks ?? []).flatMap(check => (suite.targetMatrix?.length ? suite.targetMatrix : [undefined]).map(matrix => ({ check, matrix })))) {
+    const suffix = matrix ? `@${matrix.id}` : "";
+    const base = { suite: suite.id, member: `cross:${check.id}${suffix}`, spec: suite.source, target: `${check.from} → ${check.to}${matrix ? ` (${matrix.name ?? matrix.id})` : ""}` };
     if (controls.signal?.aborted) { runs.push({ ...base, status: "CANCELED", error: "Canceled before cross-check execution." }); continue; }
     if (stopped || (controls.members && !controls.members.some(id => id === check.from || id === check.to))) { runs.push({ ...base, status: "SKIPPED", error: "Cross-check outside selected scope or stopped by fail-fast." }); continue; }
     try {
-      const plan = planCrossCheck(check, suite.members);
+      const plan = planCrossCheck(check, suite.members, matrix ? { targetName: matrix.target } : undefined);
       if (!controls.crossExecutor) throw new Error("Cross-table execution is unavailable in this host.");
       const result = await controls.crossExecutor(plan, controls.signal);
       runs.push(controls.signal?.aborted ? { ...base, status: "CANCELED", error: "Cross-check canceled; result discarded." } : { ...base, status: result.valid ? "PASS" : "FAIL", result });
@@ -405,11 +419,11 @@ export function generateSuiteSql(suite: LoadedSuite) {
     return targets.map((target) => ({ member: member.id, table: `${target.schema}.${target.table}`, connection: target.connection, integratedConnection: target.integratedConnection,
       ...generateSqlServerValidation(member.contract!, { target, includeDetailQueries: false, suite: { id: suite.id, member: member.id } }) }));
   });
-  for (const check of suite.crossChecks ?? []) {
-    const plan = planCrossCheck(check, suite.members);
+  for (const { check, matrix } of (suite.crossChecks ?? []).flatMap(check => (suite.targetMatrix?.length ? suite.targetMatrix : [undefined]).map(matrix => ({ check, matrix })))) {
+    const plan = planCrossCheck(check, suite.members, matrix ? { targetName: matrix.target } : undefined);
     if (plan.mode !== "sql") throw new Error(`Standalone SQL generation cannot include CSV cross-check ${check.id}; run the suite instead.`);
     const parameters = [plan.from, plan.to, ...Object.values(plan.participants)].flatMap(target => target.scope ? [`DECLARE @${target.scope.parameter} nvarchar(max) = NULL; -- Set this participant's runtime scope value.\nIF @${target.scope.parameter} IS NULL THROW 50001, 'Set @${target.scope.parameter} before running this cross-check.', 1;`] : []).join("\n");
-    batches.push({ member: `cross:${check.id}`, table: `${check.from} → ${check.to}`, connection: plan.from.connection, integratedConnection: plan.from.integratedConnection,
+    batches.push({ member: `cross:${check.id}${matrix ? `@${matrix.id}` : ""}`, table: `${check.from} → ${check.to}${matrix ? ` (${matrix.name ?? matrix.id})` : ""}`, connection: plan.from.connection, integratedConnection: plan.from.integratedConnection,
       sql: parameters ? `${parameters}\n${plan.sql}` : plan.sql, ruleCount: 1, warnings: [], rules: [{ id: check.id, name: check.id, severity: check.severity ?? "error", code: "CROSS_CHECK_FAILED" }] });
   }
   const literal = (s: string): string => `N'${s.replaceAll("'", "''")}'`;

@@ -56,7 +56,7 @@ The aggregate result view keeps diagnostics redacted and bounded. Open complete 
 - Required or forbidden rows selected by exact values
 - Exact cell values for selected rows
 - Conditional row rules with nested predicates, cross-column checks, numeric comparisons, and warning severity
-- Aggregate suite reconciliation and deterministic cross-source relationship checks across either CSV files or SQL Server tables, including filtered/ranked row sets, required third-source matches, and portable key normalization
+- Aggregate suite reconciliation and deterministic cross-source relationship checks across either CSV files or SQL Server tables, including filtered/ranked row sets, required third-source matches, portable key normalization, and target matrices that reuse logical contracts across environments
 - Cross-row group completeness rules, such as requiring every employee/tax-area group to contain a full balance family
 - Child contracts applied to each group or the whole input, with typed ordered event checks and bounded findings
 - Exact header order when the receiving system requires a fixed layout

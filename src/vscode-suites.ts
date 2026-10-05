@@ -291,7 +291,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
       dependencies = nextDependencies;
       dependencyWatchers.set(dependencies);
       for (const [id, value] of fingerprints) if (previous.get(id) !== value) affected.add(id);
-      const crossFingerprint = JSON.stringify(suite.crossChecks ?? []);
+      const crossFingerprint = JSON.stringify([suite.crossChecks ?? [], suite.targetMatrix ?? []]);
       if (crossFingerprint !== previousCrossChecks) for (const check of suite.crossChecks ?? []) { affected.add(check.from); affected.add(check.to); }
       previousCrossChecks = crossFingerprint;
       let expanded = true;
@@ -320,7 +320,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
           if (message.type === "failed") {
             const checks = parseSuite(document.getText()).crossChecks ?? [];
             members = report?.runs.filter(r => r.status === "FAIL" || r.status === "ERROR").flatMap(r => {
-              const check = checks.find(c => `cross:${c.id}` === r.member);
+              const check = checks.find(c => r.member === `cross:${c.id}` || r.member.startsWith(`cross:${c.id}@`));
               return check ? [check.from, check.to] : [r.member];
             }) ?? [];
             members = [...new Set(members)];
@@ -383,7 +383,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
           const content = format === "CSV" ? suiteErrorsCsv(snapshot.runs, exportScope) : format === "JSON" ? JSON.stringify({ schema: "incursa.csv-suite-results/v1", ...snapshot }, null, 2) + "\n"
             : badRowsXlsx(scoped, { title: `${snapshot.suite} validation results`, checkCatalog: run => {
               if (run.member?.startsWith("cross:")) {
-                const id = run.member.slice("cross:".length);
+                const id = run.member.slice("cross:".length).split("@", 1)[0];
                 return [{ id, category: "Cross-source check", description: `Validate the configured relationship or reconciliation between ${run.table ?? "suite sources"}.` }];
               }
               const member = currentSuite?.members.find(candidate => candidate.id === run.member);
