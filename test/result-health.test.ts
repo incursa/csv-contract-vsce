@@ -42,3 +42,9 @@ test("importance changes graded impact without changing validation semantics", (
   const combined = result({ valid: false, issueCount: 2, errorCount: 2, issues: [issue("email-lowercase", 0.25), issue("required-email", 1)] });
   assert.ok(resultHealth(combined, "FAIL", "graded").score < resultHealth(minor, "FAIL", "graded").score);
 });
+
+test("graded health uses configured outcome importance when no finding carries the weight", () => {
+  const minor = result({ valid: false, ruleOutcomes: [{ id: "email-lowercase", selected: 1, passed: 0, failed: 1, importance: 0.25 }] });
+  const major = result({ valid: false, ruleOutcomes: [{ id: "required-data", selected: 1, passed: 0, failed: 1, importance: 1 }] });
+  assert.ok(resultHealth(minor, "FAIL", "graded").score > resultHealth(major, "FAIL", "graded").score);
+});

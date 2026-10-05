@@ -310,6 +310,7 @@ export interface GroupTest {
   name?: string;
   /** User-facing explanation shown when the group count fails. */
   message?: string;
+  importance?: number;
   groupBy: string[];
   groupCount?: CountExpectation;
   ref?: string;
@@ -352,7 +353,7 @@ export interface ValidationResult {
   examples?: { id: string; outcome: "passed" | "failed"; row: number; values: Record<string, string> }[];
   evaluatedAt?: string;
   ruleOutcomes?: { id: string; name?: string; selected: number; passed: number; failed: number; importance?: number }[];
-  groupOutcomes?: { id: string; name?: string; groups: number; passed: number; failed: number }[];
+  groupOutcomes?: { id: string; name?: string; groups: number; passed: number; failed: number; importance?: number }[];
   valid: boolean;
   rowCount: number;
   columnCount: number;

@@ -117,17 +117,18 @@ export class OrderedRuleEvaluator {
   private counts = new Map<string, number>();
   private ordinal = 0;
   private priorOrder?: string;
-  private outcomes = new Map<string, { id: string; selected: number; passed: number; failed: number }>();
+  private outcomes = new Map<string, { id: string; selected: number; passed: number; failed: number; importance?: number }>();
   private seen = new Map<string, { row: OrderedRow; ordinal: number }>();
   private pending = new Map<string, { items: Array<{ row: OrderedRow; ordinal: number }>; head: number }>();
 
   public constructor(private readonly rule: OrderedRule, private readonly options: CsvOptions,
     private readonly issue: (issue: ValidationIssue) => void) {
     validateOrderedDefinition(rule, new Set(orderedColumns(rule)));
-    for (const check of orderedChecks(rule)) this.outcomes.set(check.id, { id: check.id, selected: 0, passed: 0, failed: 0 });
+    for (const check of orderedChecks(rule)) this.outcomes.set(check.id, { id: check.id, selected: 0, passed: 0, failed: 0,
+      ...(check.importance === undefined ? {} : { importance: check.importance }) });
   }
 
-  public get ruleOutcomes(): { id: string; selected: number; passed: number; failed: number }[] { return [...this.outcomes.values()]; }
+  public get ruleOutcomes(): { id: string; selected: number; passed: number; failed: number; importance?: number }[] { return [...this.outcomes.values()]; }
 
   private check(check: OrderedCheck, ok: boolean, row: OrderedRow, detail = "", relatedRows: number[] = []): void {
     const outcome = this.outcomes.get(check.id)!;

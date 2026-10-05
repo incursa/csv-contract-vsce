@@ -299,7 +299,8 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       }
     }
     if (!validRule) continue;
-    const outcome = { id: rule.id, ...(rule.name ? { name: rule.name } : {}), selected: 0, passed: 0, failed: 0 };
+    const outcome = { id: rule.id, ...(rule.name ? { name: rule.name } : {}), selected: 0, passed: 0, failed: 0,
+      ...(rule.importance === undefined ? {} : { importance: rule.importance }) };
     ruleOutcomes.push(outcome);
     parsed.rows.forEach((row, rowIndex) => {
       const runtime = createPredicateRuntime((column) => row[headerIndex.get(column)!] ?? "", options, nullValues);
@@ -413,7 +414,8 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       groups.set(key, entries);
     });
     if (groupTest.groupBy.length === 0 && groups.size === 0) groups.set("[]", []);
-    const groupOutcome = { id: groupTest.id, ...(groupTest.name ? { name: groupTest.name } : {}), groups: groups.size, passed: 0, failed: 0 };
+    const groupOutcome = { id: groupTest.id, ...(groupTest.name ? { name: groupTest.name } : {}), groups: groups.size, passed: 0, failed: 0,
+      ...(groupTest.importance === undefined ? {} : { importance: groupTest.importance }) };
     groupOutcomes.push(groupOutcome);
     let groupChildTestCount = 0;
     for (const [key, indexes] of groups) {
@@ -445,7 +447,8 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       if (kind === "exact" && count === expected || kind === "min" && count >= expected || kind === "max" && count <= expected) continue;
       const diagnostic = `Group test ${groupTest.name ?? groupTest.id} found ${count} groups; expected ${kind} ${expected}.`;
       issues.push({ level: "file", code: "GROUP_COUNT", testId: groupTest.id,
-        ...rulePresentation(groupTest, diagnostic), actual: count, expected });
+        ...rulePresentation(groupTest, diagnostic), actual: count, expected,
+        ...(groupTest.importance === undefined ? {} : { importance: groupTest.importance }) });
     }
   }
 

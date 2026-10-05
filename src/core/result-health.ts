@@ -47,7 +47,8 @@ export function resultHealth(result?: ValidationResult, status?: string, mode: R
 
   const importanceFor = (id: string): number => {
     const weights = result.issues.filter(issue => (issue.testId ?? issue.code) === id).map(issue => issue.importance ?? 1);
-    return weights.length ? Math.max(...weights) : 1;
+    const outcome = [...(result.ruleOutcomes ?? []), ...(result.groupOutcomes ?? [])].find(item => item.id === id);
+    return weights.length ? Math.max(...weights) : outcome?.importance ?? 1;
   };
   const weightedChecks = [...errorChecks].reduce((total, id) => total + importanceFor(id), 0) +
     [...warningChecks].reduce((total, id) => total + importanceFor(id) * 0.25, 0);

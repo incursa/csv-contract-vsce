@@ -360,6 +360,7 @@
         "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
         "name": { "type": "string", "minLength": 1, "description": "Human-readable title used in results." },
         "message": { "type": "string", "minLength": 1, "description": "User-facing explanation shown when the group count fails." },
+        "importance": { "type": "number", "minimum": 0, "maximum": 1, "default": 1, "description": "Relative contribution of failures to graded health; defaults to 1." },
         "groupBy": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
         "groupCount": { "$ref": "#/$defs/count" },
         "ref": { "type": "string", "minLength": 1 },
