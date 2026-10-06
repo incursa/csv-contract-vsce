@@ -89,6 +89,21 @@ test("weights CSV rule failures without changing validation or default behavior"
   assert.ok(weighted.score < resultHealth(minorOnly, "FAIL", "graded").score);
 });
 
+test("weights row-test failures and rejects importance outside the documented range", () => {
+  const contract = base();
+  contract.rowTests = [{
+    id: "email-lowercase",
+    importance: 0.25,
+    select: { Company: "01" },
+    expect: { cells: { Company: { equals: "02" } } }
+  }];
+  const result = validateCsv(contract, "Company,EmployeeId\n01,000123\n");
+  assert.equal(result.valid, false);
+  assert.equal(result.issues.find((issue) => issue.testId === "email-lowercase")?.importance, 0.25);
+
+  assert.throws(() => parseContract(`version: 1\nschema:\n  columns:\n    A: { presence: required }\nrules:\n  - id: invalid\n    importance: 2\n    expect: { column: A, operator: notBlank }\n`), /Invalid contract|importance must be a finite number from 0 to 1/);
+});
+
 test("conditional warning rules use numeric predicates without failing the contract", () => {
   const contract: CsvContract = {
     version: 1,

@@ -18,6 +18,11 @@ export function orderedChecks(rule: OrderedRule): OrderedCheck[] {
 }
 
 export function validateOrderedDefinition(rule: OrderedRule, declared: Set<string>): void {
+  const validateImportance = (importance: number | undefined, context: string): void => {
+    if (importance !== undefined && (!Number.isFinite(importance) || importance < 0 || importance > 1)) {
+      throw new Error(`${context} importance must be a finite number from 0 to 1.`);
+    }
+  };
   for (const column of orderedColumns(rule)) if (!declared.has(column)) throw new Error(`Sequence ${rule.id} references undeclared column ${column}.`);
   if (rule.orderBy.length === 0) throw new Error(`Ordered rule ${rule.id} needs order keys.`);
   if (!rule.event && !rule.relations?.length) throw new Error(`Ordered rule ${rule.id} needs relations or an event sequence.`);
@@ -28,6 +33,7 @@ export function validateOrderedDefinition(rule: OrderedRule, declared: Set<strin
   if (rule.event && !rule.transitions!.some(t => t.from === rule.initial!.state && t.event === rule.initial!.event)) throw new Error(`Sequence ${rule.id} has no initial event transition.`);
   const ids = new Set<string>();
   for (const check of orderedChecks(rule)) {
+    validateImportance(check.importance, `Ordered check ${check.id}`);
     if (ids.has(check.id)) throw new Error(`Sequence ${rule.id} repeats rule id ${check.id}.`);
     ids.add(check.id);
   }

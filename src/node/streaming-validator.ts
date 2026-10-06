@@ -1,5 +1,6 @@
 import { baselineIssues, CsvSchemaObservation, resolveBaseline } from "../core/baseline";
 import { resolveEvaluation } from "../core/evaluation";
+import { validateContractSemantics } from "../core/contract";
 import { identityKey } from "../core/identity";
 import { fileSuiteIO } from "./suite-files";
 import { stat } from "node:fs/promises";
@@ -718,6 +719,7 @@ export async function validateCsvFile(
   options: StreamingValidationOptions = {}
 ): Promise<StreamingValidationOutput> {
   if (inputs.length === 0) throw new Error("At least one contract is required.");
+  inputs.forEach((input) => validateContractSemantics(input.contract));
   const evaluatedAt = options.evaluatedAt ?? new Date().toISOString();
   inputs = await Promise.all(inputs.map(async input => ({ ...input, contract: resolveEvaluation(await resolveBaseline(
     await resolveGroupContracts(input.contract, input.spec, fileSuiteIO), input.spec, fileSuiteIO), evaluatedAt) })));

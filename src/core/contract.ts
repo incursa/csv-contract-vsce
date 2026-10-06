@@ -41,10 +41,19 @@ export function parseContract(text: string): CsvContract {
   return value;
 }
 
-function validateContractSemantics(contract: CsvContract, depth = 0): void {
+export function validateContractSemantics(contract: CsvContract, depth = 0): void {
   if (depth > 4) throw new Error("Group contract nesting exceeds four levels.");
   const declared = new Set(Object.keys(contract.schema.columns));
   const ids = new Set<string>();
+  const validateImportance = (importance: number | undefined, context: string): void => {
+    if (importance !== undefined && (!Number.isFinite(importance) || importance < 0 || importance > 1)) {
+      throw new Error(`${context} importance must be a finite number from 0 to 1.`);
+    }
+  };
+  for (const test of contract.rowTests ?? []) validateImportance(test.importance, `Row test ${test.id}`);
+  for (const rule of contract.rules ?? []) validateImportance(rule.importance, `Rule ${rule.id}`);
+  for (const rule of contract.groupRules ?? []) validateImportance(rule.importance, `Group rule ${rule.id}`);
+  for (const test of contract.groupTests ?? []) validateImportance(test.importance, `Group test ${test.id}`);
   for (const rule of contract.orderedRules ?? []) {
     validateOrderedDefinition(rule, declared);
     for (const id of [rule.id, ...orderedChecks(rule).map(check => check.id)]) {
@@ -134,6 +143,7 @@ function isNull(value: string, options: Required<CsvOptions>): boolean {
 
 export function validateCsv(contract: CsvContract, csvText: string, nativeDates?: Record<string, (string | undefined)[]>, evaluatedAt = new Date().toISOString(), preview?: PreviewOptions): ValidationResult {
   if (preview) validatePreviewOptions(preview);
+  validateContractSemantics(contract);
   return { ...validateCsvResolved(resolveEvaluation(contract, evaluatedAt), csvText, nativeDates, preview), evaluatedAt,
     ...(preview ? { preview: { ...preview, scope: preview.rowLimit === undefined ? "complete" as const : "sample" as const } } : {}) };
 }
