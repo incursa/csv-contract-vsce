@@ -1,5 +1,6 @@
 import { baselineIssues, CsvSchemaObservation, resolveBaseline } from "../core/baseline";
 import { resolveEvaluation } from "../core/evaluation";
+import { validateContractSemantics } from "../core/contract";
 import { identityKey } from "../core/identity";
 import { fileSuiteIO } from "./suite-files";
 import { stat } from "node:fs/promises";
@@ -112,7 +113,7 @@ interface PreparedRowTest {
 interface PreparedRule {
   rule: ConditionalRule;
   valid: boolean;
-  outcome?: { id: string; name?: string; selected: number; passed: number; failed: number };
+  outcome?: { id: string; name?: string; selected: number; passed: number; failed: number; importance?: number };
 }
 
 interface PreparedGroupRule {
@@ -186,21 +187,21 @@ function countIssues(
   expectation: CountExpectation | undefined,
   level: "file" | "row",
   testId?: string,
-  presentation?: { id: string; name?: string; message?: string }
+  presentation?: { id: string; name?: string; message?: string; importance?: number }
 ): ValidationIssue[] {
   if (!expectation) return [];
   const issues: ValidationIssue[] = [];
   if (expectation.exact !== undefined && actual !== expectation.exact) {
     const diagnostic = `${name} is ${actual}; expected exactly ${expectation.exact}.`;
-    issues.push({ level, code: `${name.toUpperCase()}_EXACT`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.exact, testId });
+    issues.push({ level, code: `${name.toUpperCase()}_EXACT`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.exact, testId, ...(presentation?.importance === undefined ? {} : { importance: presentation.importance }) });
   }
   if (expectation.min !== undefined && actual < expectation.min) {
     const diagnostic = `${name} is ${actual}; expected at least ${expectation.min}.`;
-    issues.push({ level, code: `${name.toUpperCase()}_MIN`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.min, testId });
+    issues.push({ level, code: `${name.toUpperCase()}_MIN`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.min, testId, ...(presentation?.importance === undefined ? {} : { importance: presentation.importance }) });
   }
   if (expectation.max !== undefined && actual > expectation.max) {
     const diagnostic = `${name} is ${actual}; expected at most ${expectation.max}.`;
-    issues.push({ level, code: `${name.toUpperCase()}_MAX`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.max, testId });
+    issues.push({ level, code: `${name.toUpperCase()}_MAX`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.max, testId, ...(presentation?.importance === undefined ? {} : { importance: presentation.importance }) });
   }
   return issues;
 }
@@ -468,7 +469,8 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
           row: recordNumber,
           testId: prepared.test.id,
           actual: displayValue(actual),
-          expected: displayValue(expected)
+          expected: displayValue(expected),
+          ...(prepared.test.importance === undefined ? {} : { importance: prepared.test.importance })
         });
       }
     }
@@ -482,7 +484,8 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
   for (const prepared of state.rules) {
     if (!prepared.valid) continue;
     if (prepared.rule.when && !evaluatePredicate(prepared.rule.when, runtime)) continue;
-    const outcome = prepared.outcome ??= { id: prepared.rule.id, ...(prepared.rule.name ? { name: prepared.rule.name } : {}), selected: 0, passed: 0, failed: 0 };
+    const outcome = prepared.outcome ??= { id: prepared.rule.id, ...(prepared.rule.name ? { name: prepared.rule.name } : {}), selected: 0, passed: 0, failed: 0,
+      ...(prepared.rule.importance === undefined ? {} : { importance: prepared.rule.importance }) };
     outcome.selected++;
     if (evaluatePredicate(prepared.rule.expect, runtime)) { outcome.passed++; continue; }
     outcome.failed++;
@@ -493,7 +496,8 @@ function processRow(state: ContractState, fields: string[], recordNumber: number
       ...rulePresentation(prepared.rule, diagnostic),
       row: recordNumber,
       testId: prepared.rule.id,
-      severity: prepared.rule.severity ?? "error"
+      severity: prepared.rule.severity ?? "error",
+      ...(prepared.rule.importance === undefined ? {} : { importance: prepared.rule.importance })
     });
   }
 
@@ -561,6 +565,7 @@ function addGroupIssues(group: GroupValues, checks: Map<number, GroupCheck>): vo
       testId: rule.id,
       expected: missing,
       severity: rule.severity ?? "error",
+      ...(rule.importance === undefined ? {} : { importance: rule.importance }),
       evidence: { samples: [], aggregate: groupValues }
     });
   }
@@ -578,7 +583,8 @@ function finalizeState(state: ContractState): ContractRunOutput {
     spec: state.input.spec,
     result: {
       valid: state.collector.errors === 0,
-      ruleOutcomes: state.rules.filter(r => r.valid).map(r => r.outcome ?? { id: r.rule.id, ...(r.rule.name ? { name: r.rule.name } : {}), selected: 0, passed: 0, failed: 0 }),
+      ruleOutcomes: state.rules.filter(r => r.valid).map(r => r.outcome ?? { id: r.rule.id, ...(r.rule.name ? { name: r.rule.name } : {}), selected: 0, passed: 0, failed: 0,
+        ...(r.rule.importance === undefined ? {} : { importance: r.rule.importance }) }),
       rowCount: state.rowCount,
       columnCount: state.headers.length,
       testCount: Object.keys(state.input.contract.schema.columns).length + (state.input.contract.rowTests?.length ?? 0) +
@@ -728,6 +734,7 @@ export async function validateCsvFile(
   options: StreamingValidationOptions = {}
 ): Promise<StreamingValidationOutput> {
   if (inputs.length === 0) throw new Error("At least one contract is required.");
+  inputs.forEach((input) => validateContractSemantics(input.contract));
   const evaluatedAt = options.evaluatedAt ?? new Date().toISOString();
   inputs = await Promise.all(inputs.map(async input => ({ ...input, contract: resolveEvaluation(await resolveBaseline(
     await resolveGroupContracts(input.contract, input.spec, fileSuiteIO), input.spec, fileSuiteIO), evaluatedAt) })));

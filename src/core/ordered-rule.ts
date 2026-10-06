@@ -18,6 +18,11 @@ export function orderedChecks(rule: OrderedRule): OrderedCheck[] {
 }
 
 export function validateOrderedDefinition(rule: OrderedRule, declared: Set<string>): void {
+  const validateImportance = (importance: number | undefined, context: string): void => {
+    if (importance !== undefined && (!Number.isFinite(importance) || importance < 0 || importance > 1)) {
+      throw new Error(`${context} importance must be a finite number from 0 to 1.`);
+    }
+  };
   for (const column of orderedColumns(rule)) if (!declared.has(column)) throw new Error(`Sequence ${rule.id} references undeclared column ${column}.`);
   if (rule.orderBy.length === 0) throw new Error(`Ordered rule ${rule.id} needs order keys.`);
   if (!rule.event && !rule.relations?.length) throw new Error(`Ordered rule ${rule.id} needs relations or an event sequence.`);
@@ -28,11 +33,12 @@ export function validateOrderedDefinition(rule: OrderedRule, declared: Set<strin
   if (rule.event && !rule.transitions!.some(t => t.from === rule.initial!.state && t.event === rule.initial!.event)) throw new Error(`Sequence ${rule.id} has no initial event transition.`);
   const ids = new Set<string>();
   for (const check of orderedChecks(rule)) {
+    validateImportance(check.importance, `Ordered check ${check.id}`);
     if (ids.has(check.id)) throw new Error(`Sequence ${rule.id} repeats rule id ${check.id}.`);
     ids.add(check.id);
   }
   const strictKeys = (check: OrderedCheck, extra: string[] = []): void => {
-    const unknown = Object.keys(check).filter(key => !["id", "message", ...extra].includes(key));
+    const unknown = Object.keys(check).filter(key => !["id", "message", "importance", ...extra].includes(key));
     if (unknown.length) throw new Error(`Ordered check ${check.id} has unknown fields ${unknown.join(", ")}. Quote YAML messages that contain commas.`);
   };
   if (rule.duplicateOrder) strictKeys(rule.duplicateOrder);
@@ -116,17 +122,18 @@ export class OrderedRuleEvaluator {
   private counts = new Map<string, number>();
   private ordinal = 0;
   private priorOrder?: string;
-  private outcomes = new Map<string, { id: string; selected: number; passed: number; failed: number }>();
+  private outcomes = new Map<string, { id: string; selected: number; passed: number; failed: number; importance?: number }>();
   private seen = new Map<string, { row: OrderedRow; ordinal: number }>();
   private pending = new Map<string, { items: Array<{ row: OrderedRow; ordinal: number }>; head: number }>();
 
   public constructor(private readonly rule: OrderedRule, private readonly options: CsvOptions,
     private readonly issue: (issue: ValidationIssue) => void) {
     validateOrderedDefinition(rule, new Set(orderedColumns(rule)));
-    for (const check of orderedChecks(rule)) this.outcomes.set(check.id, { id: check.id, selected: 0, passed: 0, failed: 0 });
+    for (const check of orderedChecks(rule)) this.outcomes.set(check.id, { id: check.id, selected: 0, passed: 0, failed: 0,
+      ...(check.importance === undefined ? {} : { importance: check.importance }) });
   }
 
-  public get ruleOutcomes(): { id: string; selected: number; passed: number; failed: number }[] { return [...this.outcomes.values()]; }
+  public get ruleOutcomes(): { id: string; selected: number; passed: number; failed: number; importance?: number }[] { return [...this.outcomes.values()]; }
 
   private check(check: OrderedCheck, ok: boolean, row: OrderedRow, detail = "", relatedRows: number[] = []): void {
     const outcome = this.outcomes.get(check.id)!;
@@ -137,7 +144,7 @@ export class OrderedRuleEvaluator {
     this.issue({ level: "row", code: "ORDERED_RULE_FAILED", testId: check.id, row: row.row, relatedRows,
       actual: JSON.stringify(values).slice(0, 240),
       evidence: { samples: [{ primary: { label: "Source row", row: row.row, values } }], aggregate: relatedRows.length ? { relatedRows: relatedRows.join(", ") } : undefined },
-      message: `${check.message}${detail ? ` ${detail}` : ""}` });
+      message: `${check.message}${detail ? ` ${detail}` : ""}`, ...(check.importance === undefined ? {} : { importance: check.importance }) });
   }
 
   private eventFor(row: OrderedRow): string | undefined {

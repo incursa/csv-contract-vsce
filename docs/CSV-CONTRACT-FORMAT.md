@@ -166,7 +166,19 @@ If `expect.count` is omitted, the engine expects exactly one matching row.
 
 Supported string predicates are `equals`, `notEquals`, `in`, `notIn`, `isNull`, `notNull`, `isBlank`, `notBlank`, `equalsColumn`, `notEqualsColumn`, `contains`, `notContains`, `startsWith`, `endsWith`, and `matches`. Numeric predicates are `greaterThan`, `greaterThanOrEqual`, `lessThan`, and `lessThanOrEqual`. Numeric comparisons require both operands to parse as finite invariant numbers; otherwise the predicate is false.
 
-Rules default to `severity: error`. A failed warning is reported and counted but does not fail the contract.
+Rules default to `severity: error`. A failed warning is reported and counted but does not fail the contract. Row tests, conditional rules, group rules, and group tests may also set `importance` to a finite number from `0` through `1`, inclusive (default `1`). Importance affects only the graded health/gradient score: a failure with `importance: 0.25` contributes one quarter as much as the default, while validation pass/fail and error/warning semantics remain unchanged. `importance: 0` removes that failure's graded contribution but does not make the validation pass; a non-clean result never receives the clean score of `100`. For example, an email casing rule can use `importance: 0.25`, while a required-data rule can use `importance: 1`:
+
+```yaml
+rules:
+  - id: email-lowercase
+    importance: 0.25
+    expect: { column: Email, operator: matches, value: '^[a-z0-9._%+-]+@[a-z0-9.-]+$' }
+  - id: required-data
+    importance: 1
+    expect: { column: RequiredData, operator: notBlank }
+```
+
+When multiple checks fail, each failed check contributes its configured importance to the graded score; omitted values use the default of `1`. Thus, the two failures above contribute `1.25` check-weight units in total, while either failure alone contributes its own configured amount.
 
 `rowTests`, `rules`, and `groupRules` can declare two optional result fields. `name` is the short title shown on the finding card. `message` is the plain-language explanation shown when the check fails. When `message` is present, the Workbench still keeps the generated validator explanation under **Why it failed**, along with expected, actual, group, row, and technical details.
 
@@ -180,6 +192,7 @@ rules:
 ```
 
 Keep `id` stable for automation and history. Write `name` and `message` for the person reviewing the result. Ordered checks already require their own `message` because each transition or relationship can explain a different failure.
+Ordered checks also accept the same optional `importance` value.
 
 ## Group completeness rules
 

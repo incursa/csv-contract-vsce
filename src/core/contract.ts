@@ -41,10 +41,19 @@ export function parseContract(text: string): CsvContract {
   return value;
 }
 
-function validateContractSemantics(contract: CsvContract, depth = 0): void {
+export function validateContractSemantics(contract: CsvContract, depth = 0): void {
   if (depth > 4) throw new Error("Group contract nesting exceeds four levels.");
   const declared = new Set(Object.keys(contract.schema.columns));
   const ids = new Set<string>();
+  const validateImportance = (importance: number | undefined, context: string): void => {
+    if (importance !== undefined && (!Number.isFinite(importance) || importance < 0 || importance > 1)) {
+      throw new Error(`${context} importance must be a finite number from 0 to 1.`);
+    }
+  };
+  for (const test of contract.rowTests ?? []) validateImportance(test.importance, `Row test ${test.id}`);
+  for (const rule of contract.rules ?? []) validateImportance(rule.importance, `Rule ${rule.id}`);
+  for (const rule of contract.groupRules ?? []) validateImportance(rule.importance, `Group rule ${rule.id}`);
+  for (const test of contract.groupTests ?? []) validateImportance(test.importance, `Group test ${test.id}`);
   for (const rule of contract.orderedRules ?? []) {
     validateOrderedDefinition(rule, declared);
     for (const id of [rule.id, ...orderedChecks(rule).map(check => check.id)]) {
@@ -108,21 +117,21 @@ function countIssues(
   expectation: CountExpectation | undefined,
   level: "file" | "row",
   testId?: string,
-  presentation?: { id: string; name?: string; message?: string }
+  presentation?: { id: string; name?: string; message?: string; importance?: number }
 ): ValidationIssue[] {
   if (!expectation) return [];
   const issues: ValidationIssue[] = [];
   if (expectation.exact !== undefined && actual !== expectation.exact) {
     const diagnostic = `${name} is ${actual}; expected exactly ${expectation.exact}.`;
-    issues.push({ level, code: `${name.toUpperCase()}_EXACT`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.exact, testId });
+    issues.push({ level, code: `${name.toUpperCase()}_EXACT`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.exact, testId, ...(presentation?.importance === undefined ? {} : { importance: presentation.importance }) });
   }
   if (expectation.min !== undefined && actual < expectation.min) {
     const diagnostic = `${name} is ${actual}; expected at least ${expectation.min}.`;
-    issues.push({ level, code: `${name.toUpperCase()}_MIN`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.min, testId });
+    issues.push({ level, code: `${name.toUpperCase()}_MIN`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.min, testId, ...(presentation?.importance === undefined ? {} : { importance: presentation.importance }) });
   }
   if (expectation.max !== undefined && actual > expectation.max) {
     const diagnostic = `${name} is ${actual}; expected at most ${expectation.max}.`;
-    issues.push({ level, code: `${name.toUpperCase()}_MAX`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.max, testId });
+    issues.push({ level, code: `${name.toUpperCase()}_MAX`, ...presentation ? rulePresentation(presentation, diagnostic) : { message: diagnostic }, actual, expected: expectation.max, testId, ...(presentation?.importance === undefined ? {} : { importance: presentation.importance }) });
   }
   return issues;
 }
@@ -134,6 +143,7 @@ function isNull(value: string, options: Required<CsvOptions>): boolean {
 
 export function validateCsv(contract: CsvContract, csvText: string, nativeDates?: Record<string, (string | undefined)[]>, evaluatedAt = new Date().toISOString(), preview?: PreviewOptions): ValidationResult {
   if (preview) validatePreviewOptions(preview);
+  validateContractSemantics(contract);
   return { ...validateCsvResolved(resolveEvaluation(contract, evaluatedAt), csvText, nativeDates, preview), evaluatedAt,
     ...(preview ? { preview: { ...preview, scope: preview.rowLimit === undefined ? "complete" as const : "sample" as const } } : {}) };
 }
@@ -273,7 +283,7 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
         const actual = match.row[headerIndex.get(column)!] ?? "";
         if (normalized(actual, options) !== normalized(expectation.equals, options)) {
           const diagnostic = `Test "${test.name ?? test.id}" expected "${column}" to equal "${expectation.equals}", found "${actual}".`;
-          issues.push({ level: "cell", code: "CELL_NOT_EQUAL", ...rulePresentation(test, diagnostic), column, row: parsed.sourceRowNumbers[match.index], testId: test.id, actual, expected: expectation.equals });
+          issues.push({ level: "cell", code: "CELL_NOT_EQUAL", ...rulePresentation(test, diagnostic), column, row: parsed.sourceRowNumbers[match.index], testId: test.id, actual, expected: expectation.equals, ...(test.importance === undefined ? {} : { importance: test.importance }) });
         }
       }
     }
@@ -299,7 +309,8 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       }
     }
     if (!validRule) continue;
-    const outcome = { id: rule.id, ...(rule.name ? { name: rule.name } : {}), selected: 0, passed: 0, failed: 0 };
+    const outcome = { id: rule.id, ...(rule.name ? { name: rule.name } : {}), selected: 0, passed: 0, failed: 0,
+      ...(rule.importance === undefined ? {} : { importance: rule.importance }) };
     ruleOutcomes.push(outcome);
     parsed.rows.forEach((row, rowIndex) => {
       const runtime = createPredicateRuntime((column) => row[headerIndex.get(column)!] ?? "", options, nullValues);
@@ -319,7 +330,7 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
         ...rulePresentation(rule, diagnostic),
         row: parsed.sourceRowNumbers[rowIndex],
         testId: rule.id,
-        severity: rule.severity ?? "error"
+        severity: rule.severity ?? "error", ...(rule.importance === undefined ? {} : { importance: rule.importance })
       });
     });
   }
@@ -371,7 +382,7 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
           group: groupValues,
           testId: rule.id,
           expected: missing,
-          severity: rule.severity ?? "error"
+          severity: rule.severity ?? "error", ...(rule.importance === undefined ? {} : { importance: rule.importance })
         });
       }
     }
@@ -413,7 +424,8 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       groups.set(key, entries);
     });
     if (groupTest.groupBy.length === 0 && groups.size === 0) groups.set("[]", []);
-    const groupOutcome = { id: groupTest.id, ...(groupTest.name ? { name: groupTest.name } : {}), groups: groups.size, passed: 0, failed: 0 };
+    const groupOutcome = { id: groupTest.id, ...(groupTest.name ? { name: groupTest.name } : {}), groups: groups.size, passed: 0, failed: 0,
+      ...(groupTest.importance === undefined ? {} : { importance: groupTest.importance }) };
     groupOutcomes.push(groupOutcome);
     let groupChildTestCount = 0;
     for (const [key, indexes] of groups) {
@@ -445,7 +457,8 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       if (kind === "exact" && count === expected || kind === "min" && count >= expected || kind === "max" && count <= expected) continue;
       const diagnostic = `Group test ${groupTest.name ?? groupTest.id} found ${count} groups; expected ${kind} ${expected}.`;
       issues.push({ level: "file", code: "GROUP_COUNT", testId: groupTest.id,
-        ...rulePresentation(groupTest, diagnostic), actual: count, expected });
+        ...rulePresentation(groupTest, diagnostic), actual: count, expected,
+        ...(groupTest.importance === undefined ? {} : { importance: groupTest.importance }) });
     }
   }
 

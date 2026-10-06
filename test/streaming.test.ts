@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { CsvContract } from "../src/core/model";
+import { resultHealth } from "../src/core/result-health";
 import { readCsvRecords } from "../src/node/csv-stream";
 import { validateCsvFile } from "../src/node/streaming-validator";
 
@@ -192,5 +193,38 @@ test("streaming rules report missing group members and preserve warning-only suc
     assert.equal(result.errorCount, 1);
     assert.ok(result.issues.some((issue) => issue.code === "GROUP_REQUIRED_VALUE_MISSING"));
     assert.ok(result.issues.some((issue) => issue.severity === "warning"));
+  });
+});
+
+test("streaming validation preserves test importance in graded health", async () => {
+  await withTempFile("Email,Required\nAlice@Example.com,\n", async (path, directory) => {
+    const weighted: CsvContract = {
+      version: 1,
+      schema: { columns: { Email: { presence: "required" }, Required: { presence: "required" } } },
+      rules: [
+        {
+          id: "email-lowercase",
+          importance: 0.25,
+          expect: { column: "Email", operator: "matches", value: "^[a-z0-9._%+-]+@[a-z0-9.-]+$" }
+        },
+        {
+          id: "required-data",
+          importance: 1,
+          expect: { column: "Required", operator: "notBlank" }
+        }
+      ]
+    };
+    const output = await validateCsvFile(path, [{ spec: "weighted", contract: weighted }], {
+      progressInterval: 0,
+      tempDirectory: directory,
+      uniquePartitions: 8
+    });
+    const result = output.runs[0].result;
+    assert.equal(result.valid, false);
+    assert.equal(result.issues.find((issue) => issue.testId === "email-lowercase")?.importance, 0.25);
+    assert.equal(result.issues.find((issue) => issue.testId === "required-data")?.importance, 1);
+    assert.equal(result.ruleOutcomes?.find((outcome) => outcome.id === "email-lowercase")?.importance, 0.25);
+    assert.equal(result.ruleOutcomes?.find((outcome) => outcome.id === "required-data")?.importance, 1);
+    assert.ok(resultHealth(result, "FAIL", "graded").score < 85);
   });
 });

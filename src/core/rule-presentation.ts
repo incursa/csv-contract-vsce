@@ -4,6 +4,7 @@ export interface RulePresentation {
   id: string;
   name?: string;
   message?: string;
+  importance?: number;
 }
 
 /** Preserve a plain-language message without discarding the validator's precise explanation. */
