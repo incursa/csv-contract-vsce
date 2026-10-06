@@ -2,6 +2,7 @@ import type { ValidationResult } from "./model";
 
 export type ResultColorMode = "binary" | "graded";
 export type ResultHealthBand = "perfect" | "attention" | "concerning" | "critical";
+export const DEFAULT_IMPORTANCE = 1;
 
 export interface ResultHealth {
   score: number;
@@ -48,14 +49,15 @@ export function resultHealth(result?: ValidationResult, status?: string, mode: R
   for (const id of errorChecks) warningChecks.delete(id);
 
   const importanceFor = (id: string): number => {
-    const weights = result.issues.filter(issue => (issue.testId ?? issue.code) === id).map(issue => issue.importance ?? 1);
+    const weights = result.issues.filter(issue => (issue.testId ?? issue.code) === id)
+      .map(issue => issue.importance).filter((weight): weight is number => weight !== undefined);
     const outcome = [...(result.ruleOutcomes ?? []), ...(result.groupOutcomes ?? [])].find(item => item.id === id);
-    return weights.length ? Math.max(...weights) : outcome?.importance ?? 1;
+    return weights.length ? Math.max(...weights) : outcome?.importance ?? DEFAULT_IMPORTANCE;
   };
   const weightedChecks = [...errorChecks].reduce((total, id) => total + importanceFor(id), 0) +
     [...warningChecks].reduce((total, id) => total + importanceFor(id) * 0.25, 0);
   const checkRate = Math.min(1, weightedChecks / Math.max(1, result.testCount, errorChecks.size + warningChecks.size));
-  const weightedEvents = result.issues.reduce((total, issue) => total + (issue.importance ?? 1) * (issue.severity === "warning" ? 0.25 : 1), 0);
+  const weightedEvents = result.issues.reduce((total, issue) => total + (issue.importance ?? DEFAULT_IMPORTANCE) * (issue.severity === "warning" ? 0.25 : 1), 0);
   const eventRate = Math.min(1, weightedEvents / Math.max(1, result.rowCount, result.issueCount));
   const impact = 0.65 * Math.sqrt(checkRate) + 0.35 * Math.sqrt(eventRate);
   const score = Math.max(0, Math.round(100 * (1 - impact)));

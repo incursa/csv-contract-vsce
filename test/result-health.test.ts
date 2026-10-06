@@ -48,3 +48,24 @@ test("graded health uses configured outcome importance when no finding carries t
   const major = result({ valid: false, ruleOutcomes: [{ id: "required-data", selected: 1, passed: 0, failed: 1, importance: 1 }] });
   assert.ok(resultHealth(minor, "FAIL", "graded").score > resultHealth(major, "FAIL", "graded").score);
 });
+
+test("outcome importance remains authoritative when a finding omits the optional weight", () => {
+  const weighted = result({ valid: false, issueCount: 1, errorCount: 1,
+    issues: [{ level: "row", code: "RULE_FAILED", testId: "email-lowercase", message: "failed" }],
+    ruleOutcomes: [{ id: "email-lowercase", selected: 1, passed: 0, failed: 1, importance: 0.25 }] });
+  const defaulted = result({ valid: false, issueCount: 1, errorCount: 1,
+    issues: [{ level: "row", code: "RULE_FAILED", testId: "email-lowercase", message: "failed" }] });
+  assert.ok(resultHealth(weighted, "FAIL", "graded").score > resultHealth(defaulted, "FAIL", "graded").score);
+});
+
+test("graded health aggregates multiple failures with different weights", () => {
+  const minor = result({ valid: false, issueCount: 2, errorCount: 2, issues: [
+    { level: "row", code: "RULE_FAILED", testId: "email-lowercase", message: "failed", importance: 0.25 },
+    { level: "row", code: "RULE_FAILED", testId: "email-lowercase", message: "failed", importance: 0.25 }
+  ] });
+  const mixed = result({ valid: false, issueCount: 2, errorCount: 2, issues: [
+    { level: "row", code: "RULE_FAILED", testId: "email-lowercase", message: "failed", importance: 0.25 },
+    { level: "row", code: "RULE_FAILED", testId: "required-data", message: "failed", importance: 1 }
+  ] });
+  assert.ok(resultHealth(minor, "FAIL", "graded").score > resultHealth(mixed, "FAIL", "graded").score);
+});
