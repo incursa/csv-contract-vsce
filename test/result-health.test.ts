@@ -43,6 +43,17 @@ test("importance changes graded impact without changing validation semantics", (
   assert.ok(resultHealth(combined, "FAIL", "graded").score < resultHealth(minor, "FAIL", "graded").score);
 });
 
+test("zero importance can reduce graded impact to zero without hiding failure status", () => {
+  const failed = result({ valid: false, issueCount: 1, errorCount: 1, issues: [
+    { level: "row", code: "RULE_FAILED", testId: "informational-check", message: "failed", importance: 0 }
+  ] });
+  const health = resultHealth(failed, "FAIL", "graded");
+  assert.equal(failed.valid, false);
+  assert.equal(health.label, "FAIL");
+  assert.equal(health.score, 99);
+  assert.notEqual(health.band, "perfect");
+});
+
 test("graded health uses configured outcome importance when no finding carries the weight", () => {
   const minor = result({ valid: false, ruleOutcomes: [{ id: "email-lowercase", selected: 1, passed: 0, failed: 1, importance: 0.25 }] });
   const major = result({ valid: false, ruleOutcomes: [{ id: "required-data", selected: 1, passed: 0, failed: 1, importance: 1 }] });

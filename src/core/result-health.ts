@@ -60,7 +60,9 @@ export function resultHealth(result?: ValidationResult, status?: string, mode: R
   const weightedEvents = result.issues.reduce((total, issue) => total + (issue.importance ?? DEFAULT_IMPORTANCE) * (issue.severity === "warning" ? 0.25 : 1), 0);
   const eventRate = Math.min(1, weightedEvents / Math.max(1, result.rowCount, result.issueCount));
   const impact = 0.65 * Math.sqrt(checkRate) + 0.35 * Math.sqrt(eventRate);
-  const score = Math.max(0, Math.round(100 * (1 - impact)));
+  // A zero-importance failure contributes no graded impact, but it is still a
+  // validation failure. Keep 100 reserved for the clean-result branch above.
+  const score = Math.min(99, Math.max(0, Math.round(100 * (1 - impact))));
   const band: ResultHealthBand = score >= 75 ? "attention" : score >= 45 ? "concerning" : "critical";
   return { score, band, label: result.valid ? "PASS WITH WARNINGS" : "FAIL" };
 }
