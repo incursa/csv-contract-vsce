@@ -1,7 +1,8 @@
 import { resolveBaseline, resolveTargetBaseline } from "./core/baseline";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { parseContract, serializeContract } from "./core/contract";
+import { parseContract, parseCsv, serializeContract } from "./core/contract";
+import { evaluateCsvCrossCheck } from "./core/cross-checks";
 import { createContractOutlineFromFile } from "./node/contract-generator";
 import { validateCsvFile } from "./node/streaming-validator";
 import { createTargetPlans, resolveConfiguredTarget } from "./node/target-plan";
@@ -257,7 +258,22 @@ async function testSqlServer(args: ParsedArgs): Promise<void> {
         reports.push(await runSuite(suite, async (contract, target, source) => session.validate(await resolveBaseline(contract, source, fileSuiteIO), await resolveTargetBaseline(target, source, fileSuiteIO), {
           maxIssues: args.maxIssues,
           scopeValue: target.scope ? args.scopes[target.scope.parameter] : undefined
-        }), args.failFast, undefined, { crossExecutor: plan => session.validateCross(plan) }));
+        }), args.failFast, async (contract, source, target) => {
+          const resolved = resolveConfiguredTarget(source, target);
+          return withMaterializedTarget(resolved, { tempDirectory: args.tempDirectory ? resolve(args.tempDirectory) : undefined }, async localPath => {
+            const output = await validateCsvFile(localPath, [{ spec: source, contract: await resolveBaseline(contract, source, fileSuiteIO) }], { maxIssues: args.maxIssues });
+            return output.runs[0].result;
+          });
+        }, { crossExecutor: async plan => {
+          if (plan.mode === "sql") return session.validateCross(plan);
+          const read = async (participant: typeof plan.from) => withMaterializedTarget(resolveConfiguredTarget(participant.source, participant.target),
+            { tempDirectory: args.tempDirectory ? resolve(args.tempDirectory) : undefined }, async localPath => parseCsv(await readFile(localPath, "utf8"), participant.contract.csv));
+          const [from, to, participants] = await Promise.all([
+            read(plan.from), read(plan.to),
+            Promise.all(Object.entries(plan.participants).map(async ([id, participant]) => [id, await read(participant)] as const)).then(Object.fromEntries)
+          ]);
+          return evaluateCsvCrossCheck(plan, from, to, participants);
+        } }));
       } catch (error) {
         reports.push(await runSuite({ id: specInput, source: specInput, isSuite: true,
           members: [{ id: specInput, source: specInput, error: error instanceof Error ? error.message : String(error) }] },

@@ -162,10 +162,16 @@ export class GroupTestRunner {
       summary.issueCount += result.issueCount;
       summary.errorCount += result.errorCount;
       summary.warningCount += result.warningCount;
+      const remapEvidence = (issue: ValidationIssue): ValidationIssue["evidence"] => issue.evidence ? { ...issue.evidence,
+        samples: issue.evidence.samples.map(sample => ({
+          ...sample,
+          primary: sample.primary ? { ...sample.primary, row: sample.primary.row === undefined ? undefined : rowMap.get(sample.primary.row) ?? sample.primary.row } : undefined,
+          related: sample.related?.map(record => ({ ...record, row: record.row === undefined ? undefined : rowMap.get(record.row) ?? record.row }))
+        })) } : undefined;
       for (const issue of result.issues) if (summary.issues.length < maxIssues) summary.issues.push({ ...issue,
         testId: issue.testId ? `${this.group.id}/${issue.testId}` : this.group.id,
         group: { ...currentGroup, ...issue.group }, row: issue.row === undefined ? undefined : rowMap.get(issue.row) ?? issue.row,
-        relatedRows: issue.relatedRows?.map(row => rowMap.get(row) ?? row) });
+        relatedRows: issue.relatedRows?.map(row => rowMap.get(row) ?? row), evidence: remapEvidence(issue) });
     };
     try {
       for await (const row of this.store.rows()) {

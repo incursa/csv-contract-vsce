@@ -55,7 +55,6 @@ export function validateOrderedDefinition(rule: OrderedRule, declared: Set<strin
     if (modes !== 1) throw new Error(`Ordered relation ${relation.id} needs exactly one of requirePrior, forbidPrior, or requireNext.`);
     if (relation.maxGap !== undefined && (!Number.isSafeInteger(relation.maxGap) || relation.maxGap < 0 || relation.maxGap > 10000))
       throw new Error(`Ordered relation ${relation.id} maxGap must be from 0 to 10000.`);
-    if (relation.forbidPrior && relation.maxGap !== undefined) throw new Error(`Ordered relation ${relation.id} cannot use maxGap with forbidPrior.`);
     if ((relation.allowBetween || relation.allowFinal) && !relation.requireNext)
       throw new Error(`Ordered relation ${relation.id} allows intervening or final rows only with requireNext.`);
   }
@@ -141,8 +140,10 @@ export class OrderedRuleEvaluator {
     outcome.selected++;
     if (ok) { outcome.passed++; return; }
     outcome.failed++;
+    const values = Object.fromEntries(orderedColumns(this.rule).map(c => [c, row.values[c] ?? ""]));
     this.issue({ level: "row", code: "ORDERED_RULE_FAILED", testId: check.id, row: row.row, relatedRows,
-      actual: JSON.stringify(Object.fromEntries(orderedColumns(this.rule).map(c => [c, row.values[c] ?? ""]))).slice(0, 240),
+      actual: JSON.stringify(values).slice(0, 240),
+      evidence: { samples: [{ primary: { label: "Source row", row: row.row, values } }], aggregate: relatedRows.length ? { relatedRows: relatedRows.join(", ") } : undefined },
       message: `${check.message}${detail ? ` ${detail}` : ""}`, ...(check.importance === undefined ? {} : { importance: check.importance }) });
   }
 
@@ -198,7 +199,7 @@ export class OrderedRuleEvaluator {
       } else {
         if (this.matches(relation.when, row)) {
           const gap = seen ? this.ordinal - seen.ordinal - 1 : Infinity;
-          this.check(relation, relation.requirePrior ? !!seen && (relation.maxGap === undefined || gap <= relation.maxGap) : !seen,
+          this.check(relation, relation.requirePrior ? !!seen && (relation.maxGap === undefined || gap <= relation.maxGap) : !seen || relation.maxGap !== undefined && gap > relation.maxGap,
             row, relation.requirePrior ? "Required prior row was not found within the allowed gap." : "Forbidden prior row was found.", seen ? [seen.row.row] : []);
         }
         if (prior && this.matches(prior, row)) this.seen.set(relation.id, { row, ordinal: this.ordinal });

@@ -11,13 +11,19 @@ import type { CsvContract } from "../src/core/model";
 import { LiveTests } from "../src/core/live-tests";
 import { insertPreset } from "../src/core/presets";
 import { insertTemplate, coverageDiagnostics } from "../src/core/authoring";
-import { crossResult, planCrossCheck } from "../src/core/cross-checks";
+import { crossResult, planCrossCheck, type CrossPlan, type SqlCrossPlan } from "../src/core/cross-checks";
 import { parseSuite, runSuite, type LoadedSuite } from "../src/core/suite";
 import { renderResults, filterResultRuns, issueSelectionKey } from "../src/results-view";
 import { issueRunsToCsv } from "../src/issue-export";
 import { summarizeRules, compareRules } from "../src/core/history";
 import { JSDOM } from "jsdom";
 import { renderPredicate, readPredicate, editPredicateTree } from "../src/webview/rule-editor";
+
+function requireSqlPlan(plan: CrossPlan): SqlCrossPlan {
+  assert.equal(plan.mode, "sql");
+  if (plan.mode !== "sql") throw new Error("Expected a SQL cross-check plan.");
+  return plan;
+}
 
 test("preview samples count actual outcomes, bound examples, and never pass a complete suite", async () => {
   const contract: CsvContract = { version: 1, targets: [{ path: "local.csv" }], schema: { columns: { Id: { presence: "required" } } }, rules: [{ id: "check", expect: { column: "Id", operator: "equals", value: "yes" } }] };
@@ -85,7 +91,7 @@ test("history compares stable rules without retaining literals or inventing miss
 test("cross-table scopes are independently parameterized on both sides", () => {
   const make = (valueEnvironment: string): CsvContract => ({ version: 1, schema: { columns: { Id: { presence: "required" } } }, sqlServer: { connection: "local", schema: "dbo", table: "T", scope: { column: "Batch]Id", parameter: "load", sqlType: "nvarchar(20)", valueEnvironment } } });
   for (const kind of ["foreignKey", "equalPopulation", "equalTotal", "rowReconciliation"] as const) {
-    const plan = planCrossCheck({ id: "scoped", kind, from: "a", to: "b", keys: [{ from: "Id", to: "Id" }], valueColumns: { from: "Id", to: "Id" }, valueMappings: [{ from: "Id", to: "Id", otherwise: "preserve" }] }, [{ id: "a", contract: make("LEFT_BATCH") }, { id: "b", contract: make("RIGHT_BATCH") }]);
+    const plan = requireSqlPlan(planCrossCheck({ id: "scoped", kind, from: "a", to: "b", keys: [{ from: "Id", to: "Id" }], valueColumns: { from: "Id", to: "Id" }, valueMappings: [{ from: "Id", to: "Id", otherwise: "preserve" }] }, [{ id: "a", contract: make("LEFT_BATCH") }, { id: "b", contract: make("RIGHT_BATCH") }]));
     assert.match(plan.sql, /@cross_from/); assert.match(plan.sql, /@cross_to/);
     assert.match(plan.sql, /\[Batch\]\]Id\]/);
     assert.equal(plan.from.scope?.valueEnvironment, "LEFT_BATCH");
@@ -170,7 +176,7 @@ test("total checks quote mappings, reject tolerance injection and retain invalid
   const contract: CsvContract = { version: 1, schema: { columns: { Amount: { presence: "required" } } }, sqlServer: { connection: "synthetic", schema: "dbo", table: "Ledger", columnMap: { Amount: "Amount]Value" } } };
   const members = [{ id: "a", contract }, { id: "b", contract }];
   const check = { id: "total", kind: "equalTotal" as const, from: "a", to: "b", valueColumns: { from: "Amount", to: "Amount" }, tolerance: "0.001", nulls: "fail" as const };
-  const plan = planCrossCheck(check, members);
+  const plan = requireSqlPlan(planCrossCheck(check, members));
   assert.match(plan.sql, /\[Amount\]\]Value\]/);
   assert.match(plan.sql, /decimal\(28,10\)/);
   assert.match(plan.sql, /IS NULL THEN 1/);
@@ -182,7 +188,7 @@ test("row reconciliation checks missing keys and conditional blank replacement w
   const source: CsvContract = { version: 1, schema: { columns: { Id: { presence: "required" }, TRI: { presence: "required" } } }, sqlServer: { connection: "synthetic", schema: "source", table: "People", columnMap: { TRI: "Source]TRI" } } };
   const output: CsvContract = { version: 1, schema: { columns: { PersonId: { presence: "required" }, TaxId: { presence: "required" } } }, sqlServer: { connection: "synthetic", schema: "output", table: "People", columnMap: { TaxId: "Output]TRI" } } };
   const check = { id: "tri-reconciliation", kind: "rowReconciliation" as const, from: "source", to: "output", keys: [{ from: "Id", to: "PersonId" }], valueMappings: [{ from: "TRI", to: "TaxId", blankTo: "PX'0000", otherwise: "preserve" as const }], nulls: "fail" as const };
-  const plan = planCrossCheck(check, [{ id: "source", contract: source }, { id: "output", contract: output }]);
+  const plan = requireSqlPlan(planCrossCheck(check, [{ id: "source", contract: source }, { id: "output", contract: output }]));
   assert.match(plan.sql, /NOT EXISTS/);
   assert.match(plan.sql, /EXISTS/);
   assert.match(plan.sql, /\[Source\]\]TRI\]/);
@@ -304,7 +310,7 @@ test("live edits debounce, invalid drafts never run, and superseded work cannot 
 test("selective and canceled suite runs never report overall PASS; cross-checks execute with dependencies", async () => {
   const contract = (table: string): CsvContract => ({ version: 1, schema: { columns: { Id: { presence: "required" } } }, sqlServer: { connection: "local", schema: "dbo", table } });
   const suite: LoadedSuite = { id: "local", source: "suite", isSuite: true, members: [{ id: "child", source: "suite", contract: contract("Child") }, { id: "parent", source: "suite", contract: contract("Parent") }], crossChecks: [{ id: "fk", kind: "foreignKey", from: "child", to: "parent", keys: [{ from: "Id", to: "Id" }], nulls: "fail" }] };
-  const plan = planCrossCheck(suite.crossChecks![0], suite.members);
+  const plan = requireSqlPlan(planCrossCheck(suite.crossChecks![0], suite.members));
   assert.match(plan.sql, /NOT EXISTS/);
   let checks = 0;
   const report = await runSuite(suite, async () => validateCsv(contract("Unused"), "Id\nx\n"), false, undefined, { members: ["child"], crossExecutor: async plan => { checks++; return crossResult(plan.check, 0); } });

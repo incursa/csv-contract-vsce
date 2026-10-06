@@ -462,6 +462,26 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
     }
   }
 
+  const rowValues = (row: string[]) => Object.fromEntries(parsed.headers.map((header, index) => [header, row[index] ?? ""]));
+  const rowsByNumber = new Map(parsed.sourceRowNumbers.map((row, index) => [row, parsed.rows[index]]));
+  for (const issue of issues) {
+    if (issue.evidence) continue;
+    if (issue.group) {
+      issue.evidence = { samples: [], aggregate: issue.group };
+      continue;
+    }
+    if (issue.row === undefined) continue;
+    const primary = rowsByNumber.get(issue.row);
+    if (!primary) continue;
+    const related = (issue.relatedRows ?? []).flatMap(row => {
+          const related = rowsByNumber.get(row);
+          return related ? [{ label: "Related source row", row, values: rowValues(related) }] : [];
+        });
+    issue.evidence = { samples: [{
+      primary: { label: "Source row", row: issue.row, values: rowValues(primary) },
+      ...(related.length ? { related } : {})
+    }] };
+  }
   const errorCount = issues.filter((issue) => issue.severity !== "warning").length;
   const warningCount = issues.length - errorCount;
 

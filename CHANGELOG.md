@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.24.0
+
+- Reuse one logical suite member across identically named CSV or SQL targets with a suite `targetMatrix`.
+- Expand each logical cross-check once per matrix entry while retaining the selected target and environment in run and generated-SQL identities.
+- Rerun matrix-expanded failures through their original logical member dependencies without cloning contracts.
+
+## 0.23.0
+
+- Select cross-check rows with reusable prefilters, per-key ranking, postfilters, and unioned eligibility branches for both CSV and SQL Server participants.
+- Require matches from additional suite members before a source row participates, enabling generic three-file or three-table validation without embedded client SQL.
+- Normalize cross-check keys with portable trim, lowercase, and leading-zero removal operations.
+- Allow aggregate-only cross-check evidence and bounded `forbidPrior` gaps for immediate ordered-event validation.
+
+## 0.22.0
+
+- Attach bounded primary-row snapshots to retained CSV and SQL findings and show them in an expandable **Row evidence** section.
+- Include primary rows, related cross-source rows, aggregate context and evidence-limit markers in suite and test CSV/JSON exports.
+- Retain both sides of CSV and SQL relationship/reconciliation failures when a joined row is available.
+- Export a self-contained Excel validation package for a test or suite with a graded target overview, human-readable rule catalog, aggregate findings, and one consolidated bad-row matrix per target.
+- Merge matching source rows across test files and qualify every matrix check by test file so repeated rule IDs remain distinct.
+
+## 0.21.0
+
+- Add generic suite-level `relationship` checks with deterministic ordered lookups and side-qualified predicates.
+- Use the same relationship YAML for two CSV files or two SQL Server tables, while rejecting mixed and ambiguous source combinations explicitly.
+- Support typed numeric and date comparisons without embedding client-specific SQL or schema assumptions.
+
 ## 0.20.6
 
 - Open the suite progress screen immediately from the loaded suite snapshot instead of rereading every referenced contract before the run becomes visible.

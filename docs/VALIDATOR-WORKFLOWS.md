@@ -157,11 +157,15 @@ columns. Query errors remain errors; empty metadata means missing or inaccessibl
 not proven absence. Preflight is not a guarantee of subsequent validation.
 
 The shared failure grid displays retained issues, expected/actual values, rule
-IDs and truncation. **Jump to rule** opens the owning YAML location. Search works
+IDs, truncation and expandable row evidence. Evidence shows the primary source row,
+related joined rows when available and aggregate context used by the check. CSV
+exports carry those sections as JSON columns; JSON exports preserve the structured
+evidence. Evidence can contain every source column and must be handled like the
+underlying data. **Jump to rule** opens the owning YAML location. Search works
 over retained diagnostics; it cannot search discarded examples. Filtering suite
 members limits the suite export to visible members and records its scope. Normal
 exports retain the original aggregate counts and do not query the source again.
-Workbench runs keep all available issue details by default. Set `csvContract.maxRetainedIssues` to a positive number to limit retention; `0` keeps all available details. The Workbench table renders the first 500 matching details for responsiveness, while export includes all retained details. SQL aggregate rules summarize failing rows by rule and do not produce one row-level detail per failure.
+Workbench runs keep all available issue details by default. Set `csvContract.maxRetainedIssues` to a positive number to limit retention; `0` keeps all available details. The Workbench table renders the first 500 matching details for responsiveness, while export includes all retained details. SQL rules retrieve bounded failing-row samples when their predicate can be represented directly. Count, uniqueness and other aggregate-only rules retain aggregate context but may have no individual row sample.
 
 **Run history** offers save, compare and delete. It is explicit local workspace
 storage of the newest 20 aggregate snapshots, with a definition fingerprint and
@@ -212,16 +216,40 @@ crossChecks:
     valueMappings:
       - {from: TRI, to: TRI, blankTo: PX0000, otherwise: preserve}
     nulls: fail
+  - id: latest-category-amount
+    kind: relationship
+    from: payments
+    to: classifications
+    keys: [{from: RecordId, to: RecordId}]
+    lookup:
+      orderBy:
+        - {column: ChangedAt, type: date, direction: desc}
+        - {column: Sequence, type: number, direction: desc}
+    when: {side: to, column: Category, operator: equals, value: Special}
+    expect: {side: from, column: Amount, operator: equals, value: 1, valueType: number}
+    missing: fail
+    nulls: fail
 ```
 
-Each participating member must resolve to exactly one SQL object on the
-same connection/database. Foreign-key equality uses SQL's native typed equality
+Each participating member must resolve to exactly one enabled source: either both
+members have one CSV target, or both have one SQL object on the same
+connection/database. Mixed CSV/SQL pairs and multiple enabled targets are rejected
+as ambiguous. Foreign-key equality uses the source's native equality
 and collation; `nulls: ignore` excludes rows with any SQL-null source key and
 `nulls: fail` fails them. CSV normalization markers do not redefine native SQL
 NULL for these relational checks. Canonical key names use each target's column map.
 Equal population compares `COUNT_BIG` totals. Queries are read-only aggregates
 and retrieve no employee/example records. Each scoped participant binds its own `scope.valueEnvironment` to an independent query parameter. Missing runtime values fail before connecting; values are never written into reports or generated SQL. Cross-connection comparisons are rejected. Generated scripts declare separate required parameters for both sides. Selective/live changes to either participant invalidate
 the cross-check. The Workbench, CLI dbtest and SQL generation share the same plan.
+
+`relationship` joins `from` rows to `to` rows by declared keys, then selects one
+lookup row using the complete `lookup.orderBy` list. Include enough ordering fields
+to break ties deterministically. Predicates identify their `from` or `to` side and
+may compare with a literal or an `other: {side, column}` value. Numeric and date
+comparisons are typed; arbitrary SQL is not accepted. `when` limits where the
+expectation applies, `expect` defines the required relationship, `missing` controls
+unmatched source rows, and `nulls` controls blank/null source keys. CSV and SQL use
+the same YAML. Results contain only a failure count and never matching row values.
 
 `rowReconciliation` joins source (`from`) to output (`to`) by the declared keys.
 Every source row must have a matching output row. Each value mapping can require a
@@ -276,7 +304,7 @@ Current boundaries:
 - Linked templates remain an optional future design; inserted rules are independent.
 - In-flight pool acquisition and synchronous CSV work cannot be interrupted. Completion is discarded when stale.
 - CSV targets share their contract baseline; heterogeneous schemas belong in independent suite members. SQL targets support baseline overrides.
-- SQL cross-checks require one target per participant on the same connection. Scopes require environment values.
+- Cross-checks require one target per participant. SQL pairs must share a connection; CSV/SQL pairs are not supported. SQL scopes require environment values.
 - Unique-key metadata records index names and ordinals, not foreign-key definitions or filtered-index expressions. Type/key impact still requires review.
 
 Remote database verification remains separately unperformed because it requires the owner's approval.
@@ -339,6 +367,20 @@ Exports retain original aggregate counts, mark limited details and record select
 scope. CSV includes run/work IDs, evaluation time, execution scope, status, export
 context and retained/total issue counts. Selection keys are bound to the current
 run; stale selections are rejected. Filtered exports omit preview example records.
+
+Choose **Excel validation package** for a handoff workbook. **Overview** shows every
+target's PASS, FAIL, ERROR, SKIPPED or sampled status plus the same graded impact
+category and health score used by the Workbench. **Rules** explains the configured
+checks in readable terms and summarizes target-level evaluation and failure counts.
+Each target with row evidence receives one bad-row matrix that combines all test
+files for that target. Matching source rows are merged, check columns are qualified
+by test file, and related joined values remain visible. Failed checks contain a
+red `FALSE`; all other check cells stay blank because retained failure evidence
+cannot prove that every check passed or applied to every row. Aggregate findings
+that have no primary row are kept on a separate sheet. The workbook uses the
+completed run and does not query the source again. Result search and issue
+checkboxes do not remove targets from the package overview; suite member scope
+still limits the package when members were explicitly selected.
 ### SQL connection lifetime (0.15.2)
 
 Every desktop SQL operation owns its session: one target validation (including its

@@ -12,6 +12,21 @@ function issueLocation(issue: ValidationResult["issues"][number]): string {
 function groupTags(group?: Record<string, string>): string {
   return Object.entries(group ?? {}).map(([name, value]) => `<span class="finding-chip"><span>${escape(name)}</span> ${escape(shown(value))}</span>`).join("");
 }
+function evidenceRecord(record: NonNullable<ValidationResult["issues"][number]["evidence"]>["samples"][number]["primary"]): string {
+  if (!record) return "";
+  const heading = [record.label, record.row === undefined ? undefined : `row ${record.row}`].filter(Boolean).join(" · ");
+  return `<section class="evidence-record"><h5>${escape(heading || "Record")}</h5><div class="evidence-table" role="table">${Object.entries(record.values).map(([column, value]) => `<div role="row"><span role="cell">${escape(column)}</span><code role="cell">${escape(shown(value))}</code></div>`).join("")}</div></section>`;
+}
+function issueEvidence(issue: ValidationResult["issues"][number]): string {
+  const evidence = issue.evidence;
+  if (!evidence || (!evidence.samples.length && !evidence.aggregate)) return "";
+  const total = evidence.totalSamples ?? evidence.samples.length;
+  return `<details class="finding-evidence"><summary>Row evidence${total ? ` (${total.toLocaleString()}${evidence.limited ? ", sample limited" : ""})` : ""}</summary>
+    ${evidence.aggregate ? `<section class="evidence-aggregate"><h5>Aggregate context</h5><pre>${escape(JSON.stringify(evidence.aggregate, null, 2))}</pre></section>` : ""}
+    ${evidence.samples.map((sample, index) => `<div class="evidence-sample"><h4>Failure sample ${index + 1}</h4>${sample.primary ? evidenceRecord(sample.primary) : ""}${(sample.related ?? []).map(evidenceRecord).join("")}</div>`).join("")}
+    ${evidence.limited ? `<p class="finding-related">Showing ${evidence.samples.length.toLocaleString()} retained samples for ${total.toLocaleString()} failing rows or groups.</p>` : ""}
+  </details>`;
+}
 export const issueSelectionKey = (run: DisplayRun, index: number) => JSON.stringify([run.workId ?? [run.member, run.table, run.target], index]);
 const matches = (run: DisplayRun, value: unknown, filter: string) => JSON.stringify([run.member, run.target, run.table, run.status, value]).toLowerCase().includes(filter.toLowerCase());
 export function filterResultRuns<T extends DisplayRun>(runs: T[], filter: string, selected: string[] = []): T[] {
@@ -71,6 +86,7 @@ export function renderResults(runs: DisplayRun[], filter = "", stale = false, co
             ${i.group ? `<div class="finding-groups" aria-label="Group values">${groupTags(i.group)}</div>` : ""}
             ${i.relatedRows?.length ? `<p class="finding-related">Related ${i.relatedRows.length === 1 ? "row" : "rows"}: ${escape(i.relatedRows.join(", "))}</p>` : ""}
             ${comparison}
+            ${issueEvidence(i)}
             <details class="finding-technical"><summary>Technical details</summary><dl><div><dt>Rule or code</dt><dd><code>${escape(identity)}</code></dd></div><div><dt>Issue code</dt><dd><code>${escape(i.code)}</code></dd></div><div><dt>Scope</dt><dd>${escape(i.level)}</dd></div></dl></details>
           </div></article>`;
       }).join("")}</div>` : ""}</section>`;

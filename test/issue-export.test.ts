@@ -27,7 +27,8 @@ const runs = [{
         row: 3,
         message: "Expected Active, found Inactive.",
         actual: "Inactive",
-        expected: "Active"
+        expected: "Active",
+        evidence: { samples: [{ primary: { label: "Source row", row: 3, values: { CustomerId: "C-3", Status: "Inactive" } } }] }
       },
       {
         level: "row" as const,
@@ -42,10 +43,11 @@ const runs = [{
 test("issue export includes every retained issue with target context", () => {
   const csv = issueRunsToCsv(runs);
 
-  assert.match(csv, /^"Target","Severity","Level","Code","TestId","Column","Row","Message","Actual","Expected"\n/);
+  assert.match(csv, /^"Target","Severity","Level","Code","TestId","Column","Row","Message","Actual","Expected","PrimaryRows","RelatedRows","AggregateContext","EvidenceLimited"\n/);
   assert.match(csv, /"exports\/customers\.csv","error","cell","CELL_NOT_EQUAL","active-customer","Status","3","Expected Active, found Inactive\.","Inactive","Active"/);
   assert.match(csv, /"exports\/customers\.csv","warning","row","RULE_FAILED","","","","Review ""customer"" status\.","",""/);
   assert.equal(csv.trim().split("\n").length, 3);
+  assert.match(csv, /CustomerId.*C-3/);
 });
 
 test("JSON export preserves complete run results and reports detail completeness", () => {
@@ -71,9 +73,12 @@ test("JSON export preserves complete run results and reports detail completeness
 
 test("results import rejects unrelated JSON and malformed finding details", () => {
   assert.throws(() => parseValidationRunExport("{}"), /Unsupported results JSON/);
-  const invalid = createValidationRunExport("contracts/customers.csvtest.yaml", runs);
+  const invalid = createValidationRunExport("contracts/customers.csvtest.yaml", structuredClone(runs));
   (invalid.runs[0].result!.issues[0] as { message?: string }).message = undefined;
   assert.throws(() => parseValidationRunExport(JSON.stringify(invalid)), /missing its level, code, or message/);
+  const invalidEvidence = createValidationRunExport("contracts/customers.csvtest.yaml", structuredClone(runs));
+  (invalidEvidence.runs[0].result!.issues[0] as { evidence?: unknown }).evidence = { samples: [{ primary: { values: { unsafe: { nested: true } } } }] };
+  assert.throws(() => parseValidationRunExport(JSON.stringify(invalidEvidence)), /invalid row values/);
 });
 
 test("JSON export discloses when validation retained fewer issue details than it counted", () => {
@@ -105,5 +110,7 @@ test("a Workbench-sized retention setting exports more than one thousand CSV fin
     assert.match(html, /Showing the first 500 matching details/);
     assert.equal((html.match(/data-result-search=/g) ?? []).length, 500);
     assert.match(html, /finding-card/);
+    assert.match(html, /Row evidence/);
+    assert.equal(result.issues[0].evidence?.samples[0].primary?.values.State, "invalid");
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

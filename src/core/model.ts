@@ -274,8 +274,8 @@ export interface SqlServerImportedSchema {
 }
 
 export type CsvTarget =
-  | { path: string; url?: never; enabled?: boolean }
-  | { url: string; path?: never; enabled?: boolean };
+  | { path: string; url?: never; enabled?: boolean; name?: string }
+  | { url: string; path?: never; enabled?: boolean; name?: string };
 
 export interface CsvContract {
   version: 1;
@@ -329,6 +329,26 @@ export interface ParsedCsv {
 
 export type IssueLevel = "file" | "column" | "row" | "cell";
 
+export type EvidenceValue = string | number | boolean | null;
+
+export interface FailureEvidenceRecord {
+  label?: string;
+  row?: number;
+  values: Record<string, EvidenceValue>;
+}
+
+export interface FailureEvidenceSample {
+  primary?: FailureEvidenceRecord;
+  related?: FailureEvidenceRecord[];
+}
+
+export interface FailureEvidence {
+  samples: FailureEvidenceSample[];
+  aggregate?: Record<string, EvidenceValue>;
+  totalSamples?: number;
+  limited?: boolean;
+}
+
 export interface ValidationIssue {
   level: IssueLevel;
   code: string;
@@ -346,6 +366,8 @@ export interface ValidationIssue {
   expected?: string | number;
   severity?: RuleSeverity;
   importance?: number;
+  /** Bounded source evidence used to determine this finding. */
+  evidence?: FailureEvidence;
 }
 
 export interface ValidationResult {

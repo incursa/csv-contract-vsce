@@ -40,7 +40,10 @@ export function activate(context: vscode.ExtensionContext): void {
     return withSqlSession(createSession, session => session.validate(contract, target, { scopeValue, signal, preview, onProgress, maxIssues }));
   }, profile => withSqlSession(createSession, session => session.listObjects(profile)),
   target => target.integratedConnection ? runSqlWorker({ kind: "schema", target }) : withSqlSession(createSession, session => session.captureSchema(target)),
-  (plan, signal) => plan.from.integratedConnection ? runSqlWorker({ kind: "cross", plan }, signal) : withSqlSession(createSession, session => session.validateCross(plan, signal)),
+  (plan, signal) => {
+    if (plan.mode !== "sql") throw new Error("CSV cross-file execution is handled by the suite host.");
+    return plan.from.integratedConnection ? runSqlWorker({ kind: "cross", plan }, signal) : withSqlSession(createSession, session => session.validateCross(plan, signal));
+  },
   async (contract, source, target, signal, onProgress, maxIssues) => {
     if (typeof target.source === "string" || target.source.scheme !== "file") return undefined;
     const specPath = vscode.Uri.parse(source).fsPath;

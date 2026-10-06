@@ -446,6 +446,11 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable target name used by suite target matrices and result displays."
+        },
         "enabled": {
           "type": "boolean",
           "default": true,
@@ -905,7 +910,11 @@
                 "isBlank",
                 "notBlank",
                 "equalsColumn",
-                "notEqualsColumn"
+                "notEqualsColumn",
+                "contains",
+                "notContains",
+                "startsWith",
+                "endsWith"
               ]
             },
             "value": {

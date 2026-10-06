@@ -1,0 +1,133 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { parseCsv } from "../src/core/contract";
+import { crossResult, evaluateCsvCrossCheck, planCrossCheck, type CrossCheck } from "../src/core/cross-checks";
+import type { CsvContract } from "../src/core/model";
+import { generateSuiteSql, parseSuite, runSuite } from "../src/core/suite";
+
+const paymentColumns = { RecordId: { presence: "required" as const }, Amount: { presence: "required" as const }, EffectiveDate: { presence: "required" as const } };
+const classificationColumns = { RecordId: { presence: "required" as const }, Category: { presence: "required" as const }, ChangedAt: { presence: "required" as const }, Sequence: { presence: "required" as const } };
+
+const relationship = (expectAmount: number, category: string): CrossCheck => ({
+  id: `${category.toLowerCase()}-amount`, kind: "relationship", from: "payments", to: "classifications",
+  keys: [{ from: "RecordId", to: "RecordId" }],
+  lookup: { orderBy: [{ column: "ChangedAt", type: "date", direction: "desc" }, { column: "Sequence", type: "number", direction: "desc" }] },
+  when: { side: "to", column: "Category", operator: "equals", value: category },
+  expect: { side: "from", column: "Amount", operator: category === "Special" ? "equals" : "notEquals", value: expectAmount, valueType: "number" },
+  nulls: "fail", missing: "fail"
+});
+
+test("relationship cross-checks retain the failing source and selected lookup rows", () => {
+  const payments: CsvContract = { version: 1, targets: [{ path: "payments.csv" }], schema: { columns: paymentColumns } };
+  const classifications: CsvContract = { version: 1, targets: [{ path: "classifications.csv" }], schema: { columns: classificationColumns } };
+  const check = relationship(1, "Special");
+  const plan = planCrossCheck(check, [{ id: "payments", source: "C:/portable/payments.csvtest.yaml", contract: payments }, { id: "classifications", source: "C:/portable/classifications.csvtest.yaml", contract: classifications }]);
+  assert.equal(plan.mode, "csv");
+  if (plan.mode !== "csv") throw new Error("Expected CSV plan.");
+  const from = parseCsv("RecordId,Amount,EffectiveDate\nA,1,2025-01-01\nB,2,2025-01-01\nC,1,2025-01-01\nD,3,2025-01-01\n");
+  const to = parseCsv("RecordId,Category,ChangedAt,Sequence\nA,Standard,2024-01-01,1\nA,Special,2025-01-01,1\nB,Special,2025-01-01,1\nC,Standard,2025-01-01,1\n");
+  const result = evaluateCsvCrossCheck(plan, from, to);
+  assert.equal(result.issueCount, 2);
+  assert.equal(result.issues.length, 1);
+  assert.match(result.issues[0].message, /evidence is attached/);
+  assert.equal(result.issues[0].evidence?.samples.length, 2);
+  assert.equal(result.issues[0].evidence?.samples[0].primary?.values.RecordId, "B");
+  assert.equal(result.issues[0].evidence?.samples[0].related?.[0].values.Category, "Special");
+
+  const greater = relationship(1, "Special");
+  greater.id = "special-amount-greater-than-one";
+  greater.expect = { side: "from", column: "Amount", operator: "greaterThan", value: 1, valueType: "number" };
+  const greaterPlan = planCrossCheck(greater, [{ id: "payments", source: "C:/portable/payments.csvtest.yaml", contract: payments }, { id: "classifications", source: "C:/portable/classifications.csvtest.yaml", contract: classifications }]);
+  assert.equal(greaterPlan.mode, "csv");
+  if (greaterPlan.mode !== "csv") throw new Error("Expected CSV plan.");
+  assert.equal(evaluateCsvCrossCheck(greaterPlan, from, to).issueCount, 2);
+});
+
+test("relationship SQL uses the same generic lookup, typed predicates, and bounded joined evidence", () => {
+  const payments: CsvContract = { version: 1, schema: { columns: paymentColumns }, sqlServer: { connection: "portable", schema: "left", table: "Payments" } };
+  const classifications: CsvContract = { version: 1, schema: { columns: classificationColumns }, sqlServer: { connection: "portable", schema: "right", table: "Classifications" } };
+  const plan = planCrossCheck(relationship(1, "Special"), [{ id: "payments", contract: payments }, { id: "classifications", contract: classifications }]);
+  assert.equal(plan.mode, "sql");
+  if (plan.mode !== "sql") throw new Error("Expected SQL plan.");
+  assert.match(plan.sql, /OUTER APPLY \(SELECT TOP \(1\)/);
+  assert.match(plan.sql, /TRY_CONVERT\(datetime2, candidate\.\[ChangedAt\]\) DESC/);
+  assert.match(plan.sql, /TRY_CONVERT\(decimal\(38,10\), candidate\.\[Sequence\]\) DESC/);
+  assert.match(plan.sql, /TRY_CONVERT\(decimal\(38,10\), a\.\[Amount\]\) = TRY_CONVERT/);
+  assert.match(plan.sql, /^SELECT COUNT_BIG\(\*\) AS FailureCount/);
+  assert.match(plan.detailSql!, /PrimaryRowJson/);
+  assert.match(plan.detailSql!, /RelatedRowJson/);
+  assert.doesNotMatch(plan.sql, /DROP|DELETE|UPDATE/);
+});
+
+test("suite parsing rejects ambiguous relationship predicates and nondeterministic lookups", () => {
+  const prefix = "suiteVersion: 1\nid: portable\nmembers: [{id: payments, ref: payments.yaml}, {id: classifications, ref: classifications.yaml}]\n";
+  assert.throws(() => parseSuite(`${prefix}crossChecks: [{id: bad, kind: relationship, from: payments, to: classifications, keys: [{from: RecordId, to: RecordId}], expect: {side: from, column: Amount, operator: equals, value: 1}}]\n`), /lookup and expectation/);
+  assert.throws(() => parseSuite(`${prefix}crossChecks: [{id: bad, kind: relationship, from: payments, to: classifications, keys: [{from: RecordId, to: RecordId}], lookup: {orderBy: [{column: ChangedAt, type: date}]}, expect: {side: from, column: Amount, operator: equals, value: 1, other: {side: to, column: Sequence}}}]\n`), /ambiguous/);
+});
+
+test("row selections rank, filter, join required participants, and normalize keys for CSV", () => {
+  const source: CsvContract = { version: 1, targets: [{ path: "source.csv" }], schema: { columns: {
+    Person: { presence: "required" }, Changed: { presence: "required" }, Status: { presence: "required" }, Company: { presence: "required" }
+  } } };
+  const target: CsvContract = { version: 1, targets: [{ path: "target.csv" }], schema: { columns: { Person: { presence: "required" } } } };
+  const eligibility: CsvContract = { version: 1, targets: [{ path: "eligibility.csv" }], schema: { columns: { Company: { presence: "required" }, Eligible: { presence: "required" } } } };
+  const check: CrossCheck = {
+    id: "selected-source", kind: "foreignKey", from: "source", to: "target",
+    keys: [{ from: "Person", to: "Person", normalizers: ["trim", "trimLeadingZeros"] }], nulls: "fail", evidence: "aggregate",
+    fromSelections: [{
+      partitionBy: ["Person"], orderBy: [{ column: "Changed", type: "date", direction: "desc" }],
+      having: { side: "from", column: "Status", operator: "equals", value: "A" },
+      requires: [{ member: "eligibility", keys: [{ from: "Company", to: "Company" }], where: { side: "to", column: "Eligible", operator: "equals", value: "Y" } }]
+    }]
+  };
+  const plan = planCrossCheck(check, [{ id: "source", contract: source }, { id: "target", contract: target }, { id: "eligibility", contract: eligibility }]);
+  assert.equal(plan.mode, "csv");
+  if (plan.mode !== "csv") throw new Error("Expected CSV plan.");
+  const result = evaluateCsvCrossCheck(plan,
+    parseCsv("Person,Changed,Status,Company\n0001,2025-01-01,I,10\n0001,2026-01-01,A,10\n0002,2026-01-01,A,20\n0003,2026-01-01,I,10\n"),
+    parseCsv("Person\n1\n"),
+    { eligibility: parseCsv("Company,Eligible\n10,Y\n20,N\n") });
+  assert.equal(result.issueCount, 0);
+  assert.equal(plan.check.evidence, "aggregate");
+});
+
+test("SQL row selections stay generic and use ranked and required member subqueries", () => {
+  const source: CsvContract = { version: 1, schema: { columns: {
+    Person: { presence: "required" }, Changed: { presence: "required" }, Status: { presence: "required" }, Company: { presence: "required" }
+  }, }, sqlServer: { connection: "portable", schema: "a", table: "Source" } };
+  const target: CsvContract = { version: 1, schema: { columns: { Person: { presence: "required" } }, }, sqlServer: { connection: "portable", schema: "b", table: "Target" } };
+  const eligibility: CsvContract = { version: 1, schema: { columns: { Company: { presence: "required" }, Eligible: { presence: "required" } }, }, sqlServer: { connection: "portable", schema: "c", table: "Eligibility" } };
+  const check: CrossCheck = { id: "selected-source-sql", kind: "foreignKey", from: "source", to: "target",
+    keys: [{ from: "Person", to: "Person", normalizers: ["trimLeadingZeros"] }], evidence: "aggregate",
+    fromSelections: [{ partitionBy: ["Person"], orderBy: [{ column: "Changed", type: "date", direction: "desc" }],
+      having: { side: "from", column: "Status", operator: "equals", value: "A" },
+      requires: [{ member: "eligibility", keys: [{ from: "Company", to: "Company" }] }] }] };
+  const plan = planCrossCheck(check, [{ id: "source", contract: source }, { id: "target", contract: target }, { id: "eligibility", contract: eligibility }]);
+  assert.equal(plan.mode, "sql");
+  if (plan.mode !== "sql") throw new Error("Expected SQL plan.");
+  assert.match(plan.sql, /ROW_NUMBER\(\) OVER \(PARTITION BY/);
+  assert.match(plan.sql, /EXISTS \(SELECT 1 FROM \[c\]\.\[Eligibility\]/);
+  assert.match(plan.sql, /PATINDEX\(N'%\[\^0\]%'/);
+  assert.equal(plan.detailSql, undefined);
+});
+
+test("a suite target matrix reuses logical members across matching target names", async () => {
+  const make = (schema: string): CsvContract => ({ version: 1, schema: { columns: { Id: { presence: "required" } } }, sqlServer: { targets: [
+    { name: "Environment A", connection: "portable", schema, table: "Items" },
+    { name: "Environment B", connection: "portable", schema, table: "Items" }
+  ] } });
+  const check: CrossCheck = { id: "shared-members", kind: "foreignKey", from: "left", to: "right", keys: [{ from: "Id", to: "Id" }] };
+  const members = [{ id: "left", source: "suite", contract: make("a") }, { id: "right", source: "suite", contract: make("b") }];
+  const selected = planCrossCheck(check, members, { targetName: "Environment B" });
+  assert.equal(selected.mode, "sql");
+  if (selected.mode !== "sql") throw new Error("Expected SQL plan.");
+  assert.match(selected.sql, /\[b\]\.\[Items\]/);
+  const report = await runSuite({ id: "matrix", source: "suite", isSuite: true, members, crossChecks: [check], targetMatrix: [
+    { id: "a", target: "Environment A" }, { id: "b", target: "Environment B" }
+  ] }, async () => crossResult(check, 0), false, undefined, { crossExecutor: async plan => crossResult(plan.check, 0) });
+  assert.deepEqual(report.runs.filter(run => run.member.startsWith("cross:")).map(run => run.member), ["cross:shared-members@a", "cross:shared-members@b"]);
+  const generated = generateSuiteSql({ id: "matrix", source: "suite", isSuite: true, members, crossChecks: [check], targetMatrix: [
+    { id: "a", target: "Environment A" }, { id: "b", target: "Environment B" }
+  ] });
+  assert.deepEqual(generated.batches.filter(batch => batch.member.startsWith("cross:")).map(batch => batch.member), ["cross:shared-members@a", "cross:shared-members@b"]);
+});

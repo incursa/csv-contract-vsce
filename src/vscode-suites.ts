@@ -1,6 +1,6 @@
 import { LiveTests } from "./core/live-tests";
 import { DependencyWatchers } from "./vscode-dependencies";
-import type { CrossExecutor } from "./core/cross-checks";
+import { evaluateCsvCrossCheck, type CrossExecutor } from "./core/cross-checks";
 import { manageHistory } from "./vscode-history";
 import { contractPath, readEditorContract, ruleOffset } from "./core/editor-document";
 import type { LoadedSuite } from "./core/suite";
@@ -12,9 +12,10 @@ import type { DesktopSqlServerRunner } from "./extension";
 import { renderWorkspaceReportHtml } from "./workspace-report";
 import { configuredTargets, readTargetText } from "./vscode-targets";
 import { resolveSqlServerTargets } from "./core/sql-server-targets";
-import { validateCsv } from "./core/contract";
+import { parseCsv, validateCsv } from "./core/contract";
 import { renderSuiteWorkbench, type SuiteMemberProgress, type SuiteRunProgress, type SuiteTargetProgress } from "./suite-workbench";
 import { suiteErrorsCsv, updateSuiteConnection } from "./suite-actions";
+import { badRowsXlsx, contractCheckCatalog } from "./bad-rows-xlsx";
 import { filterResultRuns } from "./results-view";
 import { errorDetails } from "./core/error-details";
 import type { SuiteConnection } from "./core/suite";
@@ -290,7 +291,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
       dependencies = nextDependencies;
       dependencyWatchers.set(dependencies);
       for (const [id, value] of fingerprints) if (previous.get(id) !== value) affected.add(id);
-      const crossFingerprint = JSON.stringify(suite.crossChecks ?? []);
+      const crossFingerprint = JSON.stringify([suite.crossChecks ?? [], suite.targetMatrix ?? []]);
       if (crossFingerprint !== previousCrossChecks) for (const check of suite.crossChecks ?? []) { affected.add(check.from); affected.add(check.to); }
       previousCrossChecks = crossFingerprint;
       let expanded = true;
@@ -319,7 +320,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
           if (message.type === "failed") {
             const checks = parseSuite(document.getText()).crossChecks ?? [];
             members = report?.runs.filter(r => r.status === "FAIL" || r.status === "ERROR").flatMap(r => {
-              const check = checks.find(c => `cross:${c.id}` === r.member);
+              const check = checks.find(c => r.member === `cross:${c.id}` || r.member.startsWith(`cross:${c.id}@`));
               return check ? [check.from, check.to] : [r.member];
             }) ?? [];
             members = [...new Set(members)];
@@ -374,12 +375,21 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
           const exportScope = { members: message.memberIds ?? "all", filter: message.resultFilter ?? "", selectedIssues: message.selectedIssues ?? [], stale, totals: "original scope; retained details may be filtered or selected" };
           const filtered = filterResultRuns(scoped, message.resultFilter ?? "", message.selectedIssues);
           const snapshot = { ...report, runs: filtered, members: report.members.map(member => ({ id: member.id, runs: filtered.filter(run => run.member === member.id) })).filter(member => member.runs.length), exportScope, stale };
-          const format = await vscode.window.showQuickPick(["CSV", "JSON"], { title: "Export suite errors and results" });
+          const format = await vscode.window.showQuickPick(["CSV", "JSON", "Excel validation package"], { title: "Export suite errors and results" });
           if (!format) return;
-          const destination = await vscode.window.showSaveDialog({ title: "Export suite results", defaultUri: vscode.Uri.joinPath(document.uri, "..", `${snapshot.suite}.results.${format.toLowerCase()}`), filters: { [format]: [format.toLowerCase()] } });
+          const extension = format === "CSV" ? "csv" : format === "JSON" ? "json" : "validation-package.xlsx";
+          const destination = await vscode.window.showSaveDialog({ title: "Export suite results", defaultUri: vscode.Uri.joinPath(document.uri, "..", `${snapshot.suite}.results.${extension}`), filters: format === "CSV" ? { CSV: ["csv"] } : format === "JSON" ? { JSON: ["json"] } : { "Excel workbooks": ["xlsx"] } });
           if (!destination) return;
-          const content = format === "CSV" ? suiteErrorsCsv(snapshot.runs, exportScope) : JSON.stringify({ schema: "incursa.csv-suite-results/v1", ...snapshot }, null, 2) + "\n";
-          await vscode.workspace.fs.writeFile(destination, new TextEncoder().encode(content));
+          const content = format === "CSV" ? suiteErrorsCsv(snapshot.runs, exportScope) : format === "JSON" ? JSON.stringify({ schema: "incursa.csv-suite-results/v1", ...snapshot }, null, 2) + "\n"
+            : badRowsXlsx(scoped, { title: `${snapshot.suite} validation results`, checkCatalog: run => {
+              if (run.member?.startsWith("cross:")) {
+                const id = run.member.slice("cross:".length).split("@", 1)[0];
+                return [{ id, category: "Cross-source check", description: `Validate the configured relationship or reconciliation between ${run.table ?? "suite sources"}.` }];
+              }
+              const member = currentSuite?.members.find(candidate => candidate.id === run.member);
+              return member?.contract ? contractCheckCatalog(member.contract) : [];
+            } });
+          await vscode.workspace.fs.writeFile(destination, typeof content === "string" ? new TextEncoder().encode(content) : content);
           notice = `Exported results to ${destination.fsPath}`;
           await render();
         }
@@ -438,6 +448,23 @@ export async function executeVscodeSuite(uri: vscode.Uri, runner?: DesktopSqlSer
 async function executeLoadedSuite(suite: LoadedSuite, runner?: DesktopSqlServerRunner, controls: Parameters<typeof runSuite>[4] = {}) {
   const configuredConcurrency = vscode.workspace.getConfiguration("csvContract").get<number>("suiteParallelMembers", 4);
   const parallelMembers = Number.isFinite(configuredConcurrency) ? Math.min(32, Math.max(1, Math.floor(configuredConcurrency))) : 4;
+  const executeCross: CrossExecutor = async (plan, signal) => {
+    signal?.throwIfAborted();
+    if (plan.mode === "sql") {
+      if (!controls.crossExecutor) throw new Error("SQL cross-table execution is unavailable in this host.");
+      return controls.crossExecutor(plan, signal);
+    }
+    const read = async (participant: typeof plan.from) => {
+      const resolved = configuredTargets(vscode.Uri.parse(participant.source), { ...participant.contract, targets: [participant.target] })[0];
+      return parseCsv(await readTargetText(resolved), participant.contract.csv);
+    };
+    const [from, to, participants] = await Promise.all([
+      read(plan.from), read(plan.to),
+      Promise.all(Object.entries(plan.participants).map(async ([id, participant]) => [id, await read(participant)] as const)).then(Object.fromEntries)
+    ]);
+    signal?.throwIfAborted();
+    return evaluateCsvCrossCheck(plan, from, to, participants);
+  };
   return runSuite(suite, async (contract, target, source, _index, onProgress) => {
     if (!runner) throw new Error("Database suite execution requires the desktop extension host.");
     return runner(await resolveBaseline(contract, source, vscodeSuiteIO), await resolveTargetBaseline(target, source, vscodeSuiteIO), controls.signal, undefined, onProgress);
@@ -447,7 +474,7 @@ async function executeLoadedSuite(suite: LoadedSuite, runner?: DesktopSqlServerR
     const csv = await readTargetText(resolved);
     onProgress?.({ phase: "validating", bytesRead: csv.length, totalBytes: csv.length });
     return validateCsv(await resolveBaseline(contract, source, vscodeSuiteIO), csv);
-  }, { parallelTargets: Number.MAX_SAFE_INTEGER, parallelMembers, ...controls });
+  }, { parallelTargets: Number.MAX_SAFE_INTEGER, parallelMembers, ...controls, crossExecutor: executeCross });
 }
 export async function showSuiteRun(context: vscode.ExtensionContext, uri: vscode.Uri, runner?: DesktopSqlServerRunner, crossExecutor?: CrossExecutor): Promise<void> {
   try {

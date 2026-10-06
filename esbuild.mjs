@@ -70,6 +70,7 @@ const builds = [
     ...shared,
     entryPoints: [
       "test/core.test.ts",
+      "test/cross-relationship.test.ts",
       "test/validator-roadmap.test.ts",
       "test/sql-session.test.ts",
       "test/sql-lifecycle.test.ts",
@@ -83,6 +84,7 @@ const builds = [
       "test/targets.test.ts",
       "test/manifest.test.ts",
       "test/issue-export.test.ts",
+      "test/bad-rows-xlsx.test.ts",
       "test/workspace-report.test.ts",
       "test/semantic-comparison.test.ts",
       "test/comparison-definition.test.ts",

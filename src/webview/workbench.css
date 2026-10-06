@@ -380,6 +380,19 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .finding-technical { font-size: .72rem; }
 .finding-technical summary { width: fit-content; color: var(--inc-text-secondary); cursor: pointer; }
 .finding-technical dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; margin: .5rem 0 0; }
+.finding-evidence { margin-top: .15rem; padding: .55rem .65rem; border: 1px solid var(--inc-border-default); border-radius: 4px; background: #fafafa; font-size: .75rem; }
+.finding-evidence > summary { cursor: pointer; font-weight: 650; }
+.evidence-sample { margin-top: .7rem; padding-top: .6rem; border-top: 1px solid var(--inc-border-default); }
+.evidence-sample h4, .evidence-record h5, .evidence-aggregate h5 { margin: 0 0 .35rem; font-size: .74rem; }
+.evidence-record + .evidence-record { margin-top: .55rem; }
+.evidence-table { display: grid; max-height: 18rem; overflow: auto; border: 1px solid var(--inc-border-default); border-radius: 3px; background: #fff; }
+.evidence-table > div { display: grid; grid-template-columns: minmax(8rem, .7fr) minmax(10rem, 1.3fr); border-top: 1px solid var(--inc-border-default); }
+.evidence-table > div:first-child { border-top: 0; }
+.evidence-table span, .evidence-table code { min-width: 0; padding: .35rem .45rem; overflow-wrap: anywhere; }
+.evidence-table span { color: var(--inc-text-secondary); font-weight: 600; }
+.evidence-table code { border-left: 1px solid var(--inc-border-default); white-space: pre-wrap; }
+.evidence-aggregate { margin-top: .6rem; }
+.evidence-aggregate pre { max-height: 12rem; overflow: auto; margin: 0; padding: .5rem; background: #fff; }
 .results .error { margin: 0; color: var(--vscode-errorForeground, #bb3030); font-size: .78rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .visual-rule { margin-top: .7rem; padding-top: .6rem; border-top: 1px solid var(--inc-border-default); }
 .visual-rule > summary, .predicate-more > summary { width: fit-content; color: #344bbd; font-size: .78rem; font-weight: 600; cursor: pointer; }
