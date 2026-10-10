@@ -4,17 +4,19 @@
 
 Define reusable YAML contracts for CSV files, edit them visually in VS Code, and run the same validations interactively or in unattended workflows.
 
-## Validator workflows in 0.15
+## Validator workflows
 
 Standalone, referenced and inline suite members share the visual contract editor.
 Add validation presets, edit nested predicates, capture and review versioned schema
 baselines, and execute full-scope rule previews. Explicitly enable **Live tests**
 to rerun valid draft changes; opening a contract never starts database queries.
 Suite controls include connection provenance and bulk editing, metadata preflight,
-selective reruns, searchable results, local history and same-connection cross-table
-checks. See [Validator workflows](docs/VALIDATOR-WORKFLOWS.md) for formats, defaults,
-examples and current limits; [roadmap status](docs/VALIDATOR-ROADMAP.md) identifies
-the remaining work. Baselines change only through explicit reviewed acceptance.
+selective reruns, searchable results, local history, bounded row evidence, and
+same-connection cross-table checks. Results can be reviewed historically in
+read-only mode and exported as JSON, CSV, or an Excel validation package. See
+[Validator workflows](docs/VALIDATOR-WORKFLOWS.md) for formats, defaults, examples
+and current limits; [roadmap status](docs/VALIDATOR-ROADMAP.md) identifies the
+remaining work. Baselines change only through explicit reviewed acceptance.
 
 ## Build contracts visually
 
@@ -36,7 +38,7 @@ Choose **Red / green** or **Gradient** directly in the **Latest results** header
 
 ## Run workspace test suites
 
-Running a suite opens a dedicated progress screen immediately. It rolls all test files into an overall suite bar, shows one member bar per referenced or inline contract, and displays compact live target progress beneath each member. Independent targets execute concurrently, and up to four test files run at once by default so large suites do not overwhelm the database. Change `csvContract.suiteParallelMembers` to tune that limit. Completed contract and suite runs offer **Rerun failed** when a target or test file fails.
+Running a suite opens a dedicated progress screen immediately. It rolls all test files into an overall suite bar, shows one member bar per referenced or inline contract, and displays compact live target progress beneath each member. Independent targets execute concurrently, and up to four test files run at once by default so large suites do not overwhelm the database. Change `csvContract.suiteParallelMembers` to tune that limit. Completed contract and suite runs offer **Rerun failed** when a target or test file fails. Suite cross-checks support reconciliation, deterministic relationships, filtered or ranked row selection, required matches from a third source, portable key normalization, and target matrices that reuse logical contracts across environments.
 
 Open **CSV Contract** in the Activity Bar to see every `*.csvtest.yaml` and `*.csvtest.yml` file in the workspace. Expand a contract to inspect and open its local or URL targets. Check the contracts you want and select **Run Selected**. A dedicated report opens with totals for the complete test run and expandable results for every contract-target pair. Select **Last run** to reopen the aggregate report, or select an individual green or red run to open the report focused on that result. Contracts that share a target reuse the same loaded CSV, and the selection remains checked for the workspace.
 
@@ -205,4 +207,4 @@ Use an ordered `*.csvsuite.yaml` master to reference contracts with different sc
 
 ## Save and reload comparisons
 
-Version 0.15.3 adds **Save comparison setup** in comparison results and **CSV Contract: Load Comparison Setup** in the Command Palette. Shared keyed CSV setups can also run in SSMS Database Tools 0.27.5. See [the format and compatibility guide](docs/comparison-setups.md) for supported conversions, relative paths, SQL limitations and legacy options.
+Use **Save comparison setup** in comparison results and **CSV Contract: Load Comparison Setup** in the Command Palette. Shared keyed CSV setups can also run in SSMS Database Tools 0.27.5. See [the format and compatibility guide](docs/comparison-setups.md) for supported conversions, relative paths, SQL limitations and legacy options.
