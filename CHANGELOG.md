@@ -228,7 +228,7 @@
 ## 0.6.0
 
 - Added canonical pure-TypeScript full-row multiset and explicit keyed semantic comparison.
-- Added duplicate-key detection without arbitrary pairing, schema summaries, and added, removed, changed, unchanged, and duplicate counts.
+- Added duplicate-key detection without arbitrary pairing, schema summaries, and counts for added, removed, changed, unchanged, and duplicate rows.
 - Added opt-in ignored columns, trimming, invariant case folding, blank/null equivalence, date normalization, and exact decimal normalization without business-key inference.
 - Added bounded redacted diagnostics plus deterministic JSON, CSV, Markdown, schema, difference, and normalized evidence files.
 - Added a responsive aggregate comparison result view and native VS Code normalized diff action.
