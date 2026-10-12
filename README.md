@@ -151,6 +151,8 @@ Omit `--spec` to create a new contract. For a multi-table source, add `--table s
 
 ## Get started
 
+Requires Visual Studio Code `^1.110.0`.
+
 1. Install **CSV Contract Workbench** from the VS Code Marketplace.
 2. Run **CSV Contract: Create Contract from CSV** from the Command Palette.
 3. Review the generated `*.csvtest.yaml` file in the visual workbench or YAML editor.
