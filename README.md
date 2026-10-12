@@ -177,6 +177,8 @@ CSV contents and contracts are processed locally. CSV Contract Workbench does no
 
 The extension code and documentation are licensed under Apache-2.0. CSV Contract Workbench and its product marks are Incursa brand assets and are not granted under that license.
 
+Report bugs at [the project issue tracker](https://github.com/incursa/csv-contract-vsce/issues).
+
 ## Run from PowerShell
 
 The installed extension includes the PowerShell wrapper and its bundled validation engine. Node must be available on `PATH`, but no separate tooling download is required.
