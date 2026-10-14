@@ -5,6 +5,7 @@
 Define reusable YAML contracts for CSV files, edit them visually in VS Code, and run the same validations interactively or in unattended workflows.
 
 This project is built and verified by a dedicated Fleet worker.
+Pull request checks report the Fleet approval state.
 
 ## Validator workflows
 
