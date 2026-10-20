@@ -264,9 +264,13 @@ test("SQL grouped evaluation uses bounded target reads and matches CSV findings"
     { EntityId: "alpha", Event: "PAUSE", Day: "2026-01-02", Seq: "1", ExternalRef: "x" }];
   const columns = Object.keys(data[0]);
   await withFiles(csv, async (csvPath, specPath) => {
-    const comparison = (await validateCsvFile(csvPath, [{ spec: specPath, contract: parent() }])).runs[0].result;
+    const selectedParent = parent();
+    selectedParent.groupTests![0].select = { rowCount: {
+      where: { column: "Event", operator: "equals", value: "START" }, count: { min: 1 }
+    } };
+    const comparison = (await validateCsvFile(csvPath, [{ spec: specPath, contract: selectedParent }])).runs[0].result;
     const target = { connection: "mock", schema: "dbo", table: "Events" };
-    const definition: CsvContract = { ...parent(), schema: { ...parent().schema, rowCount: { min: 1 } },
+    const definition: CsvContract = { ...selectedParent, schema: { ...selectedParent.schema, rowCount: { min: 1 } },
       sqlServer: { rowLocator: ["EntityId", "Day", "Seq"] } };
     const generated = generateSqlServerValidation(definition, { target, includeDetailQueries: false });
     const queries: string[] = [];
@@ -348,9 +352,61 @@ test("direct grouped relations have SQL and CSV parity", async () => {
   });
 });
 
+test("aggregate group selectors run child rules only for matching groups", async () => {
+  const assignmentHeaders = "Person,Day,Employer,Action,Reason,Sequence";
+  const transfer = { column: "Action", operator: "in" as const,
+    values: ["TRANSFER", "GLB_TRANSFER", "TRANSFER_OUT", "TRANSFER_IN"] };
+  const definition: CsvContract = { version: 1, csv: { trimValues: true, caseSensitive: false }, schema: { columns: {
+    Person: { presence: "required" }, Day: { presence: "required" }, Employer: { presence: "required" },
+    Action: { presence: "required" }, Reason: { presence: "required" }, Sequence: { presence: "required" }
+  } }, groupTests: [{
+    id: "cross_employer_days", groupBy: ["Person", "Day"],
+    select: { distinctCount: { column: "Employer", where: { column: "Employer", operator: "notBlank" }, count: { min: 2 } } },
+    contract: { version: 1, schema: { columns: {
+      Person: { presence: "required" }, Day: { presence: "required" }, Employer: { presence: "required" },
+      Action: { presence: "required" }, Reason: { presence: "required" }, Sequence: { presence: "required" }
+    } }, rules: [
+      { id: "transfer_is_tro", when: transfer, expect: { column: "Reason", operator: "equals", value: "TRO" } },
+      { id: "transfer_is_sequence_one", when: transfer, expect: { column: "Sequence", operator: "equals", value: "1" } }
+    ] }
+  }] };
+  const csv = [assignmentHeaders,
+    "p1,2026-10-12,A,TRANSFER,TRO,1", "p1,2026-10-12,A,CHANGE,,2", "p1,2026-10-12,B,CHANGE,,3",
+    "p2,2026-10-12,A,TRANSFER,BAD,9", "p2,2026-10-12,A,CHANGE,,10",
+    "p3,2026-10-12,A,TRANSFER,BAD,2", "p3,2026-10-12,B,CHANGE,,3"].join("\n") + "\n";
+  parseContract(stringify(definition));
+  const memory = validateCsv(definition, csv);
+  await withFiles(csv, async (csvPath) => {
+    const streamed = (await validateCsvFile(csvPath, [{ spec: csvPath, contract: definition }])).runs[0].result;
+    for (const result of [memory, streamed]) {
+      assert.deepEqual(result.groupOutcomes?.find(outcome => outcome.id === "cross_employer_days"),
+        { id: "cross_employer_days", groups: 2, passed: 1, failed: 1 });
+      assert.deepEqual(result.issues.filter(issue => issue.testId?.startsWith("cross_employer_days/"))
+        .map(issue => issue.testId).sort(), ["cross_employer_days/transfer_is_sequence_one", "cross_employer_days/transfer_is_tro"]);
+      assert(result.issues.every(issue => issue.group?.Person !== "p2"));
+    }
+  });
+});
+
+test("aggregate group selectors compose filtered row and distinct counts", () => {
+  const definition = parent();
+  definition.groupTests![0].select = { all: [
+    { distinctCount: { column: "ExternalRef", count: { min: 2 } } },
+    { rowCount: { where: { column: "Event", operator: "equals", value: "START" }, count: { exact: 1 } } }
+  ] };
+  const csv = [headers, "alpha,START,2026-01-01,1,a", "alpha,NOTE,2026-01-01,2,b",
+    "beta,START,2026-01-01,1,a", "beta,START,2026-01-02,1,b"].join("\n") + "\n";
+  const result = validateCsv(definition, csv);
+  assert.deepEqual(result.groupOutcomes?.find(outcome => outcome.id === "events"),
+    { id: "events", groups: 1, passed: 1, failed: 0 });
+});
+
 test("schema accepts grouped child contracts and rejects undeclared keys", () => {
   assert.equal(parseContract(stringify(parent())).groupTests?.length, 1);
   const invalid = parent();
   invalid.groupTests![0].groupBy = ["Missing"];
   assert.throws(() => parseContract(stringify(invalid)), /undeclared column/);
+  const invalidSelector = parent();
+  invalidSelector.groupTests![0].select = { distinctCount: { column: "Missing", count: { min: 2 } } };
+  assert.throws(() => parseContract(stringify(invalidSelector)), /selector references undeclared column Missing/);
 });

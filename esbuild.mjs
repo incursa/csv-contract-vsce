@@ -1,6 +1,6 @@
 import * as esbuild from "esbuild";
 import { createHash } from "node:crypto";
-import { copyFile, cp, mkdir, readFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, readdir } from "node:fs/promises";
 
 const production = process.argv.includes("--production");
 const watch = process.argv.includes("--watch");
@@ -14,7 +14,14 @@ const shared = {
 await mkdir("dist/web", { recursive: true });
 await mkdir("dist/node", { recursive: true });
 await mkdir("dist/cli", { recursive: true });
+await mkdir("dist/standalone", { recursive: true });
 await mkdir("dist/test", { recursive: true });
+// Every root-level unit test participates in release verification, including
+// newly added validation features. Browser acceptance tests remain separate.
+const testEntries = (await readdir("test"))
+  .filter(name => name.endsWith(".test.ts"))
+  .sort()
+  .map(name => `test/${name}`);
 
 const builds = [
   {
@@ -59,7 +66,7 @@ const builds = [
   },
   {
     ...shared,
-    entryPoints: ["src/cli.ts"],
+    entryPoints: ["src/cli-entry.ts"],
     outfile: "dist/cli/csv-contract.cjs",
     format: "cjs",
     platform: "node",
@@ -68,30 +75,15 @@ const builds = [
   },
   {
     ...shared,
-    entryPoints: [
-      "test/core.test.ts",
-      "test/cross-relationship.test.ts",
-      "test/validator-roadmap.test.ts",
-      "test/sql-session.test.ts",
-      "test/sql-lifecycle.test.ts",
-      "test/suite.test.ts",
-      "test/suite-workbench.test.ts",
-      "test/suite-acceptance.test.ts",
-      "test/generator.test.ts",
-      "test/streaming.test.ts",
-      "test/grouped-contract.test.ts",
-      "test/outline-generator.test.ts",
-      "test/targets.test.ts",
-      "test/manifest.test.ts",
-      "test/issue-export.test.ts",
-      "test/bad-rows-xlsx.test.ts",
-      "test/workspace-report.test.ts",
-      "test/semantic-comparison.test.ts",
-      "test/comparison-definition.test.ts",
-      "test/sql-server-generator.test.ts",
-      "test/sql-schema-import.test.ts",
-      "test/result-health.test.ts"
-    ],
+    entryPoints: ["src/standalone-entry.ts"],
+    outfile: "dist/standalone/validation-runner.cjs",
+    format: "cjs",
+    platform: "node",
+    alias: { msnodesqlv8: "./src/node/standalone-msnodesqlv8.cjs" }
+  },
+  {
+    ...shared,
+    entryPoints: testEntries,
     outdir: "dist/test",
     entryNames: "[name]",
     outExtension: { ".js": ".cjs" },

@@ -35,10 +35,14 @@ export class RowSortStore {
     this.bufferedCharacters = 0;
   }
 
-  public async *rows(): AsyncGenerator<OrderedRow> {
+  public async *rows(signal?: AbortSignal): AsyncGenerator<OrderedRow> {
+    signal?.throwIfAborted();
     if (this.paths.length === 0) {
       this.buffer.sort(this.compare);
-      yield* this.buffer;
+      for (const row of this.buffer) {
+        signal?.throwIfAborted();
+        yield row;
+      }
       return;
     }
     this.spill();
@@ -49,31 +53,37 @@ export class RowSortStore {
         const batch = paths.slice(start, start + 64);
         const path = join(this.directory, `merge-${this.mergeId++}.jsonl`);
         const descriptor = openSync(path, "w");
-        try { for await (const row of this.merge(batch)) writeSync(descriptor, JSON.stringify(row) + "\n"); }
+        try { for await (const row of this.merge(batch, signal)) writeSync(descriptor, JSON.stringify(row) + "\n"); }
         finally { closeSync(descriptor); }
         batch.forEach(unlinkSync);
         merged.push(path);
       }
       paths = merged;
     }
-    yield* this.merge(paths);
+    yield* this.merge(paths, signal);
   }
 
-  private async *merge(paths: string[]): AsyncGenerator<OrderedRow> {
-    const readers = paths.map(path => createInterface({ input: createReadStream(path), crlfDelay: Infinity })[Symbol.asyncIterator]());
-    const heads = await Promise.all(readers.map(async reader => {
-      const next = await reader.next();
-      return next.done ? undefined : JSON.parse(next.value) as OrderedRow;
-    }));
-    while (true) {
-      let best = -1;
-      for (let i = 0; i < heads.length; i++) {
-        if (heads[i] && (best < 0 || this.compare(heads[i]!, heads[best]!) < 0)) best = i;
+  private async *merge(paths: string[], signal?: AbortSignal): AsyncGenerator<OrderedRow> {
+    const interfaces = paths.map(path => createInterface({ input: createReadStream(path), crlfDelay: Infinity }));
+    const readers = interfaces.map(reader => reader[Symbol.asyncIterator]());
+    try {
+      const heads = await Promise.all(readers.map(async reader => {
+        const next = await reader.next();
+        return next.done ? undefined : JSON.parse(next.value) as OrderedRow;
+      }));
+      while (true) {
+        signal?.throwIfAborted();
+        let best = -1;
+        for (let i = 0; i < heads.length; i++) {
+          if (heads[i] && (best < 0 || this.compare(heads[i]!, heads[best]!) < 0)) best = i;
+        }
+        if (best < 0) break;
+        yield heads[best]!;
+        const next = await readers[best].next();
+        heads[best] = next.done ? undefined : JSON.parse(next.value) as OrderedRow;
       }
-      if (best < 0) break;
-      yield heads[best]!;
-      const next = await readers[best].next();
-      heads[best] = next.done ? undefined : JSON.parse(next.value) as OrderedRow;
+    } finally {
+      interfaces.forEach(reader => reader.close());
     }
   }
 

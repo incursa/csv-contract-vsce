@@ -18,7 +18,7 @@ export interface SqlWorkerProgress { kind: "progress"; progress: ValidationProgr
 export function runSqlWorker<T extends ValidationResult | SchemaBaseline>(operation: SqlWorkerOperation, signal?: AbortSignal,
   workerPath = join(__dirname, "sql-worker.cjs"), cancelGraceMs = 5000,
   onProgress?: (progress: ValidationProgress) => void): Promise<T> {
-  signal?.throwIfAborted();
+  if (signal?.aborted) return Promise.reject(signal.reason);
   return new Promise((resolve, reject) => {
     const options: ForkOptions & { windowsHide: boolean } = { windowsHide: true, execArgv: [],
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, stdio: ["ignore", "ignore", "ignore", "ipc"] };
@@ -26,15 +26,33 @@ export function runSqlWorker<T extends ValidationResult | SchemaBaseline>(operat
     let reply: SqlWorkerReply | undefined;
     let processError: Error | undefined;
     let cancelTimer: ReturnType<typeof setTimeout> | undefined;
+    const forceStop = (): void => { child.kill(); };
     const abort = () => {
       if (child.connected) child.send({ kind: "cancel" }, () => {});
-      cancelTimer ??= setTimeout(() => { child.kill(); }, cancelGraceMs);
+      cancelTimer ??= setTimeout(forceStop, cancelGraceMs);
     };
     child.on("message", message => {
-      if ((message as SqlWorkerProgress).kind === "progress") { onProgress?.((message as SqlWorkerProgress).progress); return; }
+      if (signal?.aborted) return;
+      if ((message as SqlWorkerProgress).kind === "progress") {
+        try { onProgress?.((message as SqlWorkerProgress).progress); }
+        catch (error) {
+          processError = error instanceof Error ? error : new Error(String(error));
+          forceStop();
+        }
+        return;
+      }
       reply = message as SqlWorkerReply;
     });
     child.on("error", error => { processError = error; });
+    child.on("disconnect", () => {
+      if (reply || signal?.aborted) return;
+      cancelTimer ??= setTimeout(() => {
+        if (!reply) {
+          processError ??= new Error("SQL worker disconnected before returning a complete result.");
+          forceStop();
+        }
+      }, cancelGraceMs);
+    });
     child.on("close", code => {
       if (cancelTimer) clearTimeout(cancelTimer);
       signal?.removeEventListener("abort", abort);

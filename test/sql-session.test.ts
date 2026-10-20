@@ -93,7 +93,7 @@ test("SQL cancellation invokes request.cancel and removes the listener after com
   controller.abort();
   assert.equal(cancels, 1);
   resolve({ recordset: [] });
-  await run;
+  await assert.rejects(run);
   await assert.rejects(queryWithCancellation(request as Parameters<typeof queryWithCancellation>[0], "SELECT 1", controller.signal));
   assert.equal(cancels, 1);
 });
@@ -111,4 +111,44 @@ test("SQL transient retries are opt-in and never retry assertion results or perm
     await assert.rejects(queryWithCancellation(request as unknown as Parameters<typeof queryWithCancellation>[0], "SELECT 1"), /access denied/);
     assert.equal(attempts, 3);
   } finally { if (before === undefined) delete process.env.CSV_CONTRACT_SQL_RETRIES; else process.env.CSV_CONTRACT_SQL_RETRIES = before; }
+});
+
+test("bounded cross-connection reads bind only planner scope and preserve native scalar values", async () => {
+  const inputs: Array<[string, unknown]> = [];
+  let executed = "";
+  let oversized = false;
+  let cancels = 0;
+  const session = new SqlServerValidationSession(() => { throw new Error("Mock tests must never resolve credentials or connect."); });
+  Object.defineProperty(session, "getPool", { value: async () => ({ api: { MAX: "max", NVarChar: (size: unknown) => `nvarchar(${size})` }, pool: { request: () => {
+    const handlers = new Map<string, (value: unknown) => void>();
+    const request = {
+      input(name: string, _type: unknown, value: unknown) { inputs.push([name, value]); return request; },
+      cancel() { cancels++; },
+      on(event: string, handler: (value: unknown) => void) { handlers.set(event, handler); return request; },
+      removeListener(event: string) { handlers.delete(event); return request; },
+      async query(text: string) {
+        executed = text;
+        handlers.get("row")?.({ Id: oversized ? "x".repeat(64 * 1024 + 1) : 1, Active: true, At: new Date("2026-10-12T00:00:00Z") });
+        return { recordset: [] };
+      }
+    };
+    return request;
+  } } }) });
+  const scopedTarget = { ...target, scope: { column: "Tenant", parameter: "tenant", sqlType: "nvarchar(20)" } };
+  const query = "SELECT TOP (2) LEFT(CONVERT(nvarchar(max), [Id], 126), 65537) AS [Id], LEFT(CONVERT(nvarchar(max), [Active], 126), 65537) AS [Active], LEFT(CONVERT(nvarchar(max), [At], 126), 65537) AS [At] FROM [dbo].[Synthetic] WHERE [Tenant] = TRY_CONVERT(nvarchar(20), @cross_scope);";
+  const binding = [{ name: "cross_scope" as const, sqlType: "nvarchar(20)", value: "TENANT-A" }];
+  const result = await session.readBoundedRows(scopedTarget, query, binding, 2);
+  assert.deepEqual(inputs, [["cross_scope", "TENANT-A"]]);
+  assert.match(executed, /SET IMPLICIT_TRANSACTIONS OFF;/);
+  assert.equal(result.rows[0].Id, 1);
+  assert(result.rows[0].At instanceof Date);
+  oversized = true;
+  await assert.rejects(session.readBoundedRows(scopedTarget, query, binding, 2), /value exceeded.*65536-character limit/);
+  assert.equal(cancels, 1);
+  oversized = false;
+  await assert.rejects(session.readBoundedRows(scopedTarget, "DELETE FROM dbo.Synthetic;", binding, 2), /bounded single-table SELECT/);
+  await assert.rejects(session.readBoundedRows(scopedTarget, `${query} DROP TABLE [dbo].[Synthetic];`, binding, 2), /bounded single-table SELECT/);
+  await assert.rejects(session.readBoundedRows(scopedTarget, query.replace(" FROM ", " UNION SELECT N'x' AS [Id] FROM "), binding, 2), /bounded single-table SELECT/);
+  await assert.rejects(session.readBoundedRows(scopedTarget, query.replace("SELECT TOP", "SELECT /*comment*/ TOP"), binding, 2), /bounded single-table SELECT/);
+  await assert.rejects(session.readBoundedRows(scopedTarget, query, [{ name: "other" as "cross_scope", sqlType: "nvarchar", value: "x" }], 2), /cross_scope/);
 });

@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/incursa/csv-contract-vsce/main/schemas/validation.schema.json",
+  "title": "Validation contract",
+  "$ref": "./csvtest.schema.json"
+}

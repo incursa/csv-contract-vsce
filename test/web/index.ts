@@ -12,7 +12,7 @@ export async function run(): Promise<void> {
   const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
   assert(folder, "The web-host fixture workspace was not opened.");
   const extension = vscode.extensions.getExtension("incursa.csv-contract-vsce");
-  assert(extension, "The CSV Contract Workbench extension was not installed in the web host.");
+  assert(extension, "The Validation Workbench extension was not installed in the web host.");
   const exports = await extension.activate() as { testHooks?: {
     resolveContractEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel, memberId?: string): Promise<void>;
     testActions: Map<string, (message: unknown) => Promise<void>>;

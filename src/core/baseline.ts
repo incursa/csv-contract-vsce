@@ -22,6 +22,31 @@ export interface BaselineColumn {
   observedType?: "string" | "number" | "unknown";
   observedNullable?: boolean;
 }
+export type SqlMetadataAvailability<T> =
+  | { availability: "available"; items: T[] }
+  | { availability: "unavailable" };
+export interface BaselineForeignKey {
+  name: string;
+  schema: string;
+  table: string;
+  referencedSchema: string;
+  referencedTable: string;
+  columns: Array<{ ordinal: number; column: string; referencedColumn: string }>;
+  updateAction: string | null;
+  deleteAction: string | null;
+}
+export interface BaselineIndex {
+  name: string;
+  unique: boolean;
+  disabled: boolean;
+  filterPredicate: string | null;
+  keyColumns: Array<{ name: string; ordinal: number; direction: "asc" | "desc" }>;
+  includedColumns: Array<{ name: string; ordinal: number }>;
+}
+export interface BaselineSqlMetadata {
+  foreignKeys?: SqlMetadataAvailability<BaselineForeignKey>;
+  indexes?: SqlMetadataAvailability<BaselineIndex>;
+}
 export interface SchemaBaseline {
   baselineVersion: 1;
   revision: number;
@@ -32,6 +57,7 @@ export interface SchemaBaseline {
   interpretation?: CsvOptions;
   inference?: { scope: "complete" | "sample"; rows: number };
   columns: BaselineColumn[];
+  sqlMetadata?: BaselineSqlMetadata;
   policy?: { default?: DriftSeverity; changes?: Record<string, DriftSeverity>; columns?: Record<string, DriftSeverity>; order?: "exact" | "ignore" };
 }
 export type BaselineBinding = SchemaBaseline | { ref: string };
@@ -59,12 +85,13 @@ export function parseBaseline(text: string): SchemaBaseline {
     b.columns.some(c => !c || typeof c.name !== "string" || !Number.isSafeInteger(c.ordinal) || c.ordinal < 1)) {
     throw new Error("Invalid schema baseline: expected baselineVersion: 1, positive revision, capture provenance and ordered columns.");
   }
-  const allowed = ["baselineVersion", "revision", "capturedAt", "sourceKind", "captureMethod", "object", "interpretation", "inference", "columns", "policy"];
+  const allowed = ["baselineVersion", "revision", "capturedAt", "sourceKind", "captureMethod", "object", "interpretation", "inference", "columns", "sqlMetadata", "policy"];
   if (Object.keys(b).some(k => !allowed.includes(k))) throw new Error("Unsupported baseline fields; baselines contain schema metadata only.");
   for (const c of b.columns) {
     if (Object.keys(c).some(k => !["name", "ordinal", "required", ...properties].includes(k))) throw new Error(`Unsupported metadata for baseline column ${c.name}.`);
     for (const key of ["maxLength", "precision", "scale", "primaryKeyOrdinal"] as const) if (c[key] != null && !Number.isSafeInteger(c[key])) throw new Error(`Invalid ${key} metadata.`);
   }
+  if (b.sqlMetadata) b.sqlMetadata = canonicalizeSqlMetadata(b.sqlMetadata);
   const severities = [b.policy?.default, ...Object.values(b.policy?.changes ?? {}), ...Object.values(b.policy?.columns ?? {})].filter(v => v !== undefined);
   if (severities.some(v => !["allowed", "warning", "error"].includes(v!))) throw new Error("Invalid drift severity.");
   return b;
@@ -148,6 +175,19 @@ export function compareBaseline(expected: SchemaBaseline, actual: SchemaBaseline
     const after = observed.filter(c => c.name === name).length;
     if (after > 1 && before !== after) add("duplicated", name, before, after);
   }
+  for (const key of ["foreignKeys", "indexes"] as const) {
+    const before = expected.sqlMetadata?.[key];
+    if (!before) continue; // A v1 baseline without this collection never asserts that it is empty.
+    const after = actual.sqlMetadata?.[key];
+    if (!after || after.availability === "unavailable") {
+      add(`unknown:${key}`, key, before, after ?? { availability: "unavailable" });
+      continue;
+    }
+    if (before.availability === "unavailable") continue;
+    const normalizedBefore = canonicalizeSqlMetadata({ [key]: before })[key];
+    const normalizedAfter = canonicalizeSqlMetadata({ [key]: after })[key];
+    if (JSON.stringify(normalizedBefore) !== JSON.stringify(normalizedAfter)) add(key, key, normalizedBefore, normalizedAfter);
+  }
   const removed = changes.filter(c => c.kind === "removed");
   for (const addition of changes.filter(c => c.kind === "added")) {
     const candidate = removed.find(c => (c.before as BaselineColumn).ordinal === (addition.after as BaselineColumn).ordinal);
@@ -170,7 +210,10 @@ export function acceptBaselineChanges(expected: SchemaBaseline, actual: SchemaBa
     else if (c.kind === "duplicated") {
       next.columns = next.columns.filter(v => canonical(v.name) !== c.column).concat(actual.columns.filter(v => canonical(v.name) === c.column).map(v => structuredClone(v)));
     } else if (c.kind === "interpretation") next.interpretation = structuredClone(actual.interpretation);
-    else {
+    else if (c.kind === "foreignKeys" || c.kind === "indexes") {
+      next.sqlMetadata ??= {};
+      Object.assign(next.sqlMetadata, { [c.kind]: structuredClone(c.after) });
+    } else {
       const column = next.columns.find(v => canonical(v.name) === c.column);
       if (column) Object.assign(column, { [c.kind]: c.after });
     }
@@ -179,6 +222,23 @@ export function acceptBaselineChanges(expected: SchemaBaseline, actual: SchemaBa
   next.revision++;
   next.capturedAt = new Date().toISOString();
   return next;
+}
+
+/** Produces stable collection and member ordering without retaining driver-specific row shapes. */
+export function canonicalizeSqlMetadata(metadata: BaselineSqlMetadata): BaselineSqlMetadata {
+  const copy = structuredClone(metadata);
+  if (copy.foreignKeys?.availability === "available") {
+    for (const foreignKey of copy.foreignKeys.items) foreignKey.columns.sort((a, b) => a.ordinal - b.ordinal || a.column.localeCompare(b.column) || a.referencedColumn.localeCompare(b.referencedColumn));
+    copy.foreignKeys.items.sort((a, b) => a.schema.localeCompare(b.schema) || a.table.localeCompare(b.table) || a.name.localeCompare(b.name) || JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  }
+  if (copy.indexes?.availability === "available") {
+    for (const index of copy.indexes.items) {
+      index.keyColumns.sort((a, b) => a.ordinal - b.ordinal || a.name.localeCompare(b.name));
+      index.includedColumns.sort((a, b) => a.ordinal - b.ordinal || a.name.localeCompare(b.name));
+    }
+    copy.indexes.items.sort((a, b) => a.name.localeCompare(b.name) || JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  }
+  return copy;
 }
 
 export function baselineIssues(contract: CsvContract, actual: SchemaBaseline, columnMap?: Record<string, string>): ValidationIssue[] {

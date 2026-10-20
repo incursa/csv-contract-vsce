@@ -42,6 +42,28 @@ test("native worker returns only after process exit and force-cancels an unrespo
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test("pre-canceled workers reject without spawning and progress callback failures terminate the worker", async () => {
+  const preCanceled = new AbortController();
+  preCanceled.abort(new Error("synthetic pre-cancel"));
+  await assert.rejects(runSqlWorker({ kind: "schema", target: { connection: "mock", schema: "dbo", table: "never" } },
+    preCanceled.signal, join(tmpdir(), "worker-that-must-not-spawn.cjs")), /synthetic pre-cancel/);
+
+  const directory = await mkdtemp(join(tmpdir(), "sql-worker-progress-"));
+  const worker = join(directory, "worker.cjs");
+  await writeFile(worker, `const fs = require('node:fs');
+    process.on('message', () => {
+      fs.writeFileSync(__filename + '.pid', String(process.pid));
+      process.send({kind:'progress',progress:{phase:'reading',rowsRead:1}});
+      setInterval(() => {}, 1000);
+    });`);
+  try {
+    await assert.rejects(runSqlWorker({ kind: "schema", target: { connection: "mock", schema: "dbo", table: "T" } },
+      undefined, worker, 100, () => { throw new Error("synthetic progress failure"); }), /synthetic progress failure/);
+    const pid = Number(await readFile(worker + ".pid", "utf8"));
+    assert.throws(() => process.kill(pid, 0), /ESRCH|no such process/i);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("packaged SQL worker exits with an error before attempting a profile connection", async () => {
   await assert.rejects(runSqlWorker({ kind: "schema", target: { connection: "never-connect", schema: "dbo", table: "T" } },
     undefined, join(process.cwd(), "dist/node/sql-worker.cjs")), /integrated connections only/);
@@ -101,6 +123,20 @@ test("SQL operations await closure on success, assertion failure, execution erro
   }
 });
 
+test("a cancellation that wins after operation completion is cleaned up and cannot publish a result", async () => {
+  const controller = new AbortController();
+  let disposed = false;
+  await assert.rejects(withSqlSession(
+    () => ({ async dispose() { disposed = true; } }),
+    async () => {
+      controller.abort(new Error("synthetic completion race"));
+      return "must not escape";
+    },
+    controller.signal
+  ), /synthetic completion race/);
+  assert.equal(disposed, true);
+});
+
 test("cleanup failures prevent success and preserve the original execution error", async () => {
   const create = () => ({ async dispose() { throw new Error("close failed"); } });
   await assert.rejects(withSqlSession(create, async () => true), /closure could not be confirmed/);
@@ -114,10 +150,10 @@ test("cleanup failures prevent success and preserve the original execution error
 test("session cleanup waits for every pool even if one close fails", async () => {
   const session = new SqlServerValidationSession(() => "unused");
   let release!: () => void;
-  let secondClosed = false, completed = false;
+  let firstCloseAttempts = 0, secondClosed = false, completed = false;
   const waiting = new Promise<void>(resolve => { release = resolve; });
   Object.defineProperty(session, "pools", { value: new Map([
-    ["a", { pool: { async close() { throw new Error("first close failed"); } } }],
+    ["a", { pool: { async close() { if (++firstCloseAttempts === 1) throw new Error("first close failed"); } } }],
     ["b", { pool: { async close() { await waiting; secondClosed = true; } } }]
   ]) });
   const disposing = session.dispose().catch(error => { completed = true; return error; });
@@ -127,6 +163,7 @@ test("session cleanup waits for every pool even if one close fails", async () =>
   assert(await disposing instanceof AggregateError);
   assert.equal(secondClosed, true);
   await session.dispose();
+  assert.equal(firstCloseAttempts, 2);
   await assert.rejects(session.captureSchema({ connection: "unused", schema: "dbo", table: "Synthetic" }), /session is closed/);
 });
 

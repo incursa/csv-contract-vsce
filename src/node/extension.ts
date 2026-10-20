@@ -5,8 +5,14 @@ import { SqlServerValidationSession } from "./sql-server-validator";
 import { withSqlSession } from "./sql-lifecycle";
 import { runSqlWorker } from "./sql-worker-client";
 import { validateCsvFile } from "./streaming-validator";
+import { createCrossConnectionSourceAdapter, runCrossConnectionCheck } from "./cross-connection-runner";
+import { writeBadRowsXlsxFile } from "./xlsx-stream";
+import { setDesktopWorkbookWriter } from "../vscode-workbook-export";
+import { registerRulePackCommands } from "../vscode-rule-packs";
 
 export function activate(context: vscode.ExtensionContext): void {
+  setDesktopWorkbookWriter((runs, options, destination, signal) => writeBadRowsXlsxFile(runs, options, destination, { signal }));
+  registerRulePackCommands(context);
   let scopePromptTail = Promise.resolve();
   const createSession = () => new SqlServerValidationSession(async (profile) => {
     const secret = await context.secrets.get(sqlConnectionSecretKey(profile));
@@ -40,7 +46,26 @@ export function activate(context: vscode.ExtensionContext): void {
     return withSqlSession(createSession, session => session.validate(contract, target, { scopeValue, signal, preview, onProgress, maxIssues }));
   }, profile => withSqlSession(createSession, session => session.listObjects(profile)),
   target => target.integratedConnection ? runSqlWorker({ kind: "schema", target }) : withSqlSession(createSession, session => session.captureSchema(target)),
-  (plan, signal) => {
+  async (plan, signal) => {
+    if (plan.mode === "sql-cross-connection") {
+      const scopeValues: Record<string, string> = {};
+      const participants = [plan.from, plan.to, ...Object.values(plan.participants)];
+      for (const participant of participants) {
+        const scope = participant.target.scope;
+        if (!scope || Object.prototype.hasOwnProperty.call(scopeValues, participant.member)) continue;
+        signal?.throwIfAborted();
+        const value = scope.valueEnvironment ? process.env[scope.valueEnvironment] : await vscode.window.showInputBox({
+          title: `Scope ${participant.member}`,
+          prompt: `Value for @${scope.parameter}. It is bound as a query parameter and is not stored.`,
+          password: true, ignoreFocusOut: true
+        });
+        signal?.throwIfAborted();
+        if (value === undefined) throw new Error(`Cross-connection source '${participant.member}' requires a runtime scope value.`);
+        scopeValues[participant.member] = value;
+      }
+      return withSqlSession(createSession, session => runCrossConnectionCheck(plan,
+        createCrossConnectionSourceAdapter(session.readBoundedRows.bind(session)), { signal, scopeValues }), signal);
+    }
     if (plan.mode !== "sql") throw new Error("CSV cross-file execution is handled by the suite host.");
     return plan.from.integratedConnection ? runSqlWorker({ kind: "cross", plan }, signal) : withSqlSession(createSession, session => session.validateCross(plan, signal));
   },

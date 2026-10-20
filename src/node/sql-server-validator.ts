@@ -1,8 +1,8 @@
 import { errorDetails } from "../core/error-details";
-import { resolveEvaluation } from "../core/evaluation";
+import { attachCheckOutcomes, resolveEvaluation } from "../core/evaluation";
 import { validatePreviewOptions, type PreviewOptions } from "../core/preview";
 import { crossResult, type SqlCrossPlan } from "../core/cross-checks";
-import { baselineIssues, type BaselineColumn, type SchemaBaseline } from "../core/baseline";
+import { baselineIssues, canonicalizeSqlMetadata, type BaselineColumn, type BaselineForeignKey, type BaselineIndex, type BaselineSqlMetadata, type SchemaBaseline } from "../core/baseline";
 import sql from "mssql";
 import { assertCompleteSqlSummaries } from "../core/sql-server-results";
 import Papa from "papaparse";
@@ -14,6 +14,7 @@ import { OrderedRuleEvaluator, orderedColumns, compareOrderedRows } from "../cor
 import { RowSortStore } from "./row-sort-store";
 import { GroupTestRunner, type GroupSummary } from "./group-runner";
 import type { ValidationProgress } from "../core/run-progress";
+import { HARD_CROSS_CONNECTION_MAX_BYTES, HARD_CROSS_CONNECTION_MAX_VALUE_LENGTH } from "./cross-connection-runner";
 
 export interface SqlServerValidationOptions {
   preview?: PreviewOptions;
@@ -64,6 +65,31 @@ function evidenceValue(value: unknown): EvidenceValue {
 
 type MetadataRow = BaselineColumn;
 
+interface ForeignKeyMetadataRow {
+  name: string;
+  schema: string;
+  table: string;
+  referencedSchema: string | null;
+  referencedTable: string | null;
+  ordinal: number;
+  column: string;
+  referencedColumn: string | null;
+  updateAction: string | null;
+  deleteAction: string | null;
+}
+
+interface IndexMetadataRow {
+  name: string;
+  unique: boolean | number;
+  disabled: boolean | number;
+  filterPredicate: string | null;
+  column: string;
+  keyOrdinal: number;
+  indexColumnOrdinal: number;
+  descending: boolean | number;
+  included: boolean | number;
+}
+
 export async function queryWithCancellation<T>(request: Pick<sql.Request, "query" | "cancel">, query: string, signal?: AbortSignal): Promise<sql.IResult<T>> {
   signal?.throwIfAborted();
   const cancel = () => { request.cancel(); };
@@ -72,7 +98,11 @@ export async function queryWithCancellation<T>(request: Pick<sql.Request, "query
     const retries = runtimeInteger("CSV_CONTRACT_SQL_RETRIES", 0, 2);
     for (let attempt = 0; ; attempt++) {
       signal?.throwIfAborted();
-      try { return await request.query<T>(`SET IMPLICIT_TRANSACTIONS OFF;\n${query}`); }
+      try {
+        const result = await request.query<T>(`SET IMPLICIT_TRANSACTIONS OFF;\n${query}`);
+        signal?.throwIfAborted();
+        return result;
+      }
       catch (error) {
         const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
         if (signal?.aborted || attempt >= retries || !["ETIMEOUT", "ESOCKET", "ECONNRESET"].includes(code)) throw error;
@@ -108,7 +138,9 @@ async function queryRows<T>(request: sql.Request, query: string, onRow: (row: T)
   request.on("error", onError);
   signal?.addEventListener("abort", cancel, { once: true });
   try {
+    signal?.throwIfAborted();
     const result = await request.query<T>(`SET IMPLICIT_TRANSACTIONS OFF;\n${query}`);
+    signal?.throwIfAborted();
     if (streamError) throw streamError;
     // A few test and alternate drivers return a recordset without emitting row events.
     if (!streamed) (result.recordset ?? []).forEach(onRow);
@@ -131,7 +163,7 @@ function runtimeInteger(name: string, fallback: number, maximum: number): number
 export class SqlServerValidationSession {
   public async validateCross(plan: SqlCrossPlan, signal?: AbortSignal): Promise<ValidationResult> {
     const fromValue = resolveScopeValue(plan.from), toValue = resolveScopeValue(plan.to);
-    const handle = await this.getPool(plan.from.connection, plan.from.integratedConnection);
+    const handle = await this.getPool(plan.from.connection, plan.from.integratedConnection, signal);
     const request = handle.pool.request();
     bindScope(request, handle.api, plan.from, fromValue);
     bindScope(request, handle.api, plan.to, toValue);
@@ -155,16 +187,39 @@ export class SqlServerValidationSession {
     return crossResult(plan.check, count, count ? { samples, aggregate: { failureCount: count }, totalSamples: count, limited: samples.length < count } : undefined);
   }
   private readonly pools = new Map<string, SqlPoolHandle>();
+  private readonly pendingPools = new Map<string, Promise<SqlPoolHandle>>();
+  private readonly closingPools = new Map<SqlPoolHandle, Promise<void>>();
+  private readonly cleanupPools = new Set<SqlPoolHandle>();
   private closed = false;
 
   public constructor(private readonly resolveConnectionString: (profile: string) => Promise<string> | string) {}
 
   public async dispose(): Promise<void> {
     this.closed = true;
-    const outcomes = await Promise.allSettled([...this.pools.values()].map(closePool));
-    this.pools.clear();
+    await Promise.allSettled([...this.pendingPools.values()]);
+    const entries = [...this.pools.entries()];
+    const handles = [...new Set([...entries.map(([, handle]) => handle), ...this.cleanupPools])];
+    const outcomes = await Promise.allSettled(handles.map(handle => this.closeHandle(handle)));
+    outcomes.forEach((outcome, index) => {
+      if (outcome.status !== "fulfilled") return;
+      const handle = handles[index];
+      this.cleanupPools.delete(handle);
+      for (const [key, cached] of entries) if (cached === handle && this.pools.get(key) === handle) this.pools.delete(key);
+    });
     const failures = outcomes.flatMap(outcome => outcome.status === "rejected" ? [outcome.reason] : []);
     if (failures.length) throw new AggregateError(failures, "One or more SQL connection pools failed to close.");
+  }
+
+  private closeHandle(handle: SqlPoolHandle): Promise<void> {
+    const existing = this.closingPools.get(handle);
+    if (existing) return existing;
+    const closing = closePool(handle);
+    this.closingPools.set(handle, closing);
+    closing.then(
+      () => { if (this.closingPools.get(handle) === closing) this.closingPools.delete(handle); },
+      () => { if (this.closingPools.get(handle) === closing) this.closingPools.delete(handle); }
+    );
+    return closing;
   }
 
   public async validate(
@@ -173,8 +228,9 @@ export class SqlServerValidationSession {
     options: SqlServerValidationOptions = {}
   ): Promise<ValidationResult> {
     const evaluatedAt = options.evaluatedAt ?? new Date().toISOString();
-    const result = await this.validateResolved(resolveEvaluation(contract, evaluatedAt), target, options);
-    return { ...result, evaluatedAt };
+    const evaluated = resolveEvaluation(contract, evaluatedAt);
+    const result = await this.validateResolved(evaluated, target, options);
+    return attachCheckOutcomes(evaluated, { ...result, evaluatedAt });
   }
   private async validateResolved(contract: CsvContract, target: ResolvedSqlServerTarget, options: SqlServerValidationOptions): Promise<ValidationResult> {
     if (target.baseline) contract = { ...contract, baseline: target.baseline };
@@ -183,11 +239,15 @@ export class SqlServerValidationSession {
       throw new Error("SQL preview does not support grouped or ordered rules; run the complete contract.");
     }
     options.onProgress?.({ phase: "connecting" });
-    const handle = await this.getPool(target.connection, target.integratedConnection);
+    const handle = await this.getPool(target.connection, target.integratedConnection, options.signal);
     const metadata = await readMetadata(handle, target, options.signal);
     if (metadata.length === 0) throw new Error(`SQL Server object ${target.schema}.${target.table} does not exist or is not visible to this connection.`);
     const metadataIssues = validateMetadata(contract, target, metadata);
-    if (contract.baseline) metadataIssues.push(...baselineIssues(contract, sqlSchemaSnapshot(target, metadata), target.columnMap));
+    if (contract.baseline) {
+      const expected = "ref" in contract.baseline ? undefined : contract.baseline;
+      const sqlMetadata = expected?.sqlMetadata ? await readSqlMetadata(handle, target, options.signal) : undefined;
+      metadataIssues.push(...baselineIssues(contract, sqlSchemaSnapshot(target, metadata, sqlMetadata), target.columnMap));
+    }
     const generated = generateSqlServerValidation(contract, {
       target,
       declareScopeParameter: false,
@@ -338,82 +398,168 @@ ORDER BY s.name, o.name, c.column_id;`);
     return [...objects.values()];
   }
 
-  public async captureSchema(target: ResolvedSqlServerTarget): Promise<SchemaBaseline> {
-    const columns = await readMetadata(await this.getPool(target.connection, target.integratedConnection), target);
+  public async captureSchema(target: ResolvedSqlServerTarget, signal?: AbortSignal): Promise<SchemaBaseline> {
+    const handle = await this.getPool(target.connection, target.integratedConnection, signal);
+    const columns = await readMetadata(handle, target, signal);
     if (!columns.length) throw new Error("Object metadata is empty: object missing or not visible to this connection.");
-    return sqlSchemaSnapshot(target, columns);
+    return sqlSchemaSnapshot(target, columns, await readSqlMetadata(handle, target, signal));
   }
 
-  private async getPool(profile: string, integrated?: SqlServerIntegratedConnection): Promise<SqlPoolHandle> {
+  /** Executes only the bounded, single-source SELECT produced by the cross-connection planner. */
+  public async readBoundedRows(
+    target: ResolvedSqlServerTarget,
+    query: string,
+    bindings: readonly { name: "cross_scope"; sqlType: string; value: string }[],
+    rowLimit: number,
+    signal?: AbortSignal
+  ): Promise<{ rows: Array<Record<string, string | number | boolean | bigint | Date | null | undefined>>; limited?: boolean }> {
+    if (!Number.isSafeInteger(rowLimit) || rowLimit < 1 || rowLimit > 250_001) throw new Error("Cross-connection rowLimit must be an integer from 1 through 250001.");
+    if (bindings.length > 1 || bindings.some(binding => binding.name !== "cross_scope" || !binding.sqlType.trim()) || Boolean(target.scope) !== (bindings.length === 1)) {
+      throw new Error("Cross-connection SQL accepts only the planner's optional cross_scope binding.");
+    }
+    const identifier = String.raw`\[(?:[^\]]|\]\])*\]`;
+    const item = String.raw`LEFT\(CONVERT\(nvarchar\(max\), ${identifier}, 126\), ${HARD_CROSS_CONNECTION_MAX_VALUE_LENGTH + 1}\) AS ${identifier}`;
+    const projection = String.raw`(?:CAST\(1 AS bit\) AS \[__csv_contract_row\]|${item}(?:, ${item})*)`;
+    const table = `${sqlIdentifier(target.schema)}.${sqlIdentifier(target.table)}`;
+    const where = target.scope
+      ? ` WHERE ${sqlIdentifier(physicalSqlServerColumn(target, target.scope.column))} = TRY_CONVERT(${safeSqlType(target.scope.sqlType)}, @cross_scope)`
+      : "";
+    const exact = new RegExp(`^SELECT TOP \\(${rowLimit}\\) ${projection} FROM ${escapeRegExp(table + where)};$`);
+    if (!exact.test(query) || bindings[0]?.sqlType !== target.scope?.sqlType) {
+      throw new Error("Cross-connection SQL must be the exact bounded single-table SELECT produced by the planner.");
+    }
+    const handle = await this.getPool(target.connection, target.integratedConnection, signal);
+    const request = handle.pool.request();
+    for (const binding of bindings) request.input("cross_scope", handle.api.NVarChar(handle.api.MAX), binding.value);
+    type BoundedRow = Record<string, string | number | boolean | bigint | Date | null | undefined>;
+    const rows: BoundedRow[] = [];
+    let bytes = 0;
+    await queryRows<BoundedRow>(request, query, row => {
+      if (rows.length >= rowLimit) throw new Error(`Cross-connection read exceeded the controlled ${rowLimit}-row limit.`);
+      for (const value of Object.values(row)) {
+        if (value === null || value === undefined) continue;
+        const scalar = value instanceof Date ? value.toISOString()
+          : ["string", "number", "boolean", "bigint"].includes(typeof value) ? String(value)
+            : undefined;
+        if (scalar === undefined) throw new Error("Cross-connection read returned an unsupported non-scalar value.");
+        if (scalar.length > HARD_CROSS_CONNECTION_MAX_VALUE_LENGTH) {
+          throw new Error(`Cross-connection value exceeded the controlled ${HARD_CROSS_CONNECTION_MAX_VALUE_LENGTH}-character limit.`);
+        }
+        bytes += Buffer.byteLength(scalar, "utf8");
+        if (bytes > HARD_CROSS_CONNECTION_MAX_BYTES) {
+          throw new Error(`Cross-connection read exceeded the controlled ${HARD_CROSS_CONNECTION_MAX_BYTES}-byte limit.`);
+        }
+      }
+      rows.push(row);
+    }, signal);
+    return { rows };
+  }
+
+  private async getPool(profile: string, integrated?: SqlServerIntegratedConnection, signal?: AbortSignal): Promise<SqlPoolHandle> {
     if (this.closed) throw new Error("SQL session is closed.");
+    signal?.throwIfAborted();
     const requestTimeout = runtimeInteger("CSV_CONTRACT_SQL_TIMEOUT_MS", 15000, 600000);
     if (requestTimeout < 1) throw new Error("CSV_CONTRACT_SQL_TIMEOUT_MS must be at least 1; unbounded queries are not supported.");
     const key = integrated ? `integrated:${JSON.stringify(integrated)}` : `profile:${profile}`;
     const existing = this.pools.get(key);
-    if (existing) return existing;
-    const closeFailures: unknown[] = [];
-    let handle: SqlPoolHandle;
-    if (integrated) {
-      if (process.platform !== "win32" || process.arch !== "x64") throw new Error("Bundled Windows integrated authentication requires Windows x64. Use a connection profile on other platforms.");
-      const nativeSql = (await import("mssql/msnodesqlv8")).default;
-      const nativeDriver = (await import("msnodesqlv8")).default;
-      const connectionString = integratedConnectionString(integrated);
-      const nativeConfig = {
-        server: integrated.server,
-        database: integrated.database,
-        driver: "msnodesqlv8",
-        connectionString,
-        requestTimeout,
-        options: {
-          trustedConnection: true,
-          encrypt: integrated.encrypt ?? true,
-          trustServerCertificate: integrated.trustServerCertificate ?? false
-        }
-      } as sql.config & { connectionString: string };
-      // mssql wraps non-Error ODBC objects with Error(object), losing diagnostics.
-      // Keep the normal pool/request lifecycle, but normalize at the open boundary.
-      class DiagnosticPool extends nativeSql.ConnectionPool {
-        _poolDestroy(connection: { close(callback: (error?: unknown) => void): void }) {
-          return new Promise<void>((resolve, reject) => {
-            connection.close(error => {
-              if (error) { const diagnostic = new Error(errorDetails(error)); closeFailures.push(diagnostic); reject(diagnostic); }
-              else resolve();
+    if (existing) { signal?.throwIfAborted(); return existing; }
+    const pending = this.pendingPools.get(key);
+    if (pending) {
+      const handle = await waitForPool(pending, signal);
+      signal?.throwIfAborted();
+      return handle;
+    }
+    const acquisition: Promise<SqlPoolHandle> = (async () => {
+      const closeFailures: unknown[] = [];
+      let handle: SqlPoolHandle;
+      if (integrated) {
+        if (process.platform !== "win32" || process.arch !== "x64") throw new Error("Bundled Windows integrated authentication requires Windows x64. Use a connection profile on other platforms.");
+        const nativeSql = (await import("mssql/msnodesqlv8")).default;
+        const nativeDriver = (await import("msnodesqlv8")).default;
+        if (this.closed) throw new Error("SQL session is closed.");
+        const connectionString = integratedConnectionString(integrated);
+        const nativeConfig = {
+          server: integrated.server,
+          database: integrated.database,
+          driver: "msnodesqlv8",
+          connectionString,
+          requestTimeout,
+          options: {
+            trustedConnection: true,
+            encrypt: integrated.encrypt ?? true,
+            trustServerCertificate: integrated.trustServerCertificate ?? false
+          }
+        } as sql.config & { connectionString: string };
+        // mssql wraps non-Error ODBC objects with Error(object), losing diagnostics.
+        // Keep the normal pool/request lifecycle, but normalize at the open boundary.
+        class DiagnosticPool extends nativeSql.ConnectionPool {
+          _poolDestroy(connection: { close(callback: (error?: unknown) => void): void }) {
+            return new Promise<void>((resolve, reject) => {
+              connection.close(error => {
+                if (error) { const diagnostic = new Error(errorDetails(error)); closeFailures.push(diagnostic); reject(diagnostic); }
+                else resolve();
+              });
             });
-          });
-        }
-        _poolCreate() {
-          return new Promise<import("msnodesqlv8/types").Connection>((resolve, reject) => {
-            nativeDriver.open({ conn_str: connectionString, conn_timeout: 15 }, (error, connection) => {
-              if (error) { reject(new Error(errorDetails(error))); return; }
-              connection.setUseUTC(true);
-              resolve(connection);
+          }
+          _poolCreate() {
+            return new Promise<import("msnodesqlv8/types").Connection>((resolve, reject) => {
+              nativeDriver.open({ conn_str: connectionString, conn_timeout: 15 }, (error, connection) => {
+                if (error) { reject(new Error(errorDetails(error))); return; }
+                connection.setUseUTC(true);
+                resolve(connection);
+              });
             });
-          });
+          }
         }
+        const pool = new DiagnosticPool(nativeConfig);
+        handle = { api: nativeSql as SqlApi, pool: pool as sql.ConnectionPool };
+      } else {
+        const connectionString = await this.resolveConnectionString(profile);
+        if (this.closed) throw new Error("SQL session is closed.");
+        if (!connectionString.trim()) throw new Error(`SQL Server connection profile '${profile}' is empty.`);
+        const pool = new sql.ConnectionPool({ ...sql.ConnectionPool.parseConnectionString(connectionString), requestTimeout });
+        handle = { api: sql, pool };
       }
-      const pool = new DiagnosticPool(nativeConfig);
-      handle = { api: nativeSql as SqlApi, pool: pool as sql.ConnectionPool };
-    } else {
-      const connectionString = await this.resolveConnectionString(profile);
-      if (!connectionString.trim()) throw new Error(`SQL Server connection profile '${profile}' is empty.`);
-      const pool = new sql.ConnectionPool({ ...sql.ConnectionPool.parseConnectionString(connectionString), requestTimeout });
-      handle = { api: sql, pool };
-    }
-    handle.closeFailures = closeFailures;
-    this.pools.set(key, handle);
-    try {
-      await handle.pool.connect();
-      // Tarn logs destroy errors/timeouts instead of rejecting pool.destroy(). Retain them.
-      const resources = (handle.pool as unknown as { pool?: { on(event: string, listener: (id: number, resource: unknown, error: unknown) => void): void } }).pool;
-      resources?.on("destroyFail", (_id, _resource, error) => { closeFailures.push(error); });
-    }
-    catch (error) {
-      try { await closePool(handle); this.pools.delete(key); }
-      catch (cleanupError) { throw new AggregateError([error, cleanupError], "SQL connection failed and cleanup also failed."); }
-      throw error;
-    }
-    return handle;
+      handle.closeFailures = closeFailures;
+      try {
+        await handle.pool.connect();
+        if (this.closed) throw new Error("SQL session is closed.");
+        // Tarn logs destroy errors/timeouts instead of rejecting pool.destroy(). Retain them.
+        const resources = (handle.pool as unknown as { pool?: { on(event: string, listener: (id: number, resource: unknown, error: unknown) => void): void } }).pool;
+        resources?.on("destroyFail", (_id, _resource, error) => { closeFailures.push(error); });
+        if (this.closed) throw new Error("SQL session is closed.");
+        this.pools.set(key, handle);
+        return handle;
+      } catch (error) {
+        this.pools.delete(key);
+        try { await this.closeHandle(handle); }
+        catch (cleanupError) {
+          this.cleanupPools.add(handle);
+          throw new AggregateError([error, cleanupError], "SQL connection failed and cleanup also failed.");
+        }
+        throw error;
+      }
+    })();
+    this.pendingPools.set(key, acquisition);
+    acquisition.then(
+      () => { if (this.pendingPools.get(key) === acquisition) this.pendingPools.delete(key); },
+      () => { if (this.pendingPools.get(key) === acquisition) this.pendingPools.delete(key); }
+    );
+    return waitForPool(acquisition, signal);
   }
+}
+
+function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+async function waitForPool(pending: Promise<SqlPoolHandle>, signal?: AbortSignal): Promise<SqlPoolHandle> {
+  if (!signal) return pending;
+  signal.throwIfAborted();
+  let rejectAbort!: (reason?: unknown) => void;
+  const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
+  const abort = (): void => { rejectAbort(signal.reason); };
+  signal.addEventListener("abort", abort, { once: true });
+  try { return await Promise.race([pending, aborted]); }
+  finally { signal.removeEventListener("abort", abort); }
 }
 
 function odbcValue(value: string): string {
@@ -432,7 +578,7 @@ export function integratedConnectionString(connection: SqlServerIntegratedConnec
     "Trusted_Connection=Yes",
     `Encrypt=${connection.encrypt ?? true ? "Yes" : "No"}`,
     `TrustServerCertificate=${connection.trustServerCertificate ?? false ? "Yes" : "No"}`,
-    `Application Name=${odbcValue("CSV Contract Workbench")}`
+    `Application Name=${odbcValue("Validation Workbench")}`
   ].join(";") + ";";
 }
 
@@ -636,9 +782,83 @@ ORDER BY c.column_id;`, signal);
   return result.recordset;
 }
 
-export function sqlSchemaSnapshot(target: { schema: string; table: string }, columns: BaselineColumn[]): SchemaBaseline {
+async function readSqlMetadata(handle: SqlPoolHandle, target: ResolvedSqlServerTarget, signal?: AbortSignal): Promise<BaselineSqlMetadata> {
+  const request = handle.pool.request()
+    .input("schema", handle.api.NVarChar(128), target.schema)
+    .input("table", handle.api.NVarChar(128), target.table);
+  const result = await queryWithCancellation<Record<string, unknown>>(request, `
+DECLARE @qualifiedName nvarchar(517) = QUOTENAME(@schema) + N'.' + QUOTENAME(@table);
+DECLARE @objectId int = OBJECT_ID(@qualifiedName);
+DECLARE @metadataAvailable bit = CONVERT(bit, CASE WHEN HAS_PERMS_BY_NAME(@qualifiedName, N'OBJECT', N'VIEW DEFINITION') = 1 THEN 1 ELSE 0 END);
+SELECT @metadataAvailable AS metadataAvailable;
+IF @metadataAvailable = 1
+BEGIN
+  SELECT fk.name, ps.name AS [schema], po.name AS [table], rs.name AS referencedSchema,
+    ro.name AS referencedTable, fkc.constraint_column_id AS ordinal, pc.name AS [column],
+    rc.name AS referencedColumn, fk.update_referential_action_desc AS updateAction,
+    fk.delete_referential_action_desc AS deleteAction
+  FROM sys.foreign_keys AS fk
+  JOIN sys.foreign_key_columns AS fkc ON fkc.constraint_object_id = fk.object_id
+  JOIN sys.objects AS po ON po.object_id = fk.parent_object_id
+  JOIN sys.schemas AS ps ON ps.schema_id = po.schema_id
+  LEFT JOIN sys.objects AS ro ON ro.object_id = fk.referenced_object_id
+  LEFT JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id
+  JOIN sys.columns AS pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
+  LEFT JOIN sys.columns AS rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
+  WHERE fk.parent_object_id = @objectId
+  ORDER BY ps.name, po.name, fk.name, fkc.constraint_column_id;
+
+  SELECT i.name, i.is_unique AS [unique], i.is_disabled AS disabled, i.filter_definition AS filterPredicate,
+    c.name AS [column], ic.key_ordinal AS keyOrdinal, ic.index_column_id AS indexColumnOrdinal,
+    ic.is_descending_key AS descending, ic.is_included_column AS included
+  FROM sys.indexes AS i
+  JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+  JOIN sys.columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+  WHERE i.object_id = @objectId AND i.index_id > 0 AND i.is_hypothetical = 0
+  ORDER BY i.name, ic.is_included_column, ic.key_ordinal, ic.index_column_id;
+END
+ELSE
+BEGIN
+  SELECT TOP (0) N'' AS name, N'' AS [schema], N'' AS [table], N'' AS referencedSchema, N'' AS referencedTable,
+    0 AS ordinal, N'' AS [column], N'' AS referencedColumn, N'' AS updateAction, N'' AS deleteAction;
+  SELECT TOP (0) N'' AS name, CONVERT(bit, 0) AS [unique], CONVERT(bit, 0) AS disabled, N'' AS filterPredicate,
+    N'' AS [column], 0 AS keyOrdinal, 0 AS indexColumnOrdinal, CONVERT(bit, 0) AS descending, CONVERT(bit, 0) AS included;
+END;`, signal);
+  const sets = result.recordsets as unknown as [Array<{ metadataAvailable?: boolean | number }>, ForeignKeyMetadataRow[], IndexMetadataRow[]];
+  if (sets[0]?.[0]?.metadataAvailable !== true && Number(sets[0]?.[0]?.metadataAvailable) !== 1) {
+    return { foreignKeys: { availability: "unavailable" }, indexes: { availability: "unavailable" } };
+  }
+  const foreignKeys = new Map<string, BaselineForeignKey>();
+  let foreignKeysAvailable = true;
+  for (const row of sets[1] ?? []) {
+    if (!row.referencedSchema || !row.referencedTable || !row.referencedColumn) { foreignKeysAvailable = false; continue; }
+    const key = JSON.stringify([row.schema, row.table, row.name]);
+    const item = foreignKeys.get(key) ?? { name: row.name, schema: row.schema, table: row.table,
+      referencedSchema: row.referencedSchema, referencedTable: row.referencedTable, columns: [],
+      updateAction: row.updateAction ?? null, deleteAction: row.deleteAction ?? null };
+    item.columns.push({ ordinal: Number(row.ordinal), column: row.column, referencedColumn: row.referencedColumn });
+    foreignKeys.set(key, item);
+  }
+  const indexes = new Map<string, BaselineIndex>();
+  for (const row of sets[2] ?? []) {
+    const item = indexes.get(row.name) ?? { name: row.name, unique: sqlBit(row.unique), disabled: sqlBit(row.disabled),
+      filterPredicate: row.filterPredicate ?? null, keyColumns: [], includedColumns: [] };
+    if (sqlBit(row.included)) item.includedColumns.push({ name: row.column, ordinal: Number(row.indexColumnOrdinal) });
+    else item.keyColumns.push({ name: row.column, ordinal: Number(row.keyOrdinal), direction: sqlBit(row.descending) ? "desc" : "asc" });
+    indexes.set(row.name, item);
+  }
+  return canonicalizeSqlMetadata({
+    foreignKeys: foreignKeysAvailable ? { availability: "available", items: [...foreignKeys.values()] } : { availability: "unavailable" },
+    indexes: { availability: "available", items: [...indexes.values()] }
+  });
+}
+
+function sqlBit(value: boolean | number): boolean { return value === true || Number(value) === 1; }
+
+export function sqlSchemaSnapshot(target: { schema: string; table: string }, columns: BaselineColumn[], sqlMetadata?: BaselineSqlMetadata): SchemaBaseline {
   return { baselineVersion: 1, revision: 1, capturedAt: new Date().toISOString(), sourceKind: "sql", captureMethod: "sql-metadata",
-    object: { schema: target.schema, name: target.table }, columns: structuredClone(columns) };
+    object: { schema: target.schema, name: target.table }, columns: structuredClone(columns),
+    ...(sqlMetadata ? { sqlMetadata: canonicalizeSqlMetadata(sqlMetadata) } : {}) };
 }
 
 async function readRowCount(handle: SqlPoolHandle, target: ResolvedSqlServerTarget, scopeValue: string | undefined, signal?: AbortSignal): Promise<number> {

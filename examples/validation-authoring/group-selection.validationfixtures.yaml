@@ -1,0 +1,60 @@
+# yaml-language-server: $schema=../../schemas/validationfixtures.schema.json
+version: 1
+id: group-selection-boundaries
+contract:
+  ref: ./group-selection.validation.yaml
+  sha256: 25d19a753b10e306511fb926c6027ba17b45da8f1d1dfdef460fee1ffd27a066
+cases:
+  - id: zero-applicable-groups
+    description: Single-row entities do not meet the two-to-three-row selector.
+    csv: |
+      EntityId,Version,Status
+      A,1,active
+      B,1,inactive
+    expect:
+      valid: true
+      rowCount: 2
+      issueCount: 0
+      ruleOutcomes:
+        - id: status-required
+          selected: 2
+          passed: 2
+          failed: 0
+      groupOutcomes:
+        - id: boundary-groups
+          groups: 0
+          passed: 0
+          failed: 0
+  - id: applicable-group-passes
+    description: A two-row entity is selected and contains an active row.
+    csv: |
+      EntityId,Version,Status
+      A,1,active
+      A,2,inactive
+    expect:
+      valid: true
+      rowCount: 2
+      issueCount: 0
+      groupOutcomes:
+        - id: boundary-groups
+          groups: 1
+          passed: 1
+          failed: 0
+  - id: upper-boundary-fails-rule
+    description: A three-row entity is still selected, then fails its child rule.
+    csv: |
+      EntityId,Version,Status
+      A,1,inactive
+      A,2,inactive
+      A,3,inactive
+    expect:
+      valid: false
+      rowCount: 3
+      issueCount: 1
+      issueCodes: [MATCH_COUNT_MIN]
+      issueRuleIds: [boundary-groups/one-active]
+      groupOutcomes:
+        - id: boundary-groups
+          groups: 1
+          passed: 0
+          failed: 1

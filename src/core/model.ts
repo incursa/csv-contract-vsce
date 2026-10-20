@@ -41,9 +41,9 @@ export interface RowExpectation {
 export interface RowTest {
   id: string;
   name?: string;
+  importance?: number;
   /** User-facing explanation shown when this test fails. */
   message?: string;
-  importance?: number;
   select: Record<string, string>;
   expect: RowExpectation;
 }
@@ -114,10 +114,10 @@ export type SqlPredicate = SqlPredicateLeaf | { all: SqlPredicate[] } | { any: S
 export interface ConditionalRule {
   id: string;
   name?: string;
+  importance?: number;
   /** User-facing explanation shown when this rule fails. */
   message?: string;
   severity?: RuleSeverity;
-  importance?: number;
   when?: Predicate;
   expect: Predicate;
 }
@@ -131,10 +131,10 @@ export interface GroupValueRequirement {
 export interface GroupRule {
   id: string;
   name?: string;
+  importance?: number;
   /** User-facing explanation shown when this rule fails. */
   message?: string;
   severity?: RuleSeverity;
-  importance?: number;
   when?: Predicate;
   groupBy: string[];
   require: GroupValueRequirement;
@@ -161,6 +161,7 @@ export interface OrderedRelation extends OrderedCheck {
 
 export interface OrderedRule {
   id: string;
+  importance?: number;
   partitionBy?: string[];
   orderBy: Array<{ column: string; type: "date" | "number" | "string"; format?: "yyyy/MM/dd" | "iso"; integer?: boolean; minimum?: number }>;
   duplicateOrder?: OrderedCheck;
@@ -186,6 +187,7 @@ export interface OrderedRule {
 export interface SqlConditionalRule {
   id: string;
   name?: string;
+  importance?: number;
   /** User-facing explanation shown when this rule fails. */
   message?: string;
   severity?: RuleSeverity;
@@ -212,6 +214,10 @@ export interface SqlServerIntegratedConnection {
 }
 
 export interface SqlServerTableTarget {
+  /** Stable suite-local policy identity; unique within the contract. */
+  id?: string;
+  /** Explicit deployment environment (for example dev, prod, qa); never inferred from connection/server text. */
+  environment?: string;
   /** Disabled targets remain configured but are excluded from execution. */
   enabled?: boolean;
   baseline?: import("./baseline").BaselineBinding;
@@ -279,6 +285,7 @@ export type CsvTarget =
 
 export interface CsvContract {
   version: 1;
+  rulePacks?: import("./rule-packs").RulePackUse[];
   baseline?: import("./baseline").BaselineBinding;
   /** Opaque annotations, preserved without execution behavior. */
   metadata?: Record<string, unknown>;
@@ -308,10 +315,12 @@ export interface CsvContract {
 export interface GroupTest {
   id: string;
   name?: string;
+  importance?: number;
   /** User-facing explanation shown when the group count fails. */
   message?: string;
-  importance?: number;
   groupBy: string[];
+  /** Run the child contract only for groups whose aggregate selector matches. */
+  select?: GroupSelection;
   groupCount?: CountExpectation;
   ref?: string;
   contract?: CsvContract;
@@ -319,6 +328,12 @@ export interface GroupTest {
   resolvedContract?: CsvContract;
   resolvedSource?: string;
 }
+
+export type GroupSelection =
+  | { all: GroupSelection[] }
+  | { any: GroupSelection[] }
+  | { rowCount: { where?: Predicate; count: CountExpectation } }
+  | { distinctCount: { column: string; where?: Predicate; count: CountExpectation } };
 
 export interface ParsedCsv {
   headers: string[];
@@ -370,12 +385,73 @@ export interface ValidationIssue {
   evidence?: FailureEvidence;
 }
 
+export type CheckOutcomeStatus = "pass" | "fail" | "not-applicable" | "not-evaluated" | "unknown";
+
+export type CheckOutcomeKind = "row-test" | "row-rule" | "group-rule" | "ordered-rule" | "group-test" | "sql-rule" | "other";
+
+export interface CheckOutcomeDescriptor {
+  id: string;
+  name?: string;
+  kind?: CheckOutcomeKind;
+  severity?: RuleSeverity;
+  /** Relative bounded weight supplied by policy; consumers default omitted values to 1. */
+  importance?: number;
+}
+
+/** Explicit aggregate state for one configured check. Missing checks are never implicitly successful. */
+export interface CheckOutcome extends CheckOutcomeDescriptor {
+  status: CheckOutcomeStatus;
+  selected?: number;
+  passed?: number;
+  failed?: number;
+  groups?: number;
+  notApplicable?: number;
+  notEvaluated?: number;
+  unknown?: number;
+  /** Reliability of retained per-row detail, independent of a trustworthy aggregate result. */
+  rowDetailStatus?: CheckOutcomeStatus;
+  reason?: string;
+}
+
+export interface RowCheckOutcomeContext {
+  identity?: Record<string, EvidenceValue>;
+  group?: Record<string, EvidenceValue>;
+  relatedRows?: number[];
+  aggregate?: Record<string, EvidenceValue>;
+}
+
+/** A bounded, explicitly observed row/check evaluation. */
+export interface RetainedRowCheckOutcome {
+  checkId: string;
+  checkName?: string;
+  kind?: CheckOutcomeKind;
+  status: CheckOutcomeStatus;
+  row?: number;
+  context?: RowCheckOutcomeContext;
+}
+
+export interface CheckOutcomeRetention {
+  limit: number;
+  retained: number;
+  dropped: number;
+  truncated: boolean;
+  /** True only when the caller confirms the configured evaluation completed. */
+  evaluationComplete?: boolean;
+  /** Stable explanation when evaluationComplete is false. */
+  reason?: string;
+  /** Counts all observed row/check records, including records dropped from the retained sample. */
+  counts: Record<CheckOutcomeStatus, number>;
+}
+
 export interface ValidationResult {
   preview?: { scope: "sample" | "complete"; rowLimit?: number; exampleLimit: number };
   examples?: { id: string; outcome: "passed" | "failed"; row: number; values: Record<string, string> }[];
   evaluatedAt?: string;
   ruleOutcomes?: { id: string; name?: string; selected: number; passed: number; failed: number; importance?: number }[];
   groupOutcomes?: { id: string; name?: string; groups: number; passed: number; failed: number; importance?: number }[];
+  checkOutcomes?: CheckOutcome[];
+  rowOutcomes?: RetainedRowCheckOutcome[];
+  outcomeRetention?: CheckOutcomeRetention;
   valid: boolean;
   rowCount: number;
   columnCount: number;

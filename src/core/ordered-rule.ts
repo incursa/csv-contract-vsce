@@ -19,8 +19,8 @@ export function orderedChecks(rule: OrderedRule): OrderedCheck[] {
 
 export function validateOrderedDefinition(rule: OrderedRule, declared: Set<string>): void {
   const validateImportance = (importance: number | undefined, context: string): void => {
-    if (importance !== undefined && (!Number.isFinite(importance) || importance < 0 || importance > 1)) {
-      throw new Error(`${context} importance must be a finite number from 0 to 1.`);
+    if (importance !== undefined && (!Number.isFinite(importance) || importance < 0.1 || importance > 10)) {
+      throw new Error(`${context} importance must be a finite number from 0.1 through 10.`);
     }
   };
   for (const column of orderedColumns(rule)) if (!declared.has(column)) throw new Error(`Sequence ${rule.id} references undeclared column ${column}.`);
@@ -127,7 +127,8 @@ export class OrderedRuleEvaluator {
   private pending = new Map<string, { items: Array<{ row: OrderedRow; ordinal: number }>; head: number }>();
 
   public constructor(private readonly rule: OrderedRule, private readonly options: CsvOptions,
-    private readonly issue: (issue: ValidationIssue) => void) {
+    private readonly issue: (issue: ValidationIssue) => void,
+    private readonly outcome?: (check: OrderedCheck, passed: boolean, row: OrderedRow, relatedRows: number[], detail: string) => void) {
     validateOrderedDefinition(rule, new Set(orderedColumns(rule)));
     for (const check of orderedChecks(rule)) this.outcomes.set(check.id, { id: check.id, selected: 0, passed: 0, failed: 0,
       ...(check.importance === undefined ? {} : { importance: check.importance }) });
@@ -138,6 +139,7 @@ export class OrderedRuleEvaluator {
   private check(check: OrderedCheck, ok: boolean, row: OrderedRow, detail = "", relatedRows: number[] = []): void {
     const outcome = this.outcomes.get(check.id)!;
     outcome.selected++;
+    this.outcome?.(check, ok, row, relatedRows, detail);
     if (ok) { outcome.passed++; return; }
     outcome.failed++;
     const values = Object.fromEntries(orderedColumns(this.rule).map(c => [c, row.values[c] ?? ""]));

@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=../../schemas/rulepack.schema.json
+version: 1
+id: shared-quality-rules
+definitions:
+  - id: required-status
+    description: Require a nonblank status in every selected row.
+    parameters:
+      column:
+        required: true
+        description: Declared status column.
+    fragment:
+      rules:
+        - id: status-required
+          name: Status is populated
+          message: "${column} must be populated."
+          expect:
+            column: "${column}"
+            operator: notBlank

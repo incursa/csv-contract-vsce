@@ -1,5 +1,5 @@
 import { baselineIssues, CsvSchemaObservation, resolveBaseline } from "../core/baseline";
-import { resolveEvaluation } from "../core/evaluation";
+import { attachCheckOutcomes, resolveEvaluation } from "../core/evaluation";
 import { validateContractSemantics } from "../core/contract";
 import { identityKey } from "../core/identity";
 import { fileSuiteIO } from "./suite-files";
@@ -626,6 +626,7 @@ async function validateGroup(
   const physical = physicalOptions(states[0].options);
   try {
     for await (const record of readCsvRecords(csvPath, physical, {
+      signal: options.signal,
       progressInterval: options.progressInterval,
       onProgress: ({ bytesRead, recordsRead }) => {
         options.onProgress?.({ pass: groupPass, passes: totalPasses,
@@ -676,6 +677,7 @@ async function validateGroup(
     }
     options.onRunProgress?.({ phase: "validating", rowsRead, totalRows: rowsRead,
       bytesRead: options.totalBytes, totalBytes: options.totalBytes });
+    options.signal?.throwIfAborted();
     if (!foundHeader) {
       states.forEach((state) => {
         initializeState(state, [], getNextTarget, uniqueChecks, getNextGroup, groupChecks);
@@ -691,10 +693,22 @@ async function validateGroup(
         }
       });
     }
-    await uniqueness?.findDuplicates((duplicate) => addDuplicateIssue(duplicate, uniqueChecks));
-    await groups?.readGroups((group) => addGroupIssues(group, groupChecks));
+    await uniqueness?.findDuplicates((duplicate) => {
+      options.signal?.throwIfAborted();
+      addDuplicateIssue(duplicate, uniqueChecks);
+    }, options.signal);
+    options.signal?.throwIfAborted();
+    await groups?.readGroups((group) => {
+      options.signal?.throwIfAborted();
+      addGroupIssues(group, groupChecks);
+    }, options.signal);
+    options.signal?.throwIfAborted();
     for (const state of states) for (const sequence of state.sequenceStores) {
-      for await (const row of sequence.store.rows()) sequence.evaluator.add(row);
+      for await (const row of sequence.store.rows(options.signal)) {
+        options.signal?.throwIfAborted();
+        sequence.evaluator.add(row);
+      }
+      options.signal?.throwIfAborted();
       sequence.evaluator.finish();
     }
     const outputs = states.map(state => {
@@ -719,6 +733,10 @@ async function validateGroup(
       result.issues.push(...summary.issues.slice(0, Math.max(0, options.maxIssues - result.issues.length)));
       result.truncated = result.issueCount > result.issues.length;
     }
+    for (let index = 0; index < outputs.length; index++) {
+      const result = outputs[index].result;
+      outputs[index].result = attachCheckOutcomes(states[index].input.contract, result);
+    }
     return outputs;
   } finally {
     uniqueness?.dispose();
@@ -733,11 +751,13 @@ export async function validateCsvFile(
   inputs: ContractRunInput[],
   options: StreamingValidationOptions = {}
 ): Promise<StreamingValidationOutput> {
+  options.signal?.throwIfAborted();
   if (inputs.length === 0) throw new Error("At least one contract is required.");
   inputs.forEach((input) => validateContractSemantics(input.contract));
   const evaluatedAt = options.evaluatedAt ?? new Date().toISOString();
   inputs = await Promise.all(inputs.map(async input => ({ ...input, contract: resolveEvaluation(await resolveBaseline(
     await resolveGroupContracts(input.contract, input.spec, fileSuiteIO), input.spec, fileSuiteIO), evaluatedAt) })));
+  options.signal?.throwIfAborted();
   const resolved = {
     ...options,
     maxIssues: options.maxIssues ?? 1000,
@@ -746,6 +766,7 @@ export async function validateCsvFile(
   };
   if (!Number.isInteger(resolved.maxIssues) || resolved.maxIssues < 1) throw new Error("maxIssues must be a positive integer.");
   const file = await stat(csvPath);
+  options.signal?.throwIfAborted();
   resolved.totalBytes = file.size;
   options.onRunProgress?.({ phase: "reading", rowsRead: 0, bytesRead: 0, totalBytes: file.size });
   const started = performance.now();
@@ -759,9 +780,11 @@ export async function validateCsvFile(
   const runs: ContractRunOutput[] = [];
   let pass = 0;
   for (const group of groups.values()) {
+    options.signal?.throwIfAborted();
     pass += 1;
     runs.push(...await validateGroup(csvPath, group, pass, groups.size, resolved));
   }
+  options.signal?.throwIfAborted();
   const durationMs = performance.now() - started;
   runs.forEach(run => { run.result.evaluatedAt = evaluatedAt; });
   const totalRows = Math.max(...runs.map((run) => run.result.rowCount));

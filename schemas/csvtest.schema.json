@@ -10,6 +10,12 @@
     "schema"
   ],
   "properties": {
+    "rulePacks": {
+      "description": "Pinned local reusable rules, resolved before execution. Dependencies never update implicitly.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/rulePackUse" }
+    },
     "baseline": {
       "description": "Versioned schema expectation or a sidecar path relative to the containing contract/suite. Never updated by validation.",
       "oneOf": [
@@ -80,6 +86,9 @@
             },
             "interpretation": {
               "$ref": "#/$defs/csvOptions"
+            },
+            "sqlMetadata": {
+              "$ref": "#/$defs/sqlBaselineMetadata"
             },
             "inference": {
               "type": "object",
@@ -353,15 +362,161 @@
     }
   },
   "$defs": {
+    "importance": {
+      "type": "number", "minimum": 0.1, "maximum": 10, "default": 1,
+      "description": "Relative impact in graded health only. Does not change PASS/FAIL or rule severity."
+    },
+    "rulePackUse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "ref", "sha256", "definition"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "ref": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "definition": { "type": "string", "minLength": 1 },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "number", "boolean", "null"] }
+        }
+      }
+    },
+    "sqlBaselineMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "foreignKeys": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["availability", "items"],
+              "properties": {
+                "availability": { "const": "available" },
+                "items": { "type": "array", "items": { "$ref": "#/$defs/baselineForeignKey" } }
+              }
+            },
+            { "$ref": "#/$defs/baselineMetadataUnavailable" }
+          ]
+        },
+        "indexes": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["availability", "items"],
+              "properties": {
+                "availability": { "const": "available" },
+                "items": { "type": "array", "items": { "$ref": "#/$defs/baselineIndex" } }
+              }
+            },
+            { "$ref": "#/$defs/baselineMetadataUnavailable" }
+          ]
+        }
+      }
+    },
+    "baselineMetadataUnavailable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["availability"],
+      "properties": { "availability": { "const": "unavailable" } }
+    },
+    "baselineForeignKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "schema", "table", "referencedSchema", "referencedTable", "columns", "updateAction", "deleteAction"],
+      "properties": {
+        "name": { "type": "string" },
+        "schema": { "type": "string" },
+        "table": { "type": "string" },
+        "referencedSchema": { "type": "string" },
+        "referencedTable": { "type": "string" },
+        "updateAction": { "type": ["string", "null"] },
+        "deleteAction": { "type": ["string", "null"] },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ordinal", "column", "referencedColumn"],
+            "properties": {
+              "ordinal": { "type": "integer", "minimum": 1 },
+              "column": { "type": "string" },
+              "referencedColumn": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "baselineIndex": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "unique", "disabled", "filterPredicate", "keyColumns", "includedColumns"],
+      "properties": {
+        "name": { "type": "string" },
+        "unique": { "type": "boolean" },
+        "disabled": { "type": "boolean" },
+        "filterPredicate": { "type": ["string", "null"] },
+        "keyColumns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "ordinal", "direction"],
+            "properties": {
+              "name": { "type": "string" },
+              "ordinal": { "type": "integer", "minimum": 1 },
+              "direction": { "enum": ["asc", "desc"] }
+            }
+          }
+        },
+        "includedColumns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "ordinal"],
+            "properties": {
+              "name": { "type": "string" },
+              "ordinal": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    },
+    "groupSelection": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["all"],
+          "properties": { "all": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/groupSelection" } } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["any"],
+          "properties": { "any": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/groupSelection" } } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["rowCount"],
+          "properties": { "rowCount": { "type": "object", "additionalProperties": false, "required": ["count"],
+            "properties": { "where": { "$ref": "#/$defs/predicate" }, "count": { "$ref": "#/$defs/count" } } } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["distinctCount"],
+          "properties": { "distinctCount": { "type": "object", "additionalProperties": false, "required": ["column", "count"],
+            "properties": { "column": { "type": "string", "minLength": 1 },
+              "where": { "$ref": "#/$defs/predicate" }, "count": { "$ref": "#/$defs/count" } } } }
+        }
+      ]
+    },
     "groupTest": {
       "type": "object", "additionalProperties": false,
       "required": ["id", "groupBy"],
       "properties": {
+        "importance": { "$ref": "#/$defs/importance" },
         "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
         "name": { "type": "string", "minLength": 1, "description": "Human-readable title used in results." },
         "message": { "type": "string", "minLength": 1, "description": "User-facing explanation shown when the group count fails." },
-        "importance": { "type": "number", "minimum": 0, "maximum": 1, "default": 1, "description": "Relative contribution of failures to graded health; defaults to 1." },
         "groupBy": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "select": { "$ref": "#/$defs/groupSelection" },
         "groupCount": { "$ref": "#/$defs/count" },
         "ref": { "type": "string", "minLength": 1 },
         "contract": { "$ref": "#" }
@@ -372,9 +527,9 @@
       "type": "object",
       "required": ["id", "message"],
       "properties": {
+        "importance": { "$ref": "#/$defs/importance" },
         "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
-        "message": { "type": "string", "minLength": 1 },
-        "importance": { "type": "number", "minimum": 0, "maximum": 1, "default": 1, "description": "Relative contribution of failures to graded health." }
+        "message": { "type": "string", "minLength": 1 }
       }
     },
     "orderedRule": {
@@ -382,6 +537,7 @@
       "required": ["id", "orderBy"],
       "anyOf": [{ "required": ["relations"] }, { "required": ["event", "initial", "transitions", "invalidTransition", "finalStates", "invalidFinal"] }],
       "properties": {
+        "importance": { "$ref": "#/$defs/importance" },
         "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
         "partitionBy": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
         "orderBy": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false,
@@ -395,9 +551,9 @@
         "relations": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false,
           "required": ["id", "message", "when"],
           "properties": {
+            "importance": { "$ref": "#/$defs/importance" },
             "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
             "message": { "type": "string", "minLength": 1 },
-            "importance": { "type": "number", "minimum": 0, "maximum": 1, "default": 1 },
             "when": { "$ref": "#/$defs/predicate" },
             "requirePrior": { "$ref": "#/$defs/predicate" },
             "forbidPrior": { "$ref": "#/$defs/predicate" },
@@ -726,6 +882,16 @@
         ]
       },
       "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "description": "Stable suite-policy identifier for this target."
+        },
+        "environment": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "description": "Explicit environment for suite target policy; never inferred from the server name."
+        },
         "enabled": {
           "type": "boolean",
           "default": true,
@@ -976,6 +1142,7 @@
         "expect"
       ],
       "properties": {
+        "importance": { "$ref": "#/$defs/importance" },
         "id": {
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9._-]*$"
@@ -1279,6 +1446,7 @@
         "expect"
       ],
       "properties": {
+        "importance": { "$ref": "#/$defs/importance" },
         "id": {
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9._-]*$"
@@ -1300,7 +1468,6 @@
           ],
           "default": "error"
         },
-        "importance": { "type": "number", "minimum": 0, "maximum": 1, "default": 1, "description": "Relative contribution of failures to graded health; defaults to 1." },
         "when": {
           "$ref": "#/$defs/csvPredicate"
         },
@@ -1360,6 +1527,7 @@
         "require"
       ],
       "properties": {
+        "importance": { "$ref": "#/$defs/importance" },
         "id": {
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9._-]*$"
@@ -1381,7 +1549,6 @@
           ],
           "default": "error"
         },
-        "importance": { "type": "number", "minimum": 0, "maximum": 1, "default": 1, "description": "Relative contribution of failures to graded health; defaults to 1." },
         "when": {
           "$ref": "#/$defs/csvPredicate"
         },
@@ -1408,6 +1575,7 @@
         "expect"
       ],
       "properties": {
+        "importance": { "$ref": "#/$defs/importance" },
         "id": {
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9._-]*$",
@@ -1423,7 +1591,6 @@
           "minLength": 1,
           "description": "User-facing explanation shown when this row test fails. The expected and actual values remain available as finding context."
         },
-        "importance": { "type": "number", "minimum": 0, "maximum": 1, "default": 1, "description": "Relative contribution of failures to graded health; defaults to 1." },
         "select": {
           "type": "object",
           "minProperties": 1,

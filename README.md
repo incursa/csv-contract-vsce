@@ -1,11 +1,50 @@
 ![CSV Contract Workbench](images/csv-contract-readme-banner.png)
 
-# CSV Contract Workbench
+# Validation Workbench
 
-Define reusable YAML contracts for CSV files, edit them visually in VS Code, and run the same validations interactively or in unattended workflows.
+Define reusable YAML validations for files and SQL Server tables, edit them visually in VS Code, and run the same validations interactively or in unattended workflows. New definitions can use the generic `*.validation.yaml` and `*.validationsuite.yaml` names. Existing `*.csvtest.yaml` and `*.csvsuite.yaml` files remain fully supported without migration.
 
 This project is built and verified by a dedicated Fleet worker.
 Pull request checks report the Fleet approval state.
+
+## Portable runner and review reports in 0.27
+
+The Windows standalone runner uses the same validation engine as VS Code. Open a
+definition or suite, confirm its targets, run or cancel, and download an offline
+HTML report, streamed Excel workbook, or a versioned review-package JSON file. Shared review formats default
+to aggregate-only evidence. Detailed compatibility exports are explicitly labeled
+because they can contain protected source values.
+
+Run the portable executable from a user-writable folder with your normal Windows
+account; no administrator privileges, installer, service, Node.js, or npm are
+required. Its manifest uses `asInvoker`. File validation and SQL-login profiles
+do not need an ODBC installation. Windows-integrated SQL authentication requires
+a compatible ODBC driver already provisioned on the computer; the runner never
+installs it or requests elevation. Database permissions remain separate.
+
+Desktop and CLI Excel exports stream to disk and split oversized worksheets at
+Excel's limits. The browser uses a streaming save picker when available and a
+64 MiB download fallback otherwise. Use **Validation: Preview and Update Rule-Pack
+Pin** in desktop VS Code to review a local pack change before changing its pinned
+hash; this never silently upgrades a rule pack or saves the document for you.
+
+Use **Validation: Open Saved Review Package** and **Validation: Compare Saved Review
+Packages** for read-only review without reconnecting to the data. Comparisons are
+conservative: changed definitions, missing provenance, incomplete scans, or limited
+findings remain indeterminate rather than being called resolved.
+
+See [Standalone runner](docs/STANDALONE-RUNNER.md),
+[review packages and privacy](docs/REVIEW-PACKAGES.md),
+[saved-run comparisons](docs/SAVED-RUNS.md),
+[scalable Excel exports](docs/SCALABLE-EXCEL-EXPORT.md),
+[pinned rule packs and synthetic fixtures](docs/RULE-PACKS-AND-FIXTURES.md),
+[suite target policy](docs/SUITE-TARGET-POLICY.md),
+[importance weighting](docs/RESULT-IMPORTANCE.md),
+[SQL baseline metadata](docs/SQL-BASELINE-METADATA.md), and
+[controlled cross-connection checks](docs/CROSS-CONNECTION-VALIDATION.md).
+
+The executable is an unsigned local build. SQL drivers, Windows authentication,
+and clean-machine acceptance are separate from synthetic/local verification.
 
 ## Validator workflows
 
@@ -19,7 +58,9 @@ same-connection cross-table checks. Results can be reviewed historically in
 read-only mode and exported as JSON, CSV, or an Excel validation package. See
 [Validator workflows](docs/VALIDATOR-WORKFLOWS.md) for formats, defaults, examples
 and current limits; [roadmap status](docs/VALIDATOR-ROADMAP.md) identifies the
-remaining work. Baselines change only through explicit reviewed acceptance.
+remaining work. The [validation capability catalog](docs/VALIDATION-CAPABILITY-CATALOG.md)
+maps business questions to the supported row, group, ordered, lifecycle and cross-source
+test forms. Baselines change only through explicit reviewed acceptance.
 
 ## Build contracts visually
 
@@ -43,11 +84,11 @@ Choose **Red / green** or **Gradient** directly in the **Latest results** header
 
 Running a suite opens a dedicated progress screen immediately. It rolls all test files into an overall suite bar, shows one member bar per referenced or inline contract, and displays compact live target progress beneath each member. Independent targets execute concurrently, and up to four test files run at once by default so large suites do not overwhelm the database. Change `csvContract.suiteParallelMembers` to tune that limit. Completed contract and suite runs offer **Rerun failed** when a target or test file fails. Suite cross-checks support reconciliation, deterministic relationships, filtered or ranked row selection, required matches from a third source, portable key normalization, and target matrices that reuse logical contracts across environments.
 
-Open **CSV Contract** in the Activity Bar to see every `*.csvtest.yaml` and `*.csvtest.yml` file in the workspace. Expand a contract to inspect and open its local or URL targets. Check the contracts you want and select **Run Selected**. A dedicated report opens with totals for the complete test run and expandable results for every contract-target pair. Select **Last run** to reopen the aggregate report, or select an individual green or red run to open the report focused on that result. Contracts that share a target reuse the same loaded CSV, and the selection remains checked for the workspace.
+Open **Validation** in the Activity Bar to see generic validation definitions and legacy CSV-named definitions in the workspace. Expand a contract to inspect and open its local or URL targets. Check the contracts you want and select **Run Selected**. A dedicated report opens with totals for the complete test run and expandable results for every contract-target pair. Select **Last run** to reopen the aggregate report, or select an individual green or red run to open the report focused on that result. Contracts that share a target reuse the same loaded CSV, and the selection remains checked for the workspace.
 
 ## Compare CSV files semantically
 
-Run **CSV Contract: Compare CSV Files Semantically** for an order-independent full-row multiset comparison or an explicit keyed comparison. Duplicate keys are surfaced without pairing ambiguous records. Trimming, case folding, blank/null equivalence, date and decimal normalization, ignored columns, keys, and context columns are all opt-in.
+Run **Validation: Compare CSV Files Semantically** for an order-independent full-row multiset comparison or an explicit keyed comparison. Duplicate keys are surfaced without pairing ambiguous records. Trimming, case folding, blank/null equivalence, date and decimal normalization, ignored columns, keys, and context columns are all opt-in.
 
 The aggregate result view keeps diagnostics redacted and bounded. Open complete normal-sized normalized results in the native VS Code diff editor, or save deterministic JSON, CSV, and Markdown evidence locally. The pure TypeScript engine runs in a real VS Code web host through `vscode.workspace.fs`; desktop automatically switches large local files to exact spill-to-disk comparison. See [Semantic CSV comparison](docs/SEMANTIC-COMPARISON.md) for limits, evidence files, and privacy guidance.
 
@@ -64,12 +105,13 @@ The aggregate result view keeps diagnostics redacted and bounded. Open complete 
 - Aggregate suite reconciliation and deterministic cross-source relationship checks across either CSV files or SQL Server tables, including filtered/ranked row sets, required third-source matches, portable key normalization, and target matrices that reuse logical contracts across environments
 - Cross-row group completeness rules, such as requiring every employee/tax-area group to contain a full balance family
 - Child contracts applied to each group or the whole input, with typed ordered event checks and bounded findings
+- Aggregate-selected groups using filtered row counts or distinct-value counts before applying a child contract
 - Exact header order when the receiving system requires a fixed layout
 - Raw string values such as identifiers with leading zeroes
 
 ## Generate SQL Server staging validation and validate tables
 
-Use the same reviewed contract against SQL Server tables and views. A Windows integrated target can be declared directly with non-secret server and database names; SQL logins and custom connection strings continue to use a secret-backed named profile. In the Workbench, **Add table or view** uses a profile to browse objects. Execute the contract from the Workbench, **Workspace Tests**, or **CSV Contract: Run Contract**. Validation is read-only, runs translatable rules server-side, and feeds the normal report. JavaScript regex rules use an exact read-only client fallback.
+Use the same reviewed contract against SQL Server tables and views. A Windows integrated target can be declared directly with non-secret server and database names; SQL logins and custom connection strings continue to use a secret-backed named profile. In the Workbench, **Add table or view** uses a profile to browse objects. Execute the contract from the Workbench, **Workspace Tests**, or **Validation: Run Contract**. Validation is read-only, runs translatable rules server-side, and feeds the normal report. JavaScript regex rules use an exact read-only client fallback.
 
 ```yaml
 sqlServer:
@@ -121,7 +163,7 @@ node .\dist\cli\csv-contract.cjs dbtest --spec .\examples\sql-server-staging.csv
 
 `columnMap` maps canonical contract names to physical SQL Server names for that target. CSV headers and report output continue to use the canonical names. The optional scope limits every check to one load or batch and binds the value as a query parameter. Server-side translation covers row counts, null, length, allowed-value, uniqueness, shared and SQL-specific conditional rules, row tests, and grouped completeness rules. Use `sqlServer.targets` to apply one contract to multiple tables, views, or connection profiles.
 
-You can still generate a standalone read-only script with **CSV Contract: Generate SQL Server Staging Validation** or `csv-contract sql`. The script creates a rule summary plus bounded failing-row samples and does not connect automatically.
+You can still generate a standalone read-only script with **Validation: Generate SQL Server Staging Validation** or `csv-contract sql`. The script creates a rule summary plus bounded failing-row samples and does not connect automatically.
 
 The bundled CLI supports unattended generation without a database connection:
 
@@ -135,7 +177,7 @@ See [SQL Server staging validation](docs/SQL-SERVER-STAGING-VALIDATION.md) for t
 
 ## Import a known staging schema
 
-Run **CSV Contract: Import SQL Server Table Schema** or select **Import table schema** in the Workbench. Choose an offline `CREATE TABLE` script, a Database Tracking `*.structure.json` table model, or a compact Database Knowledge snapshot. If the source contains several tables, select the one you want before the preview.
+Run **Validation: Import SQL Server Table Schema** or select **Import table schema** in the Workbench. Choose an offline `CREATE TABLE` script, a Database Tracking `*.structure.json` table model, or a compact Database Knowledge snapshot. If the source contains several tables, select the one you want before the preview.
 
 The preview reports added and existing columns, contract-only columns that will remain in place, inferred technical constraints, preserved conflicts, table identity changes, and primary-key identity initialization. Nothing is written until **Import Schema** is confirmed. Existing descriptions, allowed values, regexes, conditional rules, load scope, detail limit, identities, and manually reviewed constraint values are preserved.
 
@@ -156,8 +198,8 @@ Omit `--spec` to create a new contract. For a multi-table source, add `--table s
 
 Requires Visual Studio Code `^1.110.0`.
 
-1. Install **CSV Contract Workbench** from the VS Code Marketplace.
-2. Run **CSV Contract: Create Contract from CSV** from the Command Palette.
+1. Install **Validation Workbench** from a VSIX or the VS Code Marketplace.
+2. Run **Validation: Create Contract from CSV** from the Command Palette.
 3. Review the generated `*.csvtest.yaml` file in the visual workbench or YAML editor.
 4. Use the saved target, add more file paths or URLs, or choose temporary targets with **Select test CSV**.
 5. Select **Run tests** to validate every active target.
@@ -176,11 +218,11 @@ The included Node CLI and PowerShell wrapper use a streaming validator for unatt
 
 ## Local by design
 
-CSV contents and contracts are processed locally. CSV Contract Workbench does not upload validation data to a hosted service.
+CSV contents and contracts are processed locally. Validation Workbench does not upload validation data to a hosted service.
 
 ## License
 
-The extension code and documentation are licensed under Apache-2.0. CSV Contract Workbench and its product marks are Incursa brand assets and are not granted under that license.
+The extension code and documentation are licensed under Apache-2.0. Validation Workbench and its product marks are Incursa brand assets and are not granted under that license.
 
 Report bugs at [the project issue tracker](https://github.com/incursa/csv-contract-vsce/issues).
 

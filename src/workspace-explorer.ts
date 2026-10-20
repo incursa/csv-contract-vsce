@@ -17,6 +17,7 @@ import { renderWorkspaceReportHtml } from "./workspace-report";
 import { hasSqlServerConnection, resolveSqlServerTargets, sqlServerConnectionKey, sqlServerConnectionLabel, sqlServerTargetLabel, type ResolvedSqlServerTarget } from "./core/sql-server-targets";
 import type { DesktopSqlServerRunner } from "./extension";
 import type { ResultColorMode } from "./core/result-health";
+import { validationWorkspaceGlob } from "./core/validation-files";
 
 export const explorerContainerId = "csvContractExplorer";
 export const explorerViewId = "csvContractExplorer.contracts";
@@ -28,7 +29,6 @@ export const openTargetInVsCodeCommand = "csv-contract-vsce.openTargetInVsCode";
 export const openTargetExternallyCommand = "csv-contract-vsce.openTargetExternally";
 
 const checkedContractsKey = "csvContractExplorer.checkedContracts";
-const contractPattern = "**/*.{csvtest,csvsuite}.{yaml,yml}";
 const contractExclude = "**/{node_modules,.git,dist,.vscode-test,.vscode-test-web}/**";
 
 interface ContractSnapshot {
@@ -145,7 +145,7 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
     private readonly crossExecutor?: CrossExecutor
   ) {
     this.checked = new Set(context.workspaceState.get<string[]>(checkedContractsKey, []));
-    const watcher = vscode.workspace.createFileSystemWatcher(contractPattern);
+    const watcher = vscode.workspace.createFileSystemWatcher(validationWorkspaceGlob);
     const refresh = (): void => this.refresh();
     watcher.onDidCreate(refresh);
     watcher.onDidChange(refresh);
@@ -258,7 +258,7 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
     if (!this.reportPanel) {
       this.reportPanel = vscode.window.createWebviewPanel(
         "csv-contract-vsce.workspaceReport",
-        "CSV Contract Test Report",
+        "Validation Test Report",
         vscode.ViewColumn.Active,
         {
           enableScripts: false,
@@ -418,7 +418,7 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
 
   private writeReport(report: WorkspaceReport): void {
     this.output.clear();
-    this.output.appendLine("CSV Contract Workspace Report");
+    this.output.appendLine("Validation Workspace Report");
     this.output.appendLine(`${report.valid ? "PASS" : "FAIL"} · ${report.selectedContracts} contracts · ${report.targets} targets · ${report.entries.length} runs`);
     this.output.appendLine(`Completed ${report.completedAt.toLocaleString()}`);
     this.output.appendLine("");
@@ -448,7 +448,7 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
     const snapshots: ContractSnapshot[] = [];
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
       const uris = await vscode.workspace.findFiles(
-        new vscode.RelativePattern(folder, contractPattern),
+        new vscode.RelativePattern(folder, validationWorkspaceGlob),
         contractExclude
       );
       for (const uri of uris) {
@@ -503,7 +503,7 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
     item.tooltip = "Open the complete workspace test report.";
     item.command = {
       command: showWorkspaceReportCommand,
-      title: "Open CSV Contract Test Report",
+      title: "Open Validation Test Report",
       arguments: [item]
     };
     return item;
@@ -545,7 +545,7 @@ export class WorkspaceExplorerProvider implements vscode.TreeDataProvider<CsvCon
     item.contextValue = "csvContract";
     item.command = {
       command: "csv-contract-vsce.openWorkbench",
-      title: "Open CSV Contract Workbench",
+      title: "Open Validation Workbench",
       arguments: [snapshot.uri]
     };
     return item;

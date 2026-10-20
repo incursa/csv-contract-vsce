@@ -1,4 +1,5 @@
 .github/**
+.codex/**
 .vscode/**
 .vscode-test-web/**
 node_modules/**
@@ -13,7 +14,10 @@ scripts/Test-SemanticParity.ps1
 scripts/build-brand-assets.mjs
 scripts/verify-brand-assets.mjs
 scripts/**
+!scripts/Test-CsvContract.ps1
+!scripts/New-CsvContract.ps1
 dist/test/**
+dist/standalone/**
 dist/web/test/**
 *.ts
 eslint.config.mjs

@@ -4,11 +4,16 @@ import { readFile } from "node:fs/promises";
 
 test("contributes the workspace test Activity Bar view and commands", async () => {
   const manifest = JSON.parse(await readFile("package.json", "utf8"));
+  assert.equal(`${manifest.publisher}.${manifest.name}`, "incursa.csv-contract-vsce", "Generic display and package names must retain the installed extension identity.");
   const editors = manifest.contributes.customEditors;
   const workbench = editors.find((editor: { viewType: string }) => editor.viewType === "csv-contract-vsce.contractEditor");
   assert.equal(workbench.priority, "default");
-  for (const extension of ["csvtest.yaml", "csvtest.yml", "csvsuite.yaml", "csvsuite.yml"]) {
+  for (const extension of ["validation.yaml", "validation.yml", "validationsuite.yaml", "validationsuite.yml", "csvtest.yaml", "csvtest.yml", "csvsuite.yaml", "csvsuite.yml"]) {
     assert.ok(workbench.selector.some((selector: { filenamePattern: string }) => selector.filenamePattern === `*.${extension}`), `Workbench must open ${extension} files`);
+  }
+  for (const kind of ["validation", "validationsuite", "rulepack", "validationfixtures"]) {
+    const association = manifest.contributes.yamlValidation.find((entry: { url: string }) => entry.url === `./schemas/${kind}.schema.json`);
+    assert.deepEqual(association?.fileMatch, [`*.${kind}.yaml`, `*.${kind}.yml`]);
   }
   const commands = new Set(manifest.contributes.commands.map((entry: { command: string }) => entry.command));
   assert.ok(commands.has("csv-contract-vsce.runSelectedContracts"));
@@ -18,11 +23,18 @@ test("contributes the workspace test Activity Bar view and commands", async () =
   assert.ok(commands.has("csv-contract-vsce.openTargetExternally"));
   assert.ok(commands.has("csv-contract-vsce.generateSqlServerValidation"));
   assert.ok(commands.has("csv-contract-vsce.importSqlServerSchema"));
+  assert.ok(commands.has("csv-contract-vsce.openReviewPackage"));
+  assert.ok(commands.has("csv-contract-vsce.compareReviewPackages"));
+  assert.ok(commands.has("csv-contract-vsce.updateRulePackPin"));
+  assert.equal(manifest.contributes.commands.find((entry: { command: string }) => entry.command === "csv-contract-vsce.updateRulePackPin").enablement, "!isWeb");
+  assert.ok(manifest.activationEvents.includes("onCommand:csv-contract-vsce.updateRulePackPin"));
+  assert.ok(manifest.contributes.menus.commandPalette.some((entry: { command: string; when: string }) => entry.command === "csv-contract-vsce.updateRulePackPin" && entry.when === "!isWeb"));
   assert.equal(manifest.contributes.viewsContainers.activitybar[0].id, "csvContractExplorer");
   assert.equal(manifest.contributes.views.csvContractExplorer[0].id, "csvContractExplorer.contracts");
   assert.ok(manifest.activationEvents.includes("onView:csvContractExplorer.contracts"));
-  for (const command of manifest.contributes.commands.filter((entry: { category?: string }) => entry.category === "CSV Contract")) {
-    assert.equal(command.title.startsWith("CSV Contract:"), false, `command palette title duplicated category: ${command.title}`);
+  assert.equal(manifest.displayName, "Validation Workbench");
+  for (const command of manifest.contributes.commands.filter((entry: { category?: string }) => entry.category === "Validation")) {
+    assert.equal(command.title.startsWith("Validation:"), false, `command palette title duplicated category: ${command.title}`);
   }
   const titleCommands = manifest.contributes.menus["view/title"].map((entry: { command: string }) => entry.command);
   assert.ok(titleCommands.includes("csv-contract-vsce.runSelectedContracts"));

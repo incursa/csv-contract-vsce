@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { CsvContract } from "../src/core/model";
@@ -47,6 +47,48 @@ test("stream parser handles BOM, escaped quotes, commas, CRLF, and multiline fie
       ["001", "Ada, Jr.", "Line 1\r\nLine 2"],
       ["002", "Say \"Hi\"", "ok"]
     ]);
+  });
+});
+
+test("stream cancellation interrupts a large read and removes temporary stores", async () => {
+  const rows = Array.from({ length: 50000 }, (_, index) => `${index},Name ${index},Active`).join("\n");
+  await withTempFile(`Id,Name,Status\n${rows}\n`, async (path, directory) => {
+    const controller = new AbortController();
+    let progressCalls = 0;
+    await assert.rejects(validateCsvFile(path, [{ spec: "general", contract: contract() }], {
+      signal: controller.signal,
+      progressInterval: 100,
+      tempDirectory: directory,
+      uniquePartitions: 8,
+      onProgress: () => {
+        progressCalls++;
+        controller.abort(new Error("synthetic stream cancellation"));
+      }
+    }), /synthetic stream cancellation/);
+    assert.equal(progressCalls, 1);
+    assert.deepEqual(await readdir(directory), ["input.csv"]);
+  });
+});
+
+test("cancellation before materialized uniqueness scanning cannot publish a result", async () => {
+  const rows = Array.from({ length: 1000 }, (_, index) => `${String(index).padStart(3, "0")},Name ${index},Active`).join("\n");
+  await withTempFile(`Id,Name,Status\n${rows}\n`, async (path, directory) => {
+    const controller = new AbortController();
+    let enteredMaterializedPhase = false;
+    await assert.rejects(validateCsvFile(path, [{ spec: "general", contract: contract() }], {
+      signal: controller.signal,
+      progressInterval: 0,
+      tempDirectory: directory,
+      uniquePartitions: 8,
+      onRunProgress: progress => {
+        if (progress.phase === "validating" && progress.totalRows === 1000) {
+          enteredMaterializedPhase = true;
+          controller.abort(new Error("synthetic materialized cancellation"));
+        }
+      }
+    }), /synthetic materialized cancellation/);
+    assert.equal(enteredMaterializedPhase, true);
+    assert.deepEqual(await readdir(directory), ["input.csv"]);
   });
 });
 

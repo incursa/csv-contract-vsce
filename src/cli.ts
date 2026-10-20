@@ -1,6 +1,6 @@
 import { resolveBaseline, resolveTargetBaseline } from "./core/baseline";
-import { readFile, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { parseContract, parseCsv, serializeContract } from "./core/contract";
 import { evaluateCsvCrossCheck } from "./core/cross-checks";
 import { createContractOutlineFromFile } from "./node/contract-generator";
@@ -13,6 +13,14 @@ import { resolveSqlServerTargets } from "./core/sql-server-targets";
 import { loadSuite, runSuite, generateSuiteSql } from "./core/suite";
 import { fileSuiteIO, combineSuite, splitSuite } from "./node/suite-files";
 import { SqlServerValidationSession } from "./node/sql-server-validator";
+import { createCrossConnectionSourceAdapter, runCrossConnectionCheck } from "./node/cross-connection-runner";
+import { parseValidationReviewPackage } from "./core/review-package";
+import { compareValidationReviewPackages } from "./core/review-diff";
+import { renderReviewDiffHtml } from "./review-diff-report";
+import { runValidationFixtures } from "./node/rule-fixtures";
+import { redactIssueExportRuns } from "./core/evidence-redaction";
+import { writeBadRowsXlsxFile } from "./node/xlsx-stream";
+import type { BadRowsRun } from "./bad-rows-xlsx";
 
 interface ParsedArgs {
   command: string;
@@ -33,32 +41,51 @@ interface ParsedArgs {
   force: boolean;
   failFast: boolean;
   allowExternal: boolean;
+  before?: string;
+  after?: string;
+  includeDetails: boolean;
 }
 
-function usage(): never {
-  console.error(`CSV Contract Workbench
+export const cliUsage = `Validation Workbench
 
 Usage:
-  csv-contract combine --spec <master.csvsuite.yaml> --out <portable.csvsuite.yaml> [--force] [--allow-external]
-  csv-contract split --spec <portable.csvsuite.yaml> --out <directory> [--force]
-  csv-contract dbtest --spec <suite.csvsuite.yaml> [--fail-fast] [--format json]
-  csv-contract test [--csv <file-or-url>] --spec <contract.csvtest.yaml> [--spec <spot-check.yaml>]
+  csv-contract combine --spec <master.validationsuite.yaml> --out <portable.validationsuite.yaml> [--force] [--allow-external]
+  csv-contract split --spec <portable.validationsuite.yaml> --out <directory> [--force]
+  csv-contract dbtest --spec <suite.validationsuite.yaml> [--fail-fast] [--format json]
+  csv-contract test [--csv <file-or-url>] --spec <contract.validation.yaml> [--spec <spot-check.yaml>]
                     [--format text|json] [--max-issues 1000] [--progress-interval 250000]
                     [--unique-partitions 128] [--temp-directory <path>]
-  csv-contract init --csv <file.csv> --out <contract.csvtest.yaml>
+  csv-contract init --csv <file.csv> --out <contract.validation.yaml>
                     [--sample-rows 10000] [--infer-constraints] [--no-sample-tests]
-  csv-contract sql --spec <contract.csvtest.yaml> --out <validation.sql> [--table <target-name-or-schema.table>]
-  csv-contract dbtest --spec <contract.csvtest.yaml> [--spec <another.csvtest.yaml>]
+  csv-contract sql --spec <contract.validation.yaml> --out <validation.sql> [--table <target-name-or-schema.table>]
+  csv-contract dbtest --spec <contract.validation.yaml> [--spec <another.validation.yaml>]
                       [--scope <parameter=value>] [--format text|json] [--max-issues 1000]
-  csv-contract schema --source <table.sql-or-json> --out <contract.csvtest.yaml>
-                      [--spec <existing.csvtest.yaml>] [--table <schema.name>]
+  csv-contract schema --source <table.sql-or-json> --out <contract.validation.yaml>
+                      [--spec <existing.validation.yaml>] [--table <schema.name>]
+  csv-contract review --source <validation-review.json> [--format text|json]
+  csv-contract export --source <validation-review.json> --out <offline-report.xlsx>
+                      [--include-details] [--force]
+  csv-contract diff --before <older-review.json> --after <newer-review.json>
+                    [--out <offline-diff.html>] [--format text|json]
+  csv-contract fixtures --source <fixtures.yaml> [--format text|json]
+  csv-contract explain --spec <definition-or-suite.yaml> [--format text|json]
 
 Repeat --csv to test multiple explicit files or URLs. When --csv is omitted, targets come from each contract.
 Compatible contracts targeting the same CSV are applied in one pass.
+Legacy .csvtest.yaml and .csvsuite.yaml names remain fully supported.
 SQL Server connection profile 'warehouse' resolves from CSV_CONTRACT_SQLSERVER_WAREHOUSE.
 Progress is written to stderr so JSON stdout remains machine-readable.
-`);
-  process.exit(2);
+`;
+
+export class CliUsageError extends Error {
+  constructor() {
+    super(cliUsage);
+    this.name = "CliUsageError";
+  }
+}
+
+function usage(): never {
+  throw new CliUsageError();
 }
 
 function positiveInteger(value: string, name: string, allowZero = false): number {
@@ -83,13 +110,14 @@ function parseArgs(argv: string[]): ParsedArgs {
     sampleRows: 10000,
     inferConstraints: false,
     includeSampleTests: true,
-    scopes: {}, force: false, failFast: false, allowExternal: false
+    scopes: {}, force: false, failFast: false, allowExternal: false, includeDetails: false
   };
   while (argv.length) {
     const token = argv.shift()!;
     if (token === "--force") { result.force = true; continue; }
     if (token === "--fail-fast") { result.failFast = true; continue; }
     if (token === "--allow-external") { result.allowExternal = true; continue; }
+    if (token === "--include-details") { result.includeDetails = true; continue; }
     if (token === "--infer-constraints") {
       result.inferConstraints = true;
       continue;
@@ -110,6 +138,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (token === "--temp-directory") result.tempDirectory = value;
     else if (token === "--sample-rows") result.sampleRows = positiveInteger(value, "sampleRows");
     else if (token === "--source") result.source = value;
+    else if (token === "--before") result.before = value;
+    else if (token === "--after") result.after = value;
     else if (token === "--table") result.table = value;
     else if (token === "--scope") {
       const separator = value.indexOf("=");
@@ -146,7 +176,7 @@ async function initialize(args: ParsedArgs, csvPath: string): Promise<void> {
   generated.contract.targets = [{ path: targetPath }];
   const schemaUrl = "https://raw.githubusercontent.com/incursa/csv-contract-vsce/main/schemas/csvtest.schema.json";
   const preamble = [
-    `# Generated from ${basename(csvPath)} by CSV Contract Workbench.`,
+    `# Generated from ${basename(csvPath)} by Validation Workbench.`,
     "# Review column presence and replace or remove generated sample assertions before relying on this contract.",
     args.inferConstraints
       ? `# Constraint values were inferred from the first ${generated.sampledRows} data rows and must be reviewed.`
@@ -266,6 +296,13 @@ async function testSqlServer(args: ParsedArgs): Promise<void> {
           });
         }, { crossExecutor: async plan => {
           if (plan.mode === "sql") return session.validateCross(plan);
+          if (plan.mode === "sql-cross-connection") {
+            const scopeValues = Object.fromEntries([plan.from, plan.to, ...Object.values(plan.participants)].flatMap(participant => {
+              const parameter = participant.target.scope?.parameter;
+              return parameter && args.scopes[parameter] !== undefined ? [[participant.member, args.scopes[parameter]]] : [];
+            }));
+            return runCrossConnectionCheck(plan, createCrossConnectionSourceAdapter(session.readBoundedRows.bind(session)), { scopeValues });
+          }
           const read = async (participant: typeof plan.from) => withMaterializedTarget(resolveConfiguredTarget(participant.source, participant.target),
             { tempDirectory: args.tempDirectory ? resolve(args.tempDirectory) : undefined }, async localPath => parseCsv(await readFile(localPath, "utf8"), participant.contract.csv));
           const [from, to, participants] = await Promise.all([
@@ -323,42 +360,158 @@ async function importSchema(args: ParsedArgs): Promise<void> {
   if (merged.preview.preservedConflicts.length) console.error(`WARNING: Preserved reviewed conflicts: ${merged.preview.preservedConflicts.join(", ")}`);
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+async function reviewSavedRun(args: ParsedArgs): Promise<number> {
+  if (!args.source) usage();
+  const review = parseValidationReviewPackage(await readFile(resolve(args.source), "utf8"));
+  if (args.format === "json") console.log(JSON.stringify(review, null, 2));
+  else {
+    console.log(`${review.summary.evaluationComplete ? "COMPLETE" : "INCOMPLETE"} ${review.source.reference}`);
+    console.log(`${review.summary.targets} targets; ${review.summary.rowsScanned.toLocaleString()} rows scanned; ${review.summary.issues.toLocaleString()} issues (${review.summary.errors.toLocaleString()} errors, ${review.summary.warnings.toLocaleString()} warnings).`);
+    console.log(`Evidence: ${review.evidence.mode}; retained details: ${review.summary.retainedIssueDetails.toLocaleString()}.`);
+  }
+  return review.summary.evaluationComplete && review.summary.errors === 0 ? 0 : 1;
+}
+
+async function diffSavedRuns(args: ParsedArgs): Promise<number> {
+  if (!args.before || !args.after) usage();
+  const [before, after] = await Promise.all([
+    readFile(resolve(args.before), "utf8").then(parseValidationReviewPackage),
+    readFile(resolve(args.after), "utf8").then(parseValidationReviewPackage)
+  ]);
+  const comparison = compareValidationReviewPackages(before, after);
+  if (args.out) await writeFile(resolve(args.out), renderReviewDiffHtml(comparison), "utf8");
+  if (args.format === "json") console.log(JSON.stringify(comparison, null, 2));
+  else console.log(`Review diff: ${comparison.summary.newRules} new, ${comparison.summary.resolvedRules} resolved, ${comparison.summary.persistentRules} persistent, ${comparison.summary.indeterminateItems} indeterminate.${args.out ? ` HTML: ${resolve(args.out)}` : ""}`);
+  return comparison.summary.newRules || comparison.summary.indeterminateItems ? 1 : 0;
+}
+
+async function samePath(left: string, right: string): Promise<boolean> {
+  const a = resolve(left);
+  const b = resolve(right);
+  if (process.platform === "win32" ? a.toLocaleLowerCase() === b.toLocaleLowerCase() : a === b) return true;
+  try {
+    const [aReal, bReal, aStat, bStat] = await Promise.all([realpath(a), realpath(b), stat(a), stat(b)]);
+    if (process.platform === "win32" ? aReal.toLocaleLowerCase() === bReal.toLocaleLowerCase() : aReal === bReal) return true;
+    return aStat.ino !== 0 && aStat.dev === bStat.dev && aStat.ino === bStat.ino;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function exists(path: string): Promise<boolean> {
+  try { await stat(path); return true; } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function exportSavedRun(args: ParsedArgs): Promise<number> {
+  if (!args.source || !args.out) usage();
+  const source = resolve(args.source);
+  const destination = resolve(args.out);
+  if (await samePath(source, destination)) throw new Error("Review source and Excel destination must be different files.");
+  if (extname(destination).toLocaleLowerCase() !== ".xlsx") throw new Error("Review export output must use the .xlsx extension.");
+  if (!args.force && await exists(destination)) throw new Error(`Output already exists: ${destination}. Use --force to replace it.`);
+
+  const review = parseValidationReviewPackage(await readFile(source, "utf8"));
+  const exportedRuns = review.targets.map(target => ({
+    runId: target.runId,
+    workId: target.workId,
+    evaluatedAt: target.evaluatedAt,
+    scope: target.scope,
+    target: target.target,
+    status: target.status,
+    result: target.result,
+    error: target.error
+  }));
+  const redacted = redactIssueExportRuns(exportedRuns, args.includeDetails ? { mode: "detail" } : { mode: "aggregate-only" });
+  const runs: BadRowsRun[] = redacted.runs.map(run => ({
+    target: run.target,
+    status: run.status,
+    evaluatedAt: run.evaluatedAt,
+    result: run.result,
+    error: run.error
+  }));
+  const written = await writeBadRowsXlsxFile(runs, {
+    title: `Validation review: ${review.source.reference}`,
+    testLabel: review.source.reference
+  }, destination, { overwrite: args.force });
+  const detail = args.includeDetails ? "retained redacted detail included" : "aggregate-only evidence";
+  console.log(`Created ${written.path} (${written.sheets} sheets, ${written.rows.toLocaleString()} workbook rows, ${formatBytes(written.bytes)}; ${detail}).`);
+  if (args.includeDetails && !review.summary.issueDetailsComplete) console.error("WARNING: The saved package retained incomplete issue detail; export cannot restore missing evidence.");
+  return 0;
+}
+
+async function runFixtures(args: ParsedArgs): Promise<number> {
+  if (!args.source) usage();
+  const result = await runValidationFixtures(resolve(args.source));
+  if (args.format === "json") console.log(JSON.stringify(result, null, 2));
+  else {
+    console.log(`${result.failed ? "FAIL" : "PASS"} ${result.id}: ${result.passed}/${result.total} cases passed.`);
+    for (const item of result.cases.filter((entry) => !entry.passed)) console.log(`  FAIL ${item.id}: ${item.failures.join("; ")}`);
+  }
+  return result.failed ? 1 : 0;
+}
+
+async function explainDefinition(args: ParsedArgs): Promise<number> {
+  if (args.specs.length !== 1) usage();
+  const suite = await loadSuite(resolve(args.specs[0]), fileSuiteIO);
+  const explanation = {
+    suite: suite.id,
+    source: suite.source,
+    members: suite.members.map((member) => ({ id: member.id, source: member.source, error: member.error, rulePacks: member.rulePackProvenance ?? [] })),
+    targetPolicy: suite.targetPolicy,
+    targetPolicyDiagnostics: suite.targetPolicyDiagnostics ?? []
+  };
+  if (args.format === "json") console.log(JSON.stringify(explanation, null, 2));
+  else {
+    console.log(`${suite.isSuite ? "Suite" : "Definition"} ${suite.id}`);
+    for (const member of explanation.members) {
+      console.log(`  ${member.error ? "ERROR" : "OK"} ${member.id}: ${member.source}`);
+      for (const pack of member.rulePacks) console.log(`    ${pack.packId}/${pack.definitionId} ${pack.sha256} (${pack.source})`);
+      if (member.error) console.log(`    ${member.error}`);
+    }
+  }
+  return suite.members.some((member) => member.error) ? 1 : 0;
+}
+
+export async function runCli(argv: string[]): Promise<number> {
+  const args = parseArgs([...argv]);
   if (args.command === "combine" || args.command === "split") {
     if (args.specs.length !== 1 || !args.out) usage();
     const result = args.command === "combine"
       ? await combineSuite(args.specs[0], args.out, { force: args.force, allowExternal: args.allowExternal })
       : await splitSuite(args.specs[0], args.out, args.force);
     console.log(JSON.stringify(result, null, 2));
-    return;
+    return 0;
   }
   if (args.command === "init") {
     if (args.csvs.length !== 1) usage();
     const csvPath = resolve(args.csvs[0]);
     await initialize(args, csvPath);
-    return;
+    return 0;
   }
   if (args.command === "test") {
     await testCsv(args);
-    return;
+    return process.exitCode === 1 ? 1 : 0;
   }
   if (args.command === "sql") {
     await generateSql(args);
-    return;
+    return 0;
   }
   if (args.command === "dbtest") {
     await testSqlServer(args);
-    return;
+    return typeof process.exitCode === "number" ? process.exitCode : 0;
   }
   if (args.command === "schema") {
     await importSchema(args);
-    return;
+    return 0;
   }
+  if (args.command === "review") return reviewSavedRun(args);
+  if (args.command === "export") return exportSavedRun(args);
+  if (args.command === "diff") return diffSavedRuns(args);
+  if (args.command === "fixtures") return runFixtures(args);
+  if (args.command === "explain") return explainDefinition(args);
   usage();
 }
-
-void main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 2;
-});

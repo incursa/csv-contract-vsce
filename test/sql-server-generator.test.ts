@@ -176,7 +176,7 @@ test("resolves a non-secret Windows integrated connection without a profile", ()
   assert.deepEqual(target.integratedConnection, input.sqlServer!.integratedConnection);
   assert.equal(
     integratedConnectionString(target.integratedConnection!),
-    "Driver={ODBC Driver 18 for SQL Server};Server={sqlhost\\instance};Database={Warehouse};Trusted_Connection=Yes;Encrypt=Yes;TrustServerCertificate=Yes;Application Name={CSV Contract Workbench};"
+    "Driver={ODBC Driver 18 for SQL Server};Server={sqlhost\\instance};Database={Warehouse};Trusted_Connection=Yes;Encrypt=Yes;TrustServerCertificate=Yes;Application Name={Validation Workbench};"
   );
 });
 

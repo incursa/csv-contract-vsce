@@ -1,5 +1,20 @@
 # Validator extension roadmap
 
+## October 12, 2026 local implementation
+
+Version 0.26 adds the portable runner, aggregate-first review packages and reports,
+saved-run comparison, explicit bounded outcomes, suite target policies, pinned local
+reuse and fixtures, richer SQL baselines, and bounded cross-connection execution.
+See [parallel delivery and acceptance gates](PARALLEL-DELIVERY-PLAN.md) and the
+linked feature documents in the README for current behavior. The September status
+below is historical, not the current capability inventory.
+
+Remaining acceptance includes clean-machine executable testing, installed VS Code
+and live database workflows, driver/authentication compatibility, and downstream
+reviewer acceptance. Large Excel streaming/sharding and richer linked-template
+update UI are not implied by this increment. Definition snapshots with unresolved
+sidecar dependencies cannot prove cross-run equivalence and remain indeterminate.
+
 Discussion draft · September 10, 2026
 
 ## Implementation status — September 11, 2026

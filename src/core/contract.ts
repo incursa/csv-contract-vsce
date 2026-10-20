@@ -1,6 +1,7 @@
 import Papa from "papaparse";
 import Ajv from "ajv/dist/2020";
-import { resolveEvaluation } from "./evaluation";
+import { configuredChecks, resolveEvaluation } from "./evaluation";
+import { CheckOutcomeCollector, outcomeContext } from "./check-outcomes";
 import { identityKey } from "./identity";
 import { validatePreviewOptions, type PreviewOptions } from "./preview";
 import schema from "../../schemas/csvtest.schema.json";
@@ -17,6 +18,7 @@ import type {
 import { rulePresentation } from "./rule-presentation";
 import { createPredicateRuntime, evaluatePredicate, predicateColumns, predicateDescription } from "./predicate";
 import { OrderedRuleEvaluator, orderedChecks, orderedColumns, validateOrderedDefinition, compareOrderedRows } from "./ordered-rule";
+import { GroupSelectionEvaluator, groupSelectionColumns, validateGroupSelection } from "./group-selection";
 
 const defaults: Required<CsvOptions> = {
   delimiter: ",",
@@ -46,14 +48,25 @@ export function validateContractSemantics(contract: CsvContract, depth = 0): voi
   const declared = new Set(Object.keys(contract.schema.columns));
   const ids = new Set<string>();
   const validateImportance = (importance: number | undefined, context: string): void => {
-    if (importance !== undefined && (!Number.isFinite(importance) || importance < 0 || importance > 1)) {
-      throw new Error(`${context} importance must be a finite number from 0 to 1.`);
+    if (importance !== undefined && (!Number.isFinite(importance) || importance < 0.1 || importance > 10)) {
+      throw new Error(`${context} importance must be a finite number from 0.1 through 10.`);
     }
   };
   for (const test of contract.rowTests ?? []) validateImportance(test.importance, `Row test ${test.id}`);
   for (const rule of contract.rules ?? []) validateImportance(rule.importance, `Rule ${rule.id}`);
   for (const rule of contract.groupRules ?? []) validateImportance(rule.importance, `Group rule ${rule.id}`);
   for (const test of contract.groupTests ?? []) validateImportance(test.importance, `Group test ${test.id}`);
+  const useIds = new Set<string>();
+  for (const use of contract.rulePacks ?? []) {
+    if (useIds.has(use.id)) throw new Error(`Duplicate rule-pack use id ${use.id}.`);
+    useIds.add(use.id);
+  }
+  const sqlTargetIds = new Set<string>();
+  for (const target of contract.sqlServer?.targets ?? []) {
+    if (!target.id) continue;
+    if (sqlTargetIds.has(target.id)) throw new Error(`Duplicate SQL target id ${target.id}.`);
+    sqlTargetIds.add(target.id);
+  }
   for (const rule of contract.orderedRules ?? []) {
     validateOrderedDefinition(rule, declared);
     for (const id of [rule.id, ...orderedChecks(rule).map(check => check.id)]) {
@@ -65,6 +78,7 @@ export function validateContractSemantics(contract: CsvContract, depth = 0): voi
     if (ids.has(group.id)) throw new Error(`Duplicate group test id ${group.id}.`);
     ids.add(group.id);
     for (const column of group.groupBy) if (!declared.has(column)) throw new Error(`Group test ${group.id} references undeclared column ${column}.`);
+    if (group.select) validateGroupSelection(group.select, declared, group.id);
     if (group.contract) {
       if (group.contract.targets?.length || group.contract.sqlServer) throw new Error(`Child contract ${group.id} must inherit the parent target.`);
       validateContractSemantics(group.contract, depth + 1);
@@ -143,6 +157,14 @@ function isNull(value: string, options: Required<CsvOptions>): boolean {
 
 export function validateCsv(contract: CsvContract, csvText: string, nativeDates?: Record<string, (string | undefined)[]>, evaluatedAt = new Date().toISOString(), preview?: PreviewOptions): ValidationResult {
   if (preview) validatePreviewOptions(preview);
+  const unresolvedRulePacks = (current: CsvContract, seen = new Set<CsvContract>()): boolean => {
+    if (seen.has(current)) return false;
+    seen.add(current);
+    if (current.rulePacks?.length) return true;
+    return (current.groupTests ?? []).some(group => group.contract && unresolvedRulePacks(group.contract, seen) ||
+      group.resolvedContract && unresolvedRulePacks(group.resolvedContract, seen));
+  };
+  if (unresolvedRulePacks(contract)) throw new Error("Contract rule packs must be resolved before validation, including nested group contracts.");
   validateContractSemantics(contract);
   return { ...validateCsvResolved(resolveEvaluation(contract, evaluatedAt), csvText, nativeDates, preview), evaluatedAt,
     ...(preview ? { preview: { ...preview, scope: preview.rowLimit === undefined ? "complete" as const : "sample" as const } } : {}) };
@@ -151,6 +173,9 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
   const examples: NonNullable<ValidationResult["examples"]> = [];
   const ruleOutcomes: NonNullable<ValidationResult["ruleOutcomes"]> = [];
   const groupOutcomes: NonNullable<ValidationResult["groupOutcomes"]> = [];
+  const checkDescriptors = configuredChecks(contract);
+  const checkMetadata = new Map(checkDescriptors.map(check => [check.id, check]));
+  const checkOutcomes = new CheckOutcomeCollector(checkDescriptors);
   let childTestCount = 0;
   const options = { ...defaults, ...(contract.csv ?? {}) };
   const parsed = parseCsv(csvText, options, preview?.rowLimit);
@@ -169,6 +194,20 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
   issues.push(...countIssues("column_count", parsed.headers.length, contract.schema.columnCount, "file"));
 
   const headerIndex = new Map(parsed.headers.map((header, index) => [header, index]));
+  const sourceIndexByRow = new Map(parsed.sourceRowNumbers.map((row, index) => [row, index]));
+  const identityFor = (row: string[]): Record<string, string> | undefined => contract.identity ? Object.fromEntries(
+    contract.identity.columns.flatMap(column => {
+      const index = headerIndex.get(column);
+      return index === undefined ? [] : [[column, row[index] ?? ""]];
+    })) : undefined;
+  const recordCheck = (id: string, status: "pass" | "fail" | "not-applicable", rowIndex?: number,
+    context: Parameters<typeof outcomeContext>[0] = {}): void => {
+    const metadata = checkMetadata.get(id);
+    const row = rowIndex === undefined ? undefined : parsed.sourceRowNumbers[rowIndex];
+    checkOutcomes.record({ checkId: id, ...(metadata?.name ? { checkName: metadata.name } : {}),
+      ...(metadata?.kind ? { kind: metadata.kind } : {}), status, ...(row === undefined ? {} : { row }),
+      context: outcomeContext({ ...(rowIndex === undefined ? {} : { identity: identityFor(parsed.rows[rowIndex]) }), ...context }) });
+  };
   const declared = new Set(Object.keys(contract.schema.columns));
   if (contract.schema.columnOrder === "exact") {
     const expected = [...declared].filter((header) => headerIndex.has(header));
@@ -265,6 +304,7 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
   for (const test of contract.rowTests ?? []) {
     if (testIds.has(test.id)) {
       issues.push({ level: "row", code: "DUPLICATE_TEST_ID", message: `Row test id "${test.id}" is duplicated.`, testId: test.id });
+      checkOutcomes.unavailable(test.id, "not-evaluated", "duplicate-test-id");
       continue;
     }
     testIds.add(test.id);
@@ -273,17 +313,28 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
     undeclared.forEach((column) => issues.push({ level: "row", code: "UNDECLARED_TEST_COLUMN", message: `Test "${test.id}" references undeclared column "${column}".`, column, testId: test.id }));
     const absent = references.filter((column) => declared.has(column) && !headerIndex.has(column));
     absent.forEach((column) => issues.push({ level: "row", code: "TEST_COLUMN_MISSING", message: `Test "${test.id}" references optional column "${column}", but it is absent from this CSV.`, column, testId: test.id }));
-    if (undeclared.length || absent.length) continue;
+    if (undeclared.length || absent.length) {
+      checkOutcomes.unavailable(test.id, "not-evaluated", undeclared.length ? "undeclared-test-column" : "test-column-missing");
+      continue;
+    }
     const matches = parsed.rows.map((row, index) => ({ row, index })).filter(({ row }) =>
       Object.entries(test.select).every(([column, expected]) => normalized(row[headerIndex.get(column)!] ?? "", options) === normalized(expected, options))
     );
-    issues.push(...countIssues("match_count", matches.length, test.expect.count ?? { exact: 1 }, "row", test.id, test));
+    const matched = new Set(matches.map(match => match.index));
+    parsed.rows.forEach((_row, index) => { if (!matched.has(index)) recordCheck(test.id, "not-applicable", index); });
+    const matchCountIssues = countIssues("match_count", matches.length, test.expect.count ?? { exact: 1 }, "row", test.id, test);
+    issues.push(...matchCountIssues);
+    recordCheck(test.id, matchCountIssues.length ? "fail" : "pass", undefined,
+      { aggregate: { selectedRows: matches.length } });
     for (const [column, expectation] of Object.entries(test.expect.cells ?? {})) {
       for (const match of matches) {
         const actual = match.row[headerIndex.get(column)!] ?? "";
         if (normalized(actual, options) !== normalized(expectation.equals, options)) {
           const diagnostic = `Test "${test.name ?? test.id}" expected "${column}" to equal "${expectation.equals}", found "${actual}".`;
           issues.push({ level: "cell", code: "CELL_NOT_EQUAL", ...rulePresentation(test, diagnostic), column, row: parsed.sourceRowNumbers[match.index], testId: test.id, actual, expected: expectation.equals, ...(test.importance === undefined ? {} : { importance: test.importance }) });
+          recordCheck(test.id, "fail", match.index, { aggregate: { column, actual, expected: expectation.equals } });
+        } else {
+          recordCheck(test.id, "pass", match.index, { aggregate: { column } });
         }
       }
     }
@@ -295,6 +346,7 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
     let validRule = true;
     if (advancedRuleIds.has(rule.id)) {
       issues.push({ level: "row", code: "DUPLICATE_RULE_ID", message: `Rule id "${rule.id}" is duplicated.`, testId: rule.id });
+      checkOutcomes.unavailable(rule.id, "not-evaluated", "duplicate-rule-id");
       validRule = false;
     }
     advancedRuleIds.add(rule.id);
@@ -308,19 +360,23 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
         validRule = false;
       }
     }
-    if (!validRule) continue;
+    if (!validRule) {
+      checkOutcomes.unavailable(rule.id, "not-evaluated", references.some(column => !declared.has(column)) ? "undeclared-rule-column" : "rule-column-missing");
+      continue;
+    }
     const outcome = { id: rule.id, ...(rule.name ? { name: rule.name } : {}), selected: 0, passed: 0, failed: 0,
       ...(rule.importance === undefined ? {} : { importance: rule.importance }) };
     ruleOutcomes.push(outcome);
     parsed.rows.forEach((row, rowIndex) => {
       const runtime = createPredicateRuntime((column) => row[headerIndex.get(column)!] ?? "", options, nullValues);
       if (nativeDates) runtime.dateValue = column => nativeDates[column]?.[rowIndex];
-      if (rule.when && !evaluatePredicate(rule.when, runtime)) return;
+      if (rule.when && !evaluatePredicate(rule.when, runtime)) { recordCheck(rule.id, "not-applicable", rowIndex); return; }
       outcome.selected++;
       const passed = evaluatePredicate(rule.expect, runtime);
       if (preview && examples.filter(e => e.id === rule.id && e.outcome === (passed ? "passed" : "failed")).length < preview.exampleLimit) {
         examples.push({ id: rule.id, outcome: passed ? "passed" : "failed", row: parsed.sourceRowNumbers[rowIndex], values: Object.fromEntries(parsed.headers.map((h, i) => [h, row[i] ?? ""])) });
       }
+      recordCheck(rule.id, passed ? "pass" : "fail", rowIndex);
       if (passed) { outcome.passed++; return; }
       outcome.failed++;
       const diagnostic = `Rule "${rule.name ?? rule.id}" expected ${predicateDescription(rule.expect)}.`;
@@ -333,12 +389,14 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
         severity: rule.severity ?? "error", ...(rule.importance === undefined ? {} : { importance: rule.importance })
       });
     });
+    if (outcome.selected === 0) recordCheck(rule.id, "not-applicable", undefined);
   }
 
   for (const rule of contract.groupRules ?? []) {
     let validRule = true;
     if (advancedRuleIds.has(rule.id)) {
       issues.push({ level: "row", code: "DUPLICATE_RULE_ID", message: `Rule id "${rule.id}" is duplicated.`, testId: rule.id });
+      checkOutcomes.unavailable(rule.id, "not-evaluated", "duplicate-rule-id");
       validRule = false;
     }
     advancedRuleIds.add(rule.id);
@@ -352,15 +410,18 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
         validRule = false;
       }
     }
-    if (!validRule) continue;
-    const groups = new Map<string, { row: number; labels: string[]; observed: Set<string> }>();
+    if (!validRule) {
+      checkOutcomes.unavailable(rule.id, "not-evaluated", references.some(column => !declared.has(column)) ? "undeclared-rule-column" : "rule-column-missing");
+      continue;
+    }
+    const groups = new Map<string, { row: number; rowIndex: number; labels: string[]; observed: Set<string> }>();
     parsed.rows.forEach((row, rowIndex) => {
       const runtime = createPredicateRuntime((column) => row[headerIndex.get(column)!] ?? "", options, nullValues);
       if (nativeDates) runtime.dateValue = column => nativeDates[column]?.[rowIndex];
-      if (rule.when && !evaluatePredicate(rule.when, runtime)) return;
+      if (rule.when && !evaluatePredicate(rule.when, runtime)) { recordCheck(rule.id, "not-applicable", rowIndex); return; }
       const labels = rule.groupBy.map((column) => row[headerIndex.get(column)!] ?? "");
       const key = labels.map((value) => `${normalized(value, options).length}:${normalized(value, options)}`).join("");
-      const group = groups.get(key) ?? { row: parsed.sourceRowNumbers[rowIndex], labels, observed: new Set<string>() };
+      const group = groups.get(key) ?? { row: parsed.sourceRowNumbers[rowIndex], rowIndex, labels, observed: new Set<string>() };
       group.observed.add(normalized(row[headerIndex.get(rule.require.column)!] ?? "", options));
       groups.set(key, group);
     });
@@ -370,7 +431,12 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
         const fragment = normalized(required, options);
         return ![...group.observed].some((value) => value.includes(fragment));
       });
-      for (const missing of [...missingValues, ...missingFragments]) {
+      const missingRequirements = [...missingValues, ...missingFragments];
+      recordCheck(rule.id, missingRequirements.length ? "fail" : "pass", group.rowIndex, {
+        group: Object.fromEntries(rule.groupBy.map((column, index) => [column, group.labels[index]])),
+        aggregate: { observedValues: group.observed.size, missingRequirements: missingRequirements.length }
+      });
+      for (const missing of missingRequirements) {
         const groupLabel = rule.groupBy.map((column, index) => `${column}=${group.labels[index]}`).join(", ");
         const groupValues = Object.fromEntries(rule.groupBy.map((column, index) => [column, group.labels[index]]));
         issues.push({
@@ -386,6 +452,7 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
         });
       }
     }
+    if (groups.size === 0) recordCheck(rule.id, "not-applicable", undefined);
   }
 
   for (const rule of contract.orderedRules ?? []) {
@@ -393,27 +460,40 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
     if (missing.length) {
       for (const column of missing) issues.push({ level: "column", code: "SEQUENCE_COLUMN_MISSING", testId: rule.id,
         column, message: `Sequence ${rule.id} requires column ${column}.` });
+      for (const check of orderedChecks(rule)) checkOutcomes.unavailable(check.id, "not-evaluated", "sequence-column-missing");
       continue;
     }
-    const evaluator = new OrderedRuleEvaluator(rule, options, issue => issues.push(issue));
+    const evaluator = new OrderedRuleEvaluator(rule, options, issue => issues.push(issue), (check, passed, row, relatedRows, detail) => {
+      const rowIndex = sourceIndexByRow.get(row.row);
+      if (rowIndex === undefined) return;
+      recordCheck(check.id, passed ? "pass" : "fail", rowIndex, {
+        ...(relatedRows.length ? { relatedRows } : {}),
+        ...(detail ? { aggregate: { detail } } : {})
+      });
+    });
     const rows = parsed.rows.map((fields, index) => ({ row: parsed.sourceRowNumbers[index],
       values: Object.fromEntries(orderedColumns(rule).map(column => [column, fields[headerIndex.get(column)!] ?? ""])) }));
     rows.sort((a, b) => compareOrderedRows(a, b, rule, options));
     for (const row of rows) evaluator.add(row);
     evaluator.finish();
-    ruleOutcomes.push(...evaluator.ruleOutcomes);
+    for (const outcome of evaluator.ruleOutcomes) {
+      if (outcome.selected === 0) recordCheck(outcome.id, "not-applicable", undefined);
+      ruleOutcomes.push(outcome);
+    }
   }
 
   for (const groupTest of contract.groupTests ?? []) {
     if (!groupTest.resolvedContract && !groupTest.contract) {
       issues.push({ level: "file", code: "GROUP_REF_UNRESOLVED", testId: groupTest.id,
         message: `Group test ${groupTest.id} needs its referenced child contract resolved before evaluation.` });
+      checkOutcomes.unavailable(groupTest.id, "not-evaluated", "group-ref-unresolved");
       continue;
     }
-    const missing = groupTest.groupBy.filter(column => !headerIndex.has(column));
+    const missing = [...new Set([...groupTest.groupBy, ...groupSelectionColumns(groupTest.select)])].filter(column => !headerIndex.has(column));
     if (missing.length) {
       for (const column of missing) issues.push({ level: "column", code: "GROUP_COLUMN_MISSING", testId: groupTest.id,
         column, message: `Group test ${groupTest.id} requires column ${column}.` });
+      checkOutcomes.unavailable(groupTest.id, "not-evaluated", "group-column-missing");
       continue;
     }
     const groups = new Map<string, number[]>();
@@ -424,11 +504,27 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       groups.set(key, entries);
     });
     if (groupTest.groupBy.length === 0 && groups.size === 0) groups.set("[]", []);
-    const groupOutcome = { id: groupTest.id, ...(groupTest.name ? { name: groupTest.name } : {}), groups: groups.size, passed: 0, failed: 0,
+    const selectedGroups = [...groups].filter(([, indexes]) => {
+      const selector = new GroupSelectionEvaluator(groupTest.select, options);
+      for (const index of indexes) selector.add(Object.fromEntries(parsed.headers.map((header, column) => [header, parsed.rows[index][column] ?? ""])));
+      return selector.matches();
+    });
+    const selectedKeys = new Set(selectedGroups.map(([key]) => key));
+    for (const [key, indexes] of groups) if (!selectedKeys.has(key)) {
+      const rowIndex = indexes[0];
+      recordCheck(groupTest.id, "not-applicable", rowIndex, {
+        group: Object.fromEntries(groupTest.groupBy.map((column, index) => [column,
+          indexes.length ? parsed.rows[indexes[0]][headerIndex.get(column)!] ?? "" : JSON.parse(key)[index]]))
+      });
+    }
+    if (selectedGroups.length === 0) for (const child of checkDescriptors.filter(check => check.id.startsWith(`${groupTest.id}/`))) {
+      recordCheck(child.id, "not-applicable", undefined, { aggregate: { selectedGroups: 0 } });
+    }
+    const groupOutcome = { id: groupTest.id, ...(groupTest.name ? { name: groupTest.name } : {}), groups: selectedGroups.length, passed: 0, failed: 0,
       ...(groupTest.importance === undefined ? {} : { importance: groupTest.importance }) };
     groupOutcomes.push(groupOutcome);
     let groupChildTestCount = 0;
-    for (const [key, indexes] of groups) {
+    for (const [key, indexes] of selectedGroups) {
       const labels = Object.fromEntries(groupTest.groupBy.map((column, index) => [column,
         indexes.length ? parsed.rows[indexes[0]][headerIndex.get(column)!] ?? "" : JSON.parse(key)[index]]));
       const definition = (groupTest.resolvedContract ?? groupTest.contract)!;
@@ -440,6 +536,7 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
       groupChildTestCount = Math.max(groupChildTestCount, childResult.testCount);
       if (childResult.valid) groupOutcome.passed++;
       else groupOutcome.failed++;
+      recordCheck(groupTest.id, childResult.valid ? "pass" : "fail", indexes[0], { group: labels });
       issues.push(...childResult.issues.map(issue => ({ ...issue, group: { ...labels, ...issue.group },
         row: issue.row === undefined ? undefined : parsed.sourceRowNumbers[indexes[issue.row - 2]] ?? issue.row,
         relatedRows: issue.relatedRows?.map(row => parsed.sourceRowNumbers[indexes[row - 2]] ?? row),
@@ -450,15 +547,39 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
         if (aggregate) { aggregate.selected += outcome.selected; aggregate.passed += outcome.passed; aggregate.failed += outcome.failed; }
         else ruleOutcomes.push({ ...outcome, id });
       }
+      for (const outcome of childResult.checkOutcomes ?? []) {
+        const id = `${groupTest.id}/${outcome.id}`;
+        if (outcome.status === "not-evaluated" || outcome.status === "unknown") {
+          checkOutcomes.unavailable(id, outcome.status, outcome.reason ?? `child-${outcome.status}`);
+        } else {
+          checkOutcomes.aggregate(id, { selected: outcome.selected, passed: outcome.passed, failed: outcome.failed, groups: outcome.groups }, "child-aggregate");
+        }
+      }
+      for (const outcome of childResult.rowOutcomes ?? []) {
+        const parentIndex = outcome.row === undefined ? undefined : indexes[outcome.row - 2];
+        const id = `${groupTest.id}/${outcome.checkId}`;
+        const metadata = checkMetadata.get(id);
+        checkOutcomes.retain({ ...outcome, checkId: id,
+          ...(metadata?.name ? { checkName: metadata.name } : {}), ...(metadata?.kind ? { kind: metadata.kind } : {}),
+          row: parentIndex === undefined ? undefined : parsed.sourceRowNumbers[parentIndex],
+          context: outcomeContext({ ...(outcome.context ?? {}), group: { ...labels, ...outcome.context?.group } }) });
+      }
     }
     childTestCount += groupChildTestCount;
-    const count = groups.size;
+    const count = selectedGroups.length;
+    let groupCountFailed = false;
     for (const [kind, expected] of Object.entries(groupTest.groupCount ?? {})) {
       if (kind === "exact" && count === expected || kind === "min" && count >= expected || kind === "max" && count <= expected) continue;
+      groupCountFailed = true;
       const diagnostic = `Group test ${groupTest.name ?? groupTest.id} found ${count} groups; expected ${kind} ${expected}.`;
       issues.push({ level: "file", code: "GROUP_COUNT", testId: groupTest.id,
         ...rulePresentation(groupTest, diagnostic), actual: count, expected,
         ...(groupTest.importance === undefined ? {} : { importance: groupTest.importance }) });
+    }
+    if (selectedGroups.length === 0 || groupCountFailed) {
+      const hasGroupCount = Object.keys(groupTest.groupCount ?? {}).length > 0;
+      recordCheck(groupTest.id, groupCountFailed ? "fail" : hasGroupCount ? "pass" : "not-applicable", undefined,
+        { aggregate: { selectedGroups: count } });
     }
   }
 
@@ -484,6 +605,7 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
   }
   const errorCount = issues.filter((issue) => issue.severity !== "warning").length;
   const warningCount = issues.length - errorCount;
+  const explicitOutcomes = checkOutcomes.finish();
 
   return {
     valid: errorCount === 0,
@@ -500,7 +622,8 @@ function validateCsvResolved(contract: CsvContract, csvText: string, nativeDates
     errorCount,
     warningCount,
     truncated: false,
-    issues
+    issues,
+    ...explicitOutcomes
   };
 }
 

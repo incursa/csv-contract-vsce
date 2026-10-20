@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=../../schemas/validation.schema.json
+version: 1
+schema:
+  allowAdditionalColumns: false
+  columns:
+    EntityId:
+      presence: required
+      constraints:
+        notNull: true
+    Version:
+      presence: required
+      constraints:
+        notNull: true
+    Status:
+      presence: required
+      constraints:
+        notNull: true
+rules:
+  - id: status-required
+    expect:
+      column: Status
+      operator: notBlank
+groupTests:
+  - id: boundary-groups
+    groupBy: [EntityId]
+    select:
+      rowCount:
+        count:
+          min: 2
+          max: 3
+    contract:
+      version: 1
+      schema:
+        allowAdditionalColumns: false
+        columns:
+          EntityId: { presence: required }
+          Version: { presence: required }
+          Status: { presence: required }
+      rowTests:
+        - id: one-active
+          select:
+            Status: active
+          expect:
+            count:
+              min: 1

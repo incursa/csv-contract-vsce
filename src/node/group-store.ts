@@ -72,15 +72,19 @@ export class PartitionedGroupStore {
     partition.offset += recordBytes;
   }
 
-  public async readGroups(onGroup: (group: GroupValues) => void): Promise<void> {
+  public async readGroups(onGroup: (group: GroupValues) => void, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     this.closeForWriting();
     for (const partition of this.partitions) {
+      signal?.throwIfAborted();
       const groups = new Map<string, GroupValues>();
       let pending = Buffer.alloc(0);
       for await (const chunk of createReadStream(partition.path, { highWaterMark: 1024 * 1024 })) {
+        signal?.throwIfAborted();
         const content = pending.length > 0 ? Buffer.concat([pending, chunk]) : chunk;
         let offset = 0;
         while (content.length - offset >= 22) {
+          signal?.throwIfAborted();
           const targetId = content.readUInt16LE(offset);
           const row = content.readDoubleLE(offset + 2);
           const keyLength = content.readUInt32LE(offset + 10);
@@ -103,7 +107,10 @@ export class PartitionedGroupStore {
         pending = offset < content.length ? Buffer.from(content.subarray(offset)) : Buffer.alloc(0);
       }
       if (pending.length > 0) throw new Error(`Group partition "${partition.path}" ended with an incomplete record.`);
-      groups.forEach(onGroup);
+      for (const group of groups.values()) {
+        signal?.throwIfAborted();
+        onGroup(group);
+      }
     }
   }
 

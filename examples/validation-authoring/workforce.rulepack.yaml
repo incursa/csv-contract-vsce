@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=../../schemas/rulepack.schema.json
+version: 1
+id: workforce-rules
+definitions:
+  - id: workforce-boundaries
+    description: Compose a pinned shared rule with a local group boundary check.
+    parameters:
+      entityColumn:
+        required: true
+      statusColumn:
+        default: Status
+    uses:
+      - id: shared-status
+        ref: ./shared.rulepack.yaml
+        sha256: 3f67fd1de13d028999c86697a3e426155a827ab4e669498806ba908e0dd5f865
+        definition: required-status
+        parameters:
+          column: "${statusColumn}"
+    fragment:
+      groupTests:
+        - id: bounded-entity-history
+          groupBy: ["${entityColumn}"]
+          select:
+            rowCount:
+              count:
+                min: 2
+                max: 3
+          contract:
+            version: 1
+            schema:
+              columns:
+                EntityId: { presence: required }
+                Status: { presence: required }
+            rowTests:
+              - id: contains-active
+                select:
+                  Status: active
+                expect:
+                  count:
+                    min: 1

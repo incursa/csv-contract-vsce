@@ -8,6 +8,7 @@ import type { OrderedRow } from "../core/ordered-rule";
 import { validateCsv } from "../core/contract";
 import { RowSortStore } from "./row-sort-store";
 import { rulePresentation } from "../core/rule-presentation";
+import { GroupSelectionEvaluator, groupSelectionColumns } from "../core/group-selection";
 
 const inMemoryGroupRows = 5000;
 const inMemoryGroupBytes = 4 * 1024 * 1024;
@@ -34,17 +35,22 @@ function key(row: OrderedRow, columns: string[], options: CsvOptions): string {
   return JSON.stringify(columns.map(c => normalized(row.values[c] ?? "", options)));
 }
 
-async function sourceRows(path: string, wanted: Set<number>): Promise<Map<number, number>> {
+async function sourceRows(path: string, wanted: Set<number>, signal?: AbortSignal): Promise<Map<number, number>> {
+  signal?.throwIfAborted();
   const found = new Map<number, number>();
   if (!wanted.size) return found;
   let childRow = 2;
   const lines = createInterface({ input: createReadStream(path), crlfDelay: Infinity });
-  for await (const line of lines) {
-    if (wanted.has(childRow)) found.set(childRow, Number(line));
-    if (found.size === wanted.size) break;
-    childRow++;
+  try {
+    for await (const line of lines) {
+      signal?.throwIfAborted();
+      if (wanted.has(childRow)) found.set(childRow, Number(line));
+      if (found.size === wanted.size) break;
+      childRow++;
+    }
+  } finally {
+    lines.close();
   }
-  lines.close();
   return found;
 }
 
@@ -58,6 +64,7 @@ export class GroupTestRunner {
     private readonly onProgress?: (progress: { groupId: string; groupsValidated: number; rowsProcessed: number; totalRows: number }) => void) {
     if (!group.resolvedContract && !group.contract) throw new Error(`Group test ${group.id} has an unresolved child contract.`);
     for (const column of group.groupBy) if (!headers.includes(column)) throw new Error(`Group test ${group.id} requires missing column ${column}.`);
+    for (const column of groupSelectionColumns(group.select)) if (!headers.includes(column)) throw new Error(`Group test ${group.id} selector requires missing column ${column}.`);
     this.options = options;
     const keys = new WeakMap<OrderedRow, string>();
     const cachedKey = (row: OrderedRow): string => {
@@ -94,6 +101,7 @@ export class GroupTestRunner {
     let memoryBytes = 0;
     let currentKey: string | undefined;
     let currentGroup: Record<string, string> = {};
+    let selector = new GroupSelectionEvaluator(this.group.select, this.options);
     let hasRows = false;
     let rowsProcessed = 0;
     let lastProgress = 0;
@@ -108,8 +116,8 @@ export class GroupTestRunner {
       groupOpen = true;
       memoryRows = [];
       memoryBytes = 0;
+      selector = new GroupSelectionEvaluator(this.group.select, this.options);
       currentGroup = Object.fromEntries(this.group.groupBy.map(c => [c, row?.values[c] ?? ""]));
-      summary.groupCounts[0].count++;
     };
     const writeRow = (row: OrderedRow): void => {
       writeSync(csvFd!, Papa.unparse([this.headers.map(h => row.values[h] ?? "")]) + "\n");
@@ -126,22 +134,30 @@ export class GroupTestRunner {
       signal?.throwIfAborted();
       if (!groupOpen) return;
       groupOpen = false;
+      if (!selector.matches()) {
+        if (csvFd !== undefined) { closeSync(csvFd); csvFd = undefined; }
+        if (mapFd !== undefined) { closeSync(mapFd); mapFd = undefined; }
+        return;
+      }
+      summary.groupCounts[0].count++;
       const child = (this.group.resolvedContract ?? this.group.contract)!;
       const normalizedChild = { ...child, csv: { ...child.csv, delimiter: ",", quote: "\"", header: "required" as const } };
       let result: ValidationResult;
       let rowMap: Map<number, number>;
       if (csvFd === undefined || mapFd === undefined) {
+        signal?.throwIfAborted();
         const csv = Papa.unparse({ fields: this.headers, data: memoryRows.map(row => this.headers.map(h => row.values[h] ?? "")) });
         result = validateCsv(normalizedChild, csv);
+        signal?.throwIfAborted();
         rowMap = new Map(memoryRows.map((row, index) => [index + 2, row.row]));
       } else {
         closeSync(csvFd); closeSync(mapFd); csvFd = undefined; mapFd = undefined;
         const { validateCsvFile } = await import("./streaming-validator");
         const run = await validateCsvFile(csvPath, [{ spec: this.group.resolvedSource ?? (this.source === "<sql-contract>" ? csvPath : this.source), contract: normalizedChild }],
-          { maxIssues, tempDirectory: this.tempRoot });
+          { maxIssues, tempDirectory: this.tempRoot, signal });
         result = run.runs[0].result;
         const wanted = new Set(result.issues.flatMap(issue => [...(issue.row === undefined ? [] : [issue.row]), ...(issue.relatedRows ?? [])]));
-        rowMap = await sourceRows(mapPath, wanted);
+        rowMap = await sourceRows(mapPath, wanted, signal);
       }
       if (result.valid) summary.passedGroups++;
       else summary.failedGroups++;
@@ -174,13 +190,14 @@ export class GroupTestRunner {
         relatedRows: issue.relatedRows?.map(row => rowMap.get(row) ?? row), evidence: remapEvidence(issue) });
     };
     try {
-      for await (const row of this.store.rows()) {
+      for await (const row of this.store.rows(signal)) {
         signal?.throwIfAborted();
         rowsProcessed++;
         report();
         hasRows = true;
         const nextKey = key(row, this.group.groupBy, this.options);
         if (nextKey !== currentKey) { await closeGroup(); openGroup(row); currentKey = nextKey; }
+        selector.add(row.values);
         if (csvFd !== undefined) writeRow(row);
         else {
           memoryRows.push(row);

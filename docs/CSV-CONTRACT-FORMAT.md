@@ -4,10 +4,10 @@ Version 0.14 adds optional versioned `baseline` definitions/references and ISO d
 predicates. See [Validator workflows](VALIDATOR-WORKFLOWS.md) for their complete
 format, interpretation policies, presets, live execution and migration notes.
 
-Contracts use YAML and normally end in `.csvtest.yaml`. The bundled JSON Schema provides completion, hover help, enum suggestions, and structural validation in VS Code. Keep this modeline on the first line when contracts may be edited outside the extension:
+Contracts use YAML. Prefer the generic `.validation.yaml` name for new files; `.csvtest.yaml` is the fully supported compatibility name. The bundled JSON Schema provides completion, hover help, enum suggestions, and structural validation in VS Code. Keep this modeline on the first line when contracts may be edited outside the extension:
 
 ```yaml
-# yaml-language-server: $schema=../schemas/csvtest.schema.json
+# yaml-language-server: $schema=../schemas/validation.schema.json
 ```
 
 ## Complete shape
@@ -166,7 +166,7 @@ If `expect.count` is omitted, the engine expects exactly one matching row.
 
 Supported string predicates are `equals`, `notEquals`, `in`, `notIn`, `isNull`, `notNull`, `isBlank`, `notBlank`, `equalsColumn`, `notEqualsColumn`, `contains`, `notContains`, `startsWith`, `endsWith`, and `matches`. Numeric predicates are `greaterThan`, `greaterThanOrEqual`, `lessThan`, and `lessThanOrEqual`. Numeric comparisons require both operands to parse as finite invariant numbers; otherwise the predicate is false.
 
-Rules default to `severity: error`. A failed warning is reported and counted but does not fail the contract. Row tests, conditional rules, group rules, and group tests may also set `importance` to a finite number from `0` through `1`, inclusive (default `1`). Importance affects only the graded health/gradient score: a failure with `importance: 0.25` contributes one quarter as much as the default, while validation pass/fail and error/warning semantics remain unchanged. `importance: 0` removes that failure's graded contribution but does not make the validation pass; a non-clean result never receives the clean score of `100`. For example, an email casing rule can use `importance: 0.25`, while a required-data rule can use `importance: 1`:
+Rules default to `severity: error`. A failed warning is reported and counted but does not fail the contract. Row tests, conditional rules, group rules, group tests, ordered rules, and ordered checks may also set `importance` to a finite number from `0.1` through `10`, inclusive (default `1`). Importance affects only the graded health/gradient score: a failure with `importance: 0.25` contributes one quarter as much as the default, while validation pass/fail and error/warning semantics remain unchanged. Validation rejects zero, negative, non-finite, and out-of-range values. For example, an email casing rule can use `importance: 0.25`, while a required-data rule can use `importance: 1`:
 
 ```yaml
 rules:
@@ -221,6 +221,22 @@ groupTests:
     groupCount: { min: 1 }
     ref: ./event-group.csvtest.yaml
 ```
+
+Add `select` when only groups with a particular aggregate shape should run the child contract. A selector supports filtered `rowCount` and filtered `distinctCount`, composed with nested `all` or `any`. Both counts use the normal `exact`, `min`, and `max` expectations. The normal CSV trim and case settings control distinct-value normalization. `groupCount` and reported group outcomes count the selected groups, not every group discovered before selection.
+
+```yaml
+groupTests:
+  - id: cross_employer_days
+    groupBy: [PERSONNUMBER, EFFECTIVESTARTDATE]
+    select:
+      distinctCount:
+        column: LEGALEMPLOYERNAME
+        where: { column: LEGALEMPLOYERNAME, operator: notBlank }
+        count: { min: 2 }
+    ref: ./cross-employer-assignment-rules.csvtest.yaml
+```
+
+Use aggregate group selection when the group composition is the business condition. Do not replace a whole-group condition with neighbor checks merely because two relevant rows are often adjacent. See [Validation capability catalog](VALIDATION-CAPABILITY-CATALOG.md) for the complete scope-selection guide.
 
 The child can use `schema.rowCount`, `rowTests`, `rules`, `groupRules`, and `orderedRules`. A child `rowTests` count can require exactly one row of a given kind in each group; the same test at the root applies to the whole input. An ordered rule declares `orderBy` keys with `type: date`, `number`, or `string`; date keys can use `format: yyyy/MM/dd` or `iso`, and numeric keys can require `integer: true` and a `minimum`. Tied and invalid order keys always fail. The default check IDs are `<rule-id>.duplicate_order` and `<rule-id>.invalid_order`; `duplicateOrder` and `invalidOrder` can set custom IDs and messages.
 

@@ -74,15 +74,19 @@ export class PartitionedUniquenessStore {
     partition.offset += recordBytes;
   }
 
-  public async findDuplicates(onDuplicate: (duplicate: DuplicateValue) => void): Promise<void> {
+  public async findDuplicates(onDuplicate: (duplicate: DuplicateValue) => void, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     this.closeForWriting();
     for (const partition of this.partitions) {
+      signal?.throwIfAborted();
       const seen = new Map<string, number>();
       let pending = Buffer.alloc(0);
       for await (const chunk of createReadStream(partition.path, { highWaterMark: 1024 * 1024 })) {
+        signal?.throwIfAborted();
         const content = pending.length > 0 ? Buffer.concat([pending, chunk]) : chunk;
         let offset = 0;
         while (content.length - offset >= 14) {
+          signal?.throwIfAborted();
           const targetId = content.readUInt16LE(offset);
           const row = content.readDoubleLE(offset + 2);
           const length = content.readUInt32LE(offset + 10);

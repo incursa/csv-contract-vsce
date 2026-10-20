@@ -285,7 +285,7 @@ function render(): void {
   app.innerHTML = `
     ${parseError ? `<div role="alert" class="inc-alert inc-alert--danger">Invalid draft; execution paused: ${escape(parseError)}</div>` : ""}
     <header class="workbench-header">
-      <h1>CSV Contract Workbench</h1>
+      <h1>Validation Workbench</h1>
       <p>Build, inspect, and run reusable YAML contracts against CSV exports and SQL Server tables.</p>
     </header>
     <section class="inc-card workbench-target">

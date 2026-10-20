@@ -36,7 +36,13 @@ import { mergeImportedSchema, parseSqlSchemaSource, type ImportedSqlTable } from
 import { hasSqlServerConnection, resolveSqlServerTargets, sqlServerTargetLabel, type ResolvedSqlServerTarget } from "./core/sql-server-targets";
 import { suggestSqlColumnMappings } from "./core/sql-server-column-mapping";
 import { issueRunsToCsv, parseValidationRunExport, validationRunExportJson } from "./issue-export";
-import { badRowsXlsx, contractCheckCatalog } from "./bad-rows-xlsx";
+import { contractCheckCatalog } from "./bad-rows-xlsx";
+import { confirmWorkbookEvidenceMode, exportValidationWorkbook } from "./vscode-workbook-export";
+import { createValidationReviewPackage, parseValidationReviewPackage, VALIDATION_REVIEW_PACKAGE_SCHEMA } from "./core/review-package";
+import { renderValidationReportHtml } from "./validation-report";
+import { registerReviewPackageCommands } from "./vscode-review-packages";
+import { hasCompleteReviewDefinition, reviewDefinitionText } from "./core/review-provenance";
+import { isValidationContractPath, isValidationDefinitionPath, isValidationSuitePath, validationDefinitionPattern } from "./core/validation-files";
 
 const viewType = "csv-contract-vsce.contractEditor";
 
@@ -66,7 +72,7 @@ export function activate(
   crossExecutor?: CrossExecutor,
   csvRunner?: DesktopCsvRunner
 ): { testHooks?: ContractEditorProvider } {
-  const output = vscode.window.createOutputChannel("CSV Contract");
+  const output = vscode.window.createOutputChannel("Validation Workbench");
   const provider = new ContractEditorProvider(context, sqlServerRunner, sqlServerBrowser, sqlSchemaReader, crossExecutor, csvRunner);
   registerTargetContentProvider(context);
   registerSuiteDiagnostics(context);
@@ -87,6 +93,7 @@ export function activate(
   );
   registerWorkspaceExplorer(context, output, sqlServerRunner, crossExecutor);
   registerSemanticComparison(context, desktopComparisonRunner);
+  registerReviewPackageCommands(context);
   return context.extensionMode === vscode.ExtensionMode.Test ? { testHooks: provider } : {};
 }
 
@@ -103,7 +110,7 @@ async function chooseImportedTable(tables: ImportedSqlTable[]): Promise<Imported
 function safeContractFilename(table: string): string {
   const safe = [...table].map((character) => character.charCodeAt(0) < 32 ? "-" : character)
     .join("").replace(/[<>:"/\\|?*]/g, "-").replace(/[ .]+$/g, "").trim();
-  return `${safe || "staging-table"}.csvtest.yaml`;
+  return `${safe || "staging-table"}.validation.yaml`;
 }
 
 async function replaceTextDocument(document: vscode.TextDocument, text: string): Promise<void> {
@@ -137,8 +144,8 @@ async function importSqlServerSchema(requestedUri?: vscode.Uri, binding?: Editor
     }
 
     const active = vscode.window.activeTextEditor?.document.uri;
-    let contractUri = requestedUri?.path.match(/\.csvtest\.ya?ml$/i) ? requestedUri
-      : active?.path.match(/\.csvtest\.ya?ml$/i) ? active : undefined;
+    let contractUri = requestedUri && isValidationContractPath(requestedUri.path) ? requestedUri
+      : active && isValidationContractPath(active.path) ? active : undefined;
     let contract: CsvContract;
     let existingDocument: vscode.TextDocument | undefined;
     if (!contractUri) {
@@ -147,7 +154,7 @@ async function importSqlServerSchema(requestedUri?: vscode.Uri, binding?: Editor
         { label: "Update an existing contract", description: "Merge without replacing reviewed rules", create: false }
       ], { title: "Import SQL Server table schema", placeHolder: "Choose where to apply the imported schema" });
       if (!action) return;
-      if (!action.create) contractUri = await pickFile({ "CSV contracts": ["csvtest.yaml", "csvtest.yml", "yaml", "yml"] });
+      if (!action.create) contractUri = await pickFile({ "Validation contracts": ["validation.yaml", "validation.yml", "csvtest.yaml", "csvtest.yml", "yaml", "yml"] });
     }
     if (contractUri) {
       existingDocument = await vscode.workspace.openTextDocument(contractUri);
@@ -177,7 +184,7 @@ async function importSqlServerSchema(requestedUri?: vscode.Uri, binding?: Editor
     if (!contractUri) {
       contractUri = await vscode.window.showSaveDialog({
         defaultUri: vscode.Uri.joinPath(sourceUri, "..", safeContractFilename(table.table)),
-        filters: { "CSV contract": ["csvtest.yaml"] },
+        filters: { "Validation contract": ["validation.yaml", "csvtest.yaml"] },
         title: "Save imported staging contract"
       });
       if (!contractUri) return;
@@ -195,11 +202,11 @@ async function importSqlServerSchema(requestedUri?: vscode.Uri, binding?: Editor
 
 async function generateSqlServerScript(requestedUri?: vscode.Uri): Promise<void> {
   const active = vscode.window.activeTextEditor?.document.uri;
-  const specUri = requestedUri?.path.match(/\.(?:csvtest|csvsuite)\.ya?ml$/i)
+  const specUri = requestedUri && isValidationDefinitionPath(requestedUri.path)
     ? requestedUri
-    : active?.path.match(/\.(?:csvtest|csvsuite)\.ya?ml$/i)
+    : active && isValidationDefinitionPath(active.path)
       ? active
-      : await pickFile({ "CSV contracts": ["csvtest.yaml", "csvtest.yml", "yaml", "yml"] });
+      : await pickFile({ "Validation definitions": ["validation.yaml", "validation.yml", "validationsuite.yaml", "validationsuite.yml", "csvtest.yaml", "csvtest.yml", "csvsuite.yaml", "csvsuite.yml", "yaml", "yml"] });
   if (!specUri) return;
   try {
     const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(specUri));
@@ -216,7 +223,7 @@ async function generateSqlServerScript(requestedUri?: vscode.Uri): Promise<void>
     ))?.target;
     if (!target) return;
     const generated = generateSqlServerValidation(contract, { target });
-    const filename = (specUri.path.split("/").pop() ?? "staging.csvtest.yaml").replace(/\.(?:csvtest|csvsuite)\.ya?ml$/i, ".validation.sql");
+    const filename = (specUri.path.split("/").pop() ?? "staging.validation.yaml").replace(validationDefinitionPattern, ".validation.sql");
     const outputUri = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.joinPath(specUri, "..", filename),
       filters: { "SQL Server validation script": ["sql"] },
@@ -248,10 +255,10 @@ async function createFromCsv(): Promise<void> {
   if (!csvUri) return;
   const csvText = new TextDecoder("utf-8").decode(await vscode.workspace.fs.readFile(csvUri));
   const contract = createContractFromCsv(csvText);
-  const suggested = vscode.Uri.joinPath(csvUri, "..", `${csvUri.path.split("/").pop()}.csvtest.yaml`);
+  const suggested = vscode.Uri.joinPath(csvUri, "..", `${csvUri.path.split("/").pop()}.validation.yaml`);
   const outputUri = await vscode.window.showSaveDialog({
     defaultUri: suggested,
-    filters: { "CSV contract": ["csvtest.yaml"] }
+    filters: { "Validation contract": ["validation.yaml", "csvtest.yaml"] }
   });
   if (!outputUri) return;
   contract.targets = [{ path: relativeTargetPath(outputUri, csvUri) }];
@@ -261,7 +268,7 @@ async function createFromCsv(): Promise<void> {
 }
 
 async function runContract(output: vscode.OutputChannel, sqlServerRunner?: DesktopSqlServerRunner, context?: vscode.ExtensionContext, crossExecutor?: CrossExecutor): Promise<void> {
-  const specUri = await pickFile({ "CSV contracts": ["csvtest.yaml", "csvtest.yml", "yaml", "yml"] });
+  const specUri = await pickFile({ "Validation definitions": ["validation.yaml", "validation.yml", "validationsuite.yaml", "validationsuite.yml", "csvtest.yaml", "csvtest.yml", "csvsuite.yaml", "csvsuite.yml", "yaml", "yml"] });
   if (!specUri) return;
   const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(specUri));
   if (isSuiteText(text) && context) { await showSuiteRun(context, specUri, sqlServerRunner, crossExecutor); return; }
@@ -294,7 +301,7 @@ async function runContract(output: vscode.OutputChannel, sqlServerRunner?: Deskt
   }
   output.show(true);
   void vscode.window.showInformationMessage(
-    valid ? `CSV contract passed for ${targets.length + sqlTargets.length} target(s).` : "CSV contract failed. See the CSV Contract output channel."
+    valid ? `Validation passed for ${targets.length + sqlTargets.length} target(s).` : "Validation failed. See the Validation Workbench output channel."
   );
 }
 
@@ -393,9 +400,9 @@ async function addSqlServerTarget(
     return;
   }
   const active = vscode.window.activeTextEditor?.document.uri;
-  const specUri = binding ? requestedUri : requestedUri?.path.match(/\.csvtest\.ya?ml$/i) ? requestedUri
-    : active?.path.match(/\.csvtest\.ya?ml$/i) ? active
-      : await pickFile({ "CSV contracts": ["csvtest.yaml", "csvtest.yml", "yaml", "yml"] });
+  const specUri = binding ? requestedUri : requestedUri && isValidationContractPath(requestedUri.path) ? requestedUri
+    : active && isValidationContractPath(active.path) ? active
+      : await pickFile({ "Validation contracts": ["validation.yaml", "validation.yml", "csvtest.yaml", "csvtest.yml", "yaml", "yml"] });
   if (!specUri) return;
   try {
     const document = await vscode.workspace.openTextDocument(specUri);
@@ -453,18 +460,18 @@ async function addSqlServerTarget(
 }
 
 async function openWorkbench(requestedUri?: vscode.Uri): Promise<void> {
-  if (/\.csvsuite\.ya?ml$/i.test((requestedUri ?? vscode.window.activeTextEditor?.document.uri)?.path ?? "")) {
+  if (isValidationSuitePath((requestedUri ?? vscode.window.activeTextEditor?.document.uri)?.path ?? "")) {
     await vscode.commands.executeCommand("vscode.openWith", requestedUri ?? vscode.window.activeTextEditor!.document.uri, viewType);
     return;
   }
-  if (requestedUri?.path.match(/\.csvtest\.ya?ml$/i)) {
+  if (requestedUri && isValidationContractPath(requestedUri.path)) {
     await vscode.commands.executeCommand("vscode.openWith", requestedUri, viewType);
     return;
   }
   const active = vscode.window.activeTextEditor?.document.uri;
-  const uri = active?.path.match(/\.csvtest\.ya?ml$/i)
+  const uri = active && isValidationDefinitionPath(active.path)
     ? active
-    : await pickFile({ "CSV contracts and suites": ["csvtest.yaml", "csvtest.yml", "csvsuite.yaml", "csvsuite.yml"] });
+    : await pickFile({ "Validation definitions": ["validation.yaml", "validation.yml", "validationsuite.yaml", "validationsuite.yml", "csvtest.yaml", "csvtest.yml", "csvsuite.yaml", "csvsuite.yml"] });
   if (uri) await vscode.commands.executeCommand("vscode.openWith", uri, viewType);
 }
 
@@ -481,7 +488,7 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
   ) {}
 
   public async resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
-    if (/\.csvsuite\.ya?ml$/i.test(document.uri.path) || isSuiteText(document.getText())) {
+    if (isValidationSuitePath(document.uri.path) || isSuiteText(document.getText())) {
       await resolveSuiteEditor(document, panel, this.sqlServerRunner, async (memberId) => {
         const child = vscode.window.createWebviewPanel(viewType, memberId, vscode.ViewColumn.Beside, {});
         const member = parseSuite(document.getText()).members.find(m => m.id === memberId)!;
@@ -725,28 +732,51 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
           return;
         }
         const format = await vscode.window.showQuickPick([
-          { label: "JSON", description: "Complete target summaries and retained issue details", extension: "results.json" },
-          { label: "CSV", description: "One row per retained validation issue", extension: "issues.csv" },
-          { label: "Excel validation package", description: "Overall status, rule catalog, and bad-row matrices", extension: "validation-package.xlsx" }
-        ], { title: "Export validation results", placeHolder: "Choose a machine-readable format" });
+          { label: "HTML review report", description: "Human-readable offline report; aggregate-only evidence", extension: "validation-report.html" },
+          { label: "Review package JSON", description: "Versioned, aggregate-only results for saved-run review", extension: "validation-review.json" },
+          { label: "JSON", description: "Legacy detailed export; may contain sensitive source values", extension: "results.json" },
+          { label: "CSV", description: "Detailed issue export; may contain sensitive source values", extension: "issues.csv" },
+          { label: "Excel validation package", description: "Aggregate-only workbook; source row evidence is removed", extension: "validation-package.xlsx", excelMode: "aggregate-only" as const },
+          { label: "Detailed Excel validation package", description: "Sensitive opt-in workbook; may contain source and joined values", extension: "validation-package.xlsx", excelMode: "detail" as const }
+        ], { title: "Export validation results", placeHolder: "Choose a review report or detailed export" });
         if (!format) return;
-        const contractFilename = document.uri.path.split("/").at(-1) ?? "contract.csvtest.yaml";
-        const exportFilename = contractFilename.replace(/\.csvtest\.ya?ml$/i, "") + `.${format.extension}`;
+        const contractFilename = document.uri.path.split("/").at(-1) ?? "contract.validation.yaml";
+        const exportFilename = contractFilename.replace(/\.(?:csvtest|validation)\.ya?ml$/i, "") + `.${format.extension}`;
         const outputUri = await vscode.window.showSaveDialog({
           title: "Export validation results",
           defaultUri: document.uri.with({ path: document.uri.path.replace(/[^/]+$/, exportFilename) }),
-          filters: format.label === "JSON" ? { "JSON files": ["json"] } : format.label === "CSV" ? { "CSV files": ["csv"] } : { "Excel workbooks": ["xlsx"] }
+          filters: format.extension.endsWith("json") ? { "JSON files": ["json"] } : format.extension.endsWith("html") ? { "HTML reports": ["html"] } : format.label === "CSV" ? { "CSV files": ["csv"] } : { "Excel workbooks": ["xlsx"] }
         });
         if (!outputUri) return;
-        const exportRuns = format.label === "Excel validation package" ? latestRuns : filterResultRuns(latestRuns, String(message.filter ?? ""), message.selectedIssues);
+        const isReview = format.label === "HTML review report" || format.label === "Review package JSON";
+        const isExcel = "excelMode" in format;
+        if (isExcel && !await confirmWorkbookEvidenceMode(format.excelMode!)) return;
+        const exportRuns = isExcel || isReview ? latestRuns : filterResultRuns(latestRuns, String(message.filter ?? ""), message.selectedIssues);
         const exportContext = { filter: message.filter ?? "", selectedIssues: message.selectedIssues ?? [], stale, runNotice, totals: "original target scope; exported details may be selected or filtered" };
-        const content = format.label === "JSON"
+        const source = vscode.workspace.asRelativePath(document.uri, false);
+        const completeDefinition = !stale && resultsSource !== "imported" && hasCompleteReviewDefinition(read());
+        const review = isReview ? createValidationReviewPackage({
+          source,
+          toolVersion: String(vscode.extensions.getExtension("incursa.csv-contract-vsce")?.packageJSON.version ?? "unknown"),
+          definitions: completeDefinition ? [{ source, text: reviewDefinitionText(read()) }] : [],
+          ...(completeDefinition ? { definitionBindings: Object.fromEntries(exportRuns.map(run => [`${source}::${run.target}`, [source]])) } : {}),
+          provenance: { definitionState: stale ? "changed-since-run" : resultsSource === "imported" ? "imported-results" : completeDefinition ? "current-at-export" : "dependency-snapshots-unavailable" },
+          runs: exportRuns.map(run => ({ ...run, workId: `${source}::${run.target}`, evaluatedAt: run.result?.evaluatedAt,
+            scope: stale ? "stale-definition" : run.result?.preview?.scope === "sample" ? "sample" : "complete" }))
+        }) : undefined;
+        const content = review ? format.label === "HTML review report" ? renderValidationReportHtml(review) : JSON.stringify(review, null, 2) + "\n"
+          : format.label === "JSON"
           ? JSON.stringify({ ...JSON.parse(validationRunExportJson(vscode.workspace.asRelativePath(document.uri, false), exportRuns)), exportScope: exportContext }, null, 2)
           : format.label === "CSV" ? issueRunsToCsv(exportRuns, exportContext)
-          : badRowsXlsx(exportRuns, { title: `${contractFilename} validation results`, testLabel: contractFilename, checkCatalog: () => contractCheckCatalog(read()) });
-        await vscode.workspace.fs.writeFile(outputUri, typeof content === "string" ? new TextEncoder().encode(content) : content);
+          : undefined;
+        if (isExcel) await exportValidationWorkbook(outputUri, exportRuns, {
+          title: `${contractFilename} validation results`, testLabel: contractFilename, checkCatalog: () => contractCheckCatalog(read())
+        }, format.excelMode!);
+        else await vscode.workspace.fs.writeFile(outputUri, new TextEncoder().encode(content!));
         const totalIssueCount = latestRuns.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0);
-        if (totalIssueCount > retainedIssueCount) {
+        if (isExcel && format.excelMode === "aggregate-only") {
+          void vscode.window.showInformationMessage(`Exported aggregate-only results for ${latestRuns.length.toLocaleString()} validation target${latestRuns.length === 1 ? "" : "s"}. Source row and joined-value evidence was removed.`);
+        } else if (totalIssueCount > retainedIssueCount) {
           void vscode.window.showWarningMessage(
             `Exported ${retainedIssueCount.toLocaleString()} details for ${totalIssueCount.toLocaleString()} reported issue events. SQL aggregate rules summarize matching rows; a configured issue retention limit may also reduce details.`
           );
@@ -758,15 +788,19 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
           title: "Review validation results",
           canSelectMany: false,
           defaultUri: document.uri.with({ path: document.uri.path.replace(/[^/]+$/, "") }),
-          filters: { "CSV Contract results JSON": ["json"] }
+          filters: { "Validation results JSON": ["json"] }
         });
         if (!selected?.[0]) return;
-        const imported = parseValidationRunExport(new TextDecoder().decode(await vscode.workspace.fs.readFile(selected[0])));
+        const savedText = new TextDecoder().decode(await vscode.workspace.fs.readFile(selected[0]));
+        const savedValue: unknown = JSON.parse(savedText);
+        const review = savedValue && typeof savedValue === "object" && "schema" in savedValue && savedValue.schema === VALIDATION_REVIEW_PACKAGE_SCHEMA
+          ? parseValidationReviewPackage(savedText) : undefined;
+        const imported = review ? { contract: review.source.reference, exportedAt: review.identity.createdAt, runs: review.targets }
+          : parseValidationRunExport(savedText);
         const expected = vscode.workspace.asRelativePath(document.uri, false).replaceAll("\\", "/");
         const declared = imported.contract.replaceAll("\\", "/");
-        const filename = (value: string) => value.split("/").at(-1)?.toLocaleLowerCase() ?? "";
-        if (declared.toLocaleLowerCase() !== expected.toLocaleLowerCase() && filename(declared) !== filename(expected)) {
-          throw new Error(`These results belong to ${imported.contract}, not ${expected}. Open the matching contract to review them.`);
+        if (declared !== expected) {
+          throw new Error(`These results belong to ${imported.contract}, not ${expected}. Use Open Saved Review Package to inspect a relocated package without attaching it to this contract.`);
         }
         latestRuns = imported.runs.map(run => ({ target: run.target, result: run.result, status: run.status, error: run.error }));
         resultsSource = "imported";
@@ -933,7 +967,7 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
   <link rel="stylesheet" href="${style}">
-  <title>CSV Contract Workbench</title>
+  <title>Validation Workbench</title>
 </head>
 <body>
   <main id="app" aria-live="polite"></main>

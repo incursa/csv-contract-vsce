@@ -13,6 +13,8 @@ export interface BadRowsRun {
   evaluatedAt?: string;
   error?: string;
   result?: ValidationResult;
+  /** Trusted source coordinates, when the caller has them. Never parsed from a display label. */
+  source?: { server: string; database: string; schema: string; table: string };
 }
 
 export interface WorkbookCheck {
@@ -26,7 +28,14 @@ export interface BadRowsWorkbookOptions {
   testLabel?: string;
   checkIds?: (run: BadRowsRun, index: number) => string[];
   checkCatalog?: (run: BadRowsRun, index: number) => WorkbookCheck[];
+  /** Primarily for deterministic testing; production defaults are Excel's actual limits. */
+  limits?: Partial<XlsxLimits>;
+  /** Browser/in-memory serialization guard. Ignored by the streaming file writer. */
+  syncUncompressedByteLimit?: number;
 }
+export type BadRowsOptions = BadRowsWorkbookOptions;
+
+export interface XlsxLimits { maxRowsPerSheet: number; maxColumnsPerSheet: number }
 
 interface MatrixRow {
   source: string;
@@ -38,6 +47,11 @@ interface MatrixRow {
 
 interface ConsolidatedMatrixRow extends MatrixRow {
   tests: Set<string>;
+}
+
+interface MatrixGroup {
+  checkId: string;
+  values: Record<string, EvidenceValue>;
 }
 
 interface SheetDefinition {
@@ -54,6 +68,17 @@ interface SheetDefinition {
 const maximumRows = 1_048_576;
 const maximumColumns = 16_384;
 const textLimit = 32_767;
+
+interface PhysicalSheetDefinition {
+  name: string;
+  source: SheetDefinition;
+  columns: number[];
+  rowStart: number;
+  rowEnd: number;
+}
+
+export interface XlsxPartPlan { path: string; chunks(): Iterable<Uint8Array> }
+export interface BadRowsXlsxPlan { title: string; sheets: number; rows: number; parts(): Iterable<XlsxPartPlan> }
 
 function unique(values: string[]): string[] { return [...new Set(values.filter(Boolean))]; }
 
@@ -146,11 +171,15 @@ function issueCheckId(issue: ValidationIssue): string {
 }
 
 function runLabel(run: BadRowsRun, index: number): string {
+  const source = run.source;
+  if (source && [source.server, source.database, source.schema, source.table].every(value => value.trim())) {
+    return `${source.server}.${source.database}.${source.schema}.${source.table}`;
+  }
   return run.table ?? run.target ?? run.member ?? `Result ${index + 1}`;
 }
 
 function targetLabel(run: BadRowsRun, index: number): string {
-  return run.table ?? run.target ?? run.member ?? `Target ${index + 1}`;
+  return runLabel(run, index);
 }
 
 function testLabel(run: BadRowsRun, index: number, options: BadRowsWorkbookOptions): string {
@@ -166,44 +195,81 @@ function healthStyle(band: ResultHealthBand): number {
 }
 
 function overallStatus(runs: BadRowsRun[]): string {
-  const statuses = runs.map(run => run.status ?? (run.result?.valid ? "PASS" : run.result ? "FAIL" : "ERROR"));
+  const statuses = runs.map(run => (run.status ?? (run.result?.valid ? "PASS" : run.result ? "FAIL" : "ERROR")).trim().toUpperCase());
   if (!runs.length || statuses.includes("ERROR")) return "ERROR";
   if (statuses.includes("CANCELED")) return "CANCELED";
   if (statuses.includes("FAIL")) return "FAIL";
+  if (statuses.some(status => !["PASS", "SKIPPED", "SAMPLED"].includes(status))) return "UNKNOWN";
   if (statuses.includes("SKIPPED")) return "SKIPPED";
   if (statuses.includes("SAMPLED")) return "SAMPLED";
-  return "PASS";
+  return statuses.every(status => status === "PASS") ? "PASS" : "UNKNOWN";
 }
 
 function checkFailures(run: BadRowsRun, checkId: string): number {
   const result = run.result;
   if (!result) return 0;
   const retained = result.issues.filter(issue => issueCheckId(issue) === checkId).reduce((total, issue) => total + (issue.evidence?.totalSamples ?? 1), 0);
-  const outcome = [...(result.ruleOutcomes ?? []), ...(result.groupOutcomes ?? [])].find(item => item.id === checkId)?.failed ?? 0;
+  const outcome = Math.max(
+    [...(result.ruleOutcomes ?? []), ...(result.groupOutcomes ?? [])].find(item => item.id === checkId)?.failed ?? 0,
+    result.checkOutcomes?.find(item => item.id === checkId)?.failed ?? 0
+  );
   return Math.max(retained, outcome);
+}
+
+type CheckStatus = "PASS" | "FAIL" | "NOT RUN" | "SAMPLED" | "UNKNOWN";
+
+function checkStatus(run: BadRowsRun, checkId: string): CheckStatus {
+  const targetStatus = (run.status ?? (run.result?.valid ? "PASS" : run.result ? "FAIL" : "UNKNOWN")).trim().toUpperCase();
+  if (targetStatus === "SKIPPED" || targetStatus === "CANCELED") return "NOT RUN";
+  if (targetStatus === "ERROR" || targetStatus === "UNKNOWN" || !["PASS", "FAIL", "SAMPLED"].includes(targetStatus)) return "UNKNOWN";
+  if (!run.result) return "NOT RUN";
+  if (checkFailures(run, checkId) > 0) return "FAIL";
+  const explicit = run.result.checkOutcomes?.find(item => item.id === checkId);
+  if (explicit) {
+    if (explicit.status === "fail") return "FAIL";
+    if (explicit.status === "pass") return run.status === "SAMPLED" || run.result.preview?.scope === "sample" ? "SAMPLED" : "PASS";
+    if (explicit.status === "not-evaluated") return "NOT RUN";
+    return "UNKNOWN";
+  }
+  const outcome = [...(run.result.ruleOutcomes ?? []), ...(run.result.groupOutcomes ?? [])].find(item => item.id === checkId);
+  const sampled = targetStatus === "SAMPLED" || run.result.preview?.scope === "sample";
+  if (outcome) {
+    const population = "selected" in outcome ? outcome.selected : outcome.groups;
+    if (population > 0) return sampled ? "SAMPLED" : "PASS";
+  }
+  return sampled ? "SAMPLED" : "UNKNOWN";
+}
+
+function combineCheckStatuses(statuses: CheckStatus[]): CheckStatus {
+  const priority: CheckStatus[] = ["FAIL", "UNKNOWN", "SAMPLED", "NOT RUN", "PASS"];
+  return priority.find(status => statuses.includes(status)) ?? "UNKNOWN";
 }
 
 function overviewSheet(runs: BadRowsRun[], options: BadRowsWorkbookOptions, used: Set<string>): SheetDefinition {
   const aggregate = aggregateResultHealth(runs.map(run => ({ result: run.result, status: run.status })), "graded");
   const aggregateStatus = overallStatus(runs);
   const aggregateSampled = aggregateStatus === "SAMPLED";
+  const aggregateUnavailable = aggregate.available === false;
   const headers = ["Test file", "Instance / target", "Status", "Impact", "Health score", "Rows", "Executed checks", "Findings", "Error findings", "Warning findings", "Duration (seconds)", "Evaluated UTC", "Notes"];
   const totalDuration = runs.reduce((total, run) => total + (run.durationMs ?? 0), 0);
-  const rows: SheetDefinition["rows"] = [["Overall", `${runs.length} target result${runs.length === 1 ? "" : "s"}`, aggregateStatus, aggregateSampled ? "Sample only" : resultHealthCategory(aggregate), aggregateSampled ? undefined : aggregate.score,
+  const rows: SheetDefinition["rows"] = [["Overall", `${runs.length} target result${runs.length === 1 ? "" : "s"}`, aggregateStatus, aggregateSampled ? "Sample only" : resultHealthCategory(aggregate), aggregateSampled || aggregateUnavailable ? undefined : aggregate.score,
     runs.reduce((total, run) => total + (run.result?.rowCount ?? 0), 0), runs.reduce((total, run) => total + (run.result?.testCount ?? 0), 0),
     runs.reduce((total, run) => total + (run.result?.issueCount ?? 0), 0), runs.reduce((total, run) => total + (run.result?.errorCount ?? 0), 0),
     runs.reduce((total, run) => total + (run.result?.warningCount ?? 0), 0), totalDuration ? Math.round(totalDuration / 100) / 10 : undefined,
-    runs.map(run => run.evaluatedAt ?? run.result?.evaluatedAt).filter(Boolean).sort().at(-1), "Overall health uses the same graded calculation as the Workbench."]];
-  const aggregateStyle = aggregateSampled ? 8 : healthStyle(aggregate.band);
+    runs.map(run => run.evaluatedAt ?? run.result?.evaluatedAt).filter(Boolean).sort().at(-1), aggregateUnavailable
+      ? `Overall health is unavailable: ${aggregate.reason?.replaceAll("-", " ") ?? "insufficient evaluation evidence"}.`
+      : "Overall health uses the same graded calculation as the Workbench."]];
+  const aggregateStyle = aggregateSampled ? 8 : aggregateUnavailable ? 11 : healthStyle(aggregate.band);
   const styles: number[][] = [[6, 6, aggregateStyle, aggregateStyle, aggregateStyle]];
   runs.forEach((run, index) => {
     const health = resultHealth(run.result, run.status, "graded");
     const sampled = run.result?.preview?.scope === "sample";
+    const unavailable = health.available === false;
     rows.push([testLabel(run, index, options), runLabel(run, index), run.status ?? (run.result?.valid ? "PASS" : run.result ? "FAIL" : "ERROR"),
-      sampled ? "Sample only" : resultHealthCategory(health), sampled ? undefined : health.score, run.result?.rowCount, run.result?.testCount, run.result?.issueCount,
+      sampled ? "Sample only" : resultHealthCategory(health), sampled || unavailable ? undefined : health.score, run.result?.rowCount, run.result?.testCount, run.result?.issueCount,
       run.result?.errorCount, run.result?.warningCount, run.durationMs === undefined ? undefined : Math.round(run.durationMs / 100) / 10,
-      run.evaluatedAt ?? run.result?.evaluatedAt, run.error ?? (run.result?.truncated ? "Finding details were limited." : sampled ? "Incomplete sampled validation." : "")]);
-    const style = sampled ? 8 : healthStyle(health.band);
+      run.evaluatedAt ?? run.result?.evaluatedAt, run.error ?? (unavailable ? `Health is unavailable: ${health.reason?.replaceAll("-", " ") ?? "insufficient evaluation evidence"}.` : run.result?.truncated ? "Finding details were limited." : sampled ? "Incomplete sampled validation." : "")]);
+    const style = sampled ? 8 : unavailable ? 11 : healthStyle(health.band);
     styles.push([6, 6, run.status === "SKIPPED" ? 11 : style, style, style]);
   });
   return { name: safeSheetName("Overview", used), headers, rows, styles, wrapColumns: [12] };
@@ -219,35 +285,59 @@ function rulesSheet(runs: BadRowsRun[], options: BadRowsWorkbookOptions, used: S
   });
   const rows: SheetDefinition["rows"] = [];
   const styles: number[][] = [];
+  const targets = unique(runs.map((run, index) => targetLabel(run, index)));
   for (const [label, entries] of byTest) {
     const catalog = new Map<string, WorkbookCheck>();
     for (const { run, index } of entries) {
       const configured = options.checkCatalog?.(run, index) ?? (options.checkIds?.(run, index) ?? []).map(id => ({ id, category: "Check", description: humanize(id) }));
       for (const check of configured) catalog.set(check.id, check);
+      for (const outcome of run.result?.checkOutcomes ?? []) {
+        if (!catalog.has(outcome.id)) catalog.set(outcome.id, {
+          id: outcome.id,
+          category: outcome.kind ? humanize(outcome.kind) : "Check",
+          description: outcome.name ?? humanize(outcome.id)
+        });
+      }
+      // Older saved results predate checkOutcomes. Their bounded aggregates can
+      // still identify a configured rule/group, but never imply more than the
+      // legacy selected/group population proves in checkStatus.
+      for (const outcome of run.result?.ruleOutcomes ?? []) {
+        if (!catalog.has(outcome.id)) catalog.set(outcome.id, { id: outcome.id, category: "Rule", description: outcome.name ?? humanize(outcome.id) });
+      }
+      for (const outcome of run.result?.groupOutcomes ?? []) {
+        if (!catalog.has(outcome.id)) catalog.set(outcome.id, { id: outcome.id, category: "Group rule", description: outcome.name ?? humanize(outcome.id) });
+      }
       for (const issue of run.result?.issues ?? []) {
         const id = issueCheckId(issue);
         if (!catalog.has(id)) catalog.set(id, { id, category: humanize(issue.level), description: issue.title ?? issue.message });
       }
     }
     for (const check of catalog.values()) {
-      const evaluated = entries.filter(({ run }) => Boolean(run.result)).length;
-      const complete = entries.filter(({ run }) => Boolean(run.result) && run.status !== "SAMPLED" && run.result?.preview?.scope !== "sample").length;
-      const targetFailures = entries.filter(({ run }) => checkFailures(run, check.id) > 0).length;
-      const failureEvents = entries.reduce((total, { run }) => total + checkFailures(run, check.id), 0);
-      const status = targetFailures ? "FAILED" : complete === entries.length ? "PASSED" : evaluated ? "PARTIAL" : "NOT RUN";
-      rows.push([label, check.id, check.category, check.description, status, evaluated, targetFailures, failureEvents]);
-      styles.push([6, 6, 6, 13, status === "FAILED" ? 10 : status === "PASSED" ? 7 : status === "PARTIAL" ? 8 : 11]);
+      const grouped = new Map<string, CheckStatus[]>();
+      for (const { run, index } of entries) {
+        const target = targetLabel(run, index);
+        grouped.set(target, [...(grouped.get(target) ?? []), checkStatus(run, check.id)]);
+      }
+      const byTarget = new Map([...grouped].map(([target, statuses]) => [target, combineCheckStatuses(statuses)]));
+      const statuses = targets.map(target => byTarget.get(target) ?? "NOT RUN");
+      rows.push([label, check.id, check.category, check.description, ...statuses]);
+      styles.push([6, 6, 6, 13, ...statuses.map(status => status === "FAIL" ? 10 : status === "PASS" ? 7 : status === "SAMPLED" ? 8 : 11)]);
     }
   }
   if (!rows.length) return undefined;
-  return { name: safeSheetName("Rules", used), headers: ["Test file", "Rule", "Type", "What was tested", "Status", "Targets evaluated", "Targets failed", "Failure events"], rows, styles, wrapColumns: [3] };
+  return { name: safeSheetName("Rules", used), headers: ["Test file", "Rule", "Type", "What was tested", ...targets], rows, styles, wrapColumns: [3], freezeColumns: 4 };
 }
 
-function matrixRows(run: BadRowsRun): { rows: MatrixRow[]; aggregateIssues: ValidationIssue[] } {
+function matrixRows(run: BadRowsRun): { rows: MatrixRow[]; groups: MatrixGroup[]; aggregateIssues: ValidationIssue[] } {
   const rows = new Map<string, MatrixRow>();
+  const groups = new Map<string, MatrixGroup>();
   const aggregateIssues: ValidationIssue[] = [];
   for (const issue of run.result?.issues ?? []) {
     const samples = issue.evidence?.samples ?? [];
+    if (issue.group) {
+      const values = issue.group;
+      groups.set(JSON.stringify([issueCheckId(issue), Object.entries(values).sort(([a], [b]) => a.localeCompare(b))]), { checkId: issueCheckId(issue), values });
+    }
     if (!samples.some(sample => sample.primary)) { aggregateIssues.push(issue); continue; }
     for (const sample of samples) {
       if (!sample.primary) continue;
@@ -266,7 +356,25 @@ function matrixRows(run: BadRowsRun): { rows: MatrixRow[]; aggregateIssues: Vali
       rows.set(key, row);
     }
   }
-  return { rows: [...rows.values()], aggregateIssues };
+  // Merge newer bounded row/check states with issue evidence; neither source is assumed complete.
+  for (const outcome of run.result?.rowOutcomes ?? []) {
+    if (outcome.status !== "fail") continue;
+    const identity = outcome.context?.identity;
+    if (outcome.context?.group && outcome.row === undefined && !identity) {
+      const values = outcome.context.group;
+      groups.set(JSON.stringify([outcome.checkId, Object.entries(values).sort(([a], [b]) => a.localeCompare(b))]), { checkId: outcome.checkId, values });
+      continue;
+    }
+    const values = identity ?? {};
+    const existing = [...rows.values()].find(row => outcome.row !== undefined && row.row === outcome.row)
+      ?? [...rows.values()].find(row => identity && JSON.stringify(row.values) === JSON.stringify(identity));
+    const key = existing ? [...rows].find(([, row]) => row === existing)?.[0] : JSON.stringify([runLabel(run, 0), outcome.row ?? null, values]);
+    const row = existing ?? { source: runLabel(run, 0), row: outcome.row, values, related: {}, failed: new Set<string>() };
+    for (const [column, value] of Object.entries(outcome.context?.aggregate ?? {})) row.related[`Aggregate - ${column}`] = value;
+    row.failed.add(outcome.checkId);
+    rows.set(key!, row);
+  }
+  return { rows: [...rows.values()], groups: [...groups.values()], aggregateIssues };
 }
 
 function safeSheetName(value: string, used: Set<string>): string {
@@ -303,52 +411,100 @@ function cell(value: EvidenceValue | undefined, row: number, column: number, sty
   return `<c r="${reference}" t="inlineStr"${styleAttribute}><is><t${preserve}>${xml(text)}</t></is></c>`;
 }
 
-function worksheet(sheet: SheetDefinition): string {
-  if (!sheet.headers.length || sheet.headers.length > maximumColumns) throw new Error(`Excel sheet '${sheet.name}' has an invalid column count.`);
-  if (sheet.rows.length + 1 > maximumRows) throw new Error(`Excel sheet '${sheet.name}' exceeds ${maximumRows.toLocaleString()} rows.`);
-  const widths = sheet.headers.map((header, column) => {
-    const longest = sheet.rows.slice(0, 500).reduce((length, row) => Math.max(length, String(row[column] ?? "").length), header.length);
-    return Math.min(sheet.checkStart !== undefined && column >= sheet.checkStart ? 28 : 42, Math.max(10, longest + 2));
+function normalizedLimits(input: Partial<XlsxLimits> | undefined): XlsxLimits {
+  const limits = { maxRowsPerSheet: input?.maxRowsPerSheet ?? maximumRows, maxColumnsPerSheet: input?.maxColumnsPerSheet ?? maximumColumns };
+  if (!Number.isInteger(limits.maxRowsPerSheet) || limits.maxRowsPerSheet < 2 || limits.maxRowsPerSheet > maximumRows) throw new RangeError(`maxRowsPerSheet must be an integer from 2 through ${maximumRows}.`);
+  if (!Number.isInteger(limits.maxColumnsPerSheet) || limits.maxColumnsPerSheet < 1 || limits.maxColumnsPerSheet > maximumColumns) throw new RangeError(`maxColumnsPerSheet must be an integer from 1 through ${maximumColumns}.`);
+  return limits;
+}
+
+function physicalSheets(sheets: SheetDefinition[], input: Partial<XlsxLimits> | undefined): PhysicalSheetDefinition[] {
+  const limits = normalizedLimits(input);
+  const used = new Set<string>();
+  const output: PhysicalSheetDefinition[] = [];
+  for (const source of sheets) {
+    if (!source.headers.length) throw new Error(`Excel sheet '${source.name}' has no columns.`);
+    const repeatCount = source.headers.length > limits.maxColumnsPerSheet ? Math.min(source.freezeColumns ?? 1, source.headers.length, Math.max(0, limits.maxColumnsPerSheet - 1)) : 0;
+    const repeated = Array.from({ length: repeatCount }, (_, index) => index);
+    const remaining = Array.from({ length: source.headers.length - repeatCount }, (_, index) => index + repeatCount);
+    const columnCapacity = limits.maxColumnsPerSheet - repeatCount;
+    const columnGroups = source.headers.length <= limits.maxColumnsPerSheet ? [Array.from({ length: source.headers.length }, (_, index) => index)]
+      : Array.from({ length: Math.ceil(remaining.length / columnCapacity) }, (_, index) => [...repeated, ...remaining.slice(index * columnCapacity, (index + 1) * columnCapacity)]);
+    const rowCapacity = limits.maxRowsPerSheet - 1;
+    const rowGroups = Math.max(1, Math.ceil(source.rows.length / rowCapacity));
+    const sharded = rowGroups > 1 || columnGroups.length > 1;
+    for (let rowShard = 0; rowShard < rowGroups; rowShard++) for (let columnShard = 0; columnShard < columnGroups.length; columnShard++) {
+      const suffix = sharded ? ` r${rowShard + 1} c${columnShard + 1}` : "";
+      output.push({ name: safeSheetName(`${source.name.slice(0, Math.max(1, 31 - suffix.length))}${suffix}`, used), source,
+        columns: columnGroups[columnShard], rowStart: rowShard * rowCapacity, rowEnd: Math.min(source.rows.length, (rowShard + 1) * rowCapacity) });
+    }
+  }
+  return output;
+}
+
+function* worksheetChunks(sheet: PhysicalSheetDefinition): Iterable<Uint8Array> {
+  const { source, columns } = sheet;
+  const headers = columns.map(column => source.headers[column]);
+  const sampledRows = source.rows.slice(sheet.rowStart, Math.min(sheet.rowEnd, sheet.rowStart + 500));
+  const widths = columns.map((originalColumn, column) => {
+    const longest = sampledRows.reduce((length, row) => Math.max(length, String(row[originalColumn] ?? "").length), headers[column].length);
+    return Math.min(source.checkStart !== undefined && originalColumn >= source.checkStart ? 28 : 42, Math.max(10, longest + 2));
   });
-  const rows = [`<row r="1">${sheet.headers.map((header, column) => cell(header, 1, column, sheet.readme ? 5 : sheet.checkStart !== undefined && column >= sheet.checkStart ? 2 : 1)).join("")}</row>`];
-  for (const [rowIndex, values] of sheet.rows.entries()) rows.push(`<row r="${rowIndex + 2}">${values.map((value, column) => cell(value, rowIndex + 2, column,
-    sheet.styles?.[rowIndex]?.[column] ?? (sheet.checkStart !== undefined && column >= sheet.checkStart && value === false ? 3 : sheet.checkStart !== undefined && column >= sheet.checkStart && value === true ? 4 : sheet.wrapColumns?.includes(column) ? 13 : 0))).join("")}</row>`);
-  const last = `${columnName(sheet.headers.length - 1)}${sheet.rows.length + 1}`;
-  const frozenPane = sheet.freezeColumns
-    ? `<pane xSplit="${sheet.freezeColumns}" ySplit="1" topLeftCell="${columnName(sheet.freezeColumns)}2" activePane="bottomRight" state="frozen"/>`
+  const frozenColumns = columns.filter(column => column < (source.freezeColumns ?? 0)).length;
+  const frozenPane = frozenColumns
+    ? `<pane xSplit="${frozenColumns}" ySplit="1" topLeftCell="${columnName(frozenColumns)}2" activePane="bottomRight" state="frozen"/>`
     : '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>';
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0">${sheet.readme ? "" : frozenPane}</sheetView></sheetViews><cols>${widths.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join("")}</cols><sheetData>${rows.join("")}</sheetData>${sheet.readme ? "" : `<autoFilter ref="A1:${last}"/>`}</worksheet>`;
+  yield strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0">${source.readme ? "" : frozenPane}</sheetView></sheetViews><cols>${widths.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join("")}</cols><sheetData><row r="1">`);
+  for (const [column, originalColumn] of columns.entries()) yield strToU8(cell(source.headers[originalColumn], 1, column, source.readme ? 5 : source.checkStart !== undefined && originalColumn >= source.checkStart ? 2 : 1));
+  yield strToU8("</row>");
+  for (let sourceRow = sheet.rowStart; sourceRow < sheet.rowEnd; sourceRow++) {
+    const excelRow = sourceRow - sheet.rowStart + 2;
+    const values = source.rows[sourceRow];
+    yield strToU8(`<row r="${excelRow}">`);
+    for (const [column, originalColumn] of columns.entries()) {
+      const value = values[originalColumn];
+      const style = source.styles?.[sourceRow]?.[originalColumn] ?? (source.checkStart !== undefined && originalColumn >= source.checkStart && value === false ? 3
+        : source.checkStart !== undefined && originalColumn >= source.checkStart && value === true ? 4 : source.wrapColumns?.includes(originalColumn) ? 13 : 0);
+      const serialized = cell(value, excelRow, column, style);
+      if (serialized) yield strToU8(serialized);
+    }
+    yield strToU8("</row>");
+  }
+  const last = `${columnName(headers.length - 1)}${sheet.rowEnd - sheet.rowStart + 1}`;
+  yield strToU8(`</sheetData>${source.readme ? "" : `<autoFilter ref="A1:${last}"/>`}</worksheet>`);
 }
 
 function styles(): string {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="4"><font><sz val="11"/><name val="Aptos"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Aptos"/></font><font><b/><color rgb="FF9C0006"/><name val="Aptos"/></font><font><b/><color rgb="FF006100"/><name val="Aptos"/></font></fonts><fills count="10"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF26344A"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FF5B3F8C"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFC7CE"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFC6EFCE"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF4CE"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFE4C7"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFBE8EA"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE8EBF2"/></patternFill></fill></fills><borders count="2"><border/><border><left style="thin"><color rgb="FFD9DEE7"/></left><right style="thin"><color rgb="FFD9DEE7"/></right><top style="thin"><color rgb="FFD9DEE7"/></top><bottom style="thin"><color rgb="FFD9DEE7"/></bottom></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="14"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/><xf numFmtId="0" fontId="1" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/><xf numFmtId="0" fontId="2" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/><xf numFmtId="0" fontId="3" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" quotePrefix="1"/><xf numFmtId="0" fontId="3" fillId="5" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="0" fillId="6" borderId="0" xfId="0" applyFill="1"/><xf numFmtId="0" fontId="0" fillId="7" borderId="0" xfId="0" applyFill="1"/><xf numFmtId="0" fontId="2" fillId="8" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="0" fillId="9" borderId="0" xfId="0" applyFill="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" quotePrefix="1"><alignment wrapText="1" vertical="top"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
 }
 
-function workbookPackage(sheets: SheetDefinition[], title: string): Uint8Array {
-  const files: Record<string, Uint8Array> = {};
+function oneChunk(value: string): () => Iterable<Uint8Array> { return function* () { yield strToU8(value); }; }
+
+function workbookParts(sheets: PhysicalSheetDefinition[], title: string, timestamp: string): XlsxPartPlan[] {
+  const files: XlsxPartPlan[] = [];
   const overrides = sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("");
-  files["[Content_Types].xml"] = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>${overrides}</Types>`);
-  files["_rels/.rels"] = strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>');
-  files["xl/workbook.xml"] = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView activeTab="0"/></bookViews><sheets>${sheets.map((sheet, index) => `<sheet name="${xml(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("")}</sheets><calcPr calcId="0" fullCalcOnLoad="1"/></workbook>`);
-  files["xl/_rels/workbook.xml.rels"] = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`);
-  files["xl/styles.xml"] = strToU8(styles());
-  sheets.forEach((sheet, index) => { files[`xl/worksheets/sheet${index + 1}.xml`] = strToU8(worksheet(sheet)); });
-  const timestamp = new Date().toISOString();
-  files["docProps/core.xml"] = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${xml(title)}</dc:title><dc:creator>CSV Contract Workbench</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${timestamp}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${timestamp}</dcterms:modified></cp:coreProperties>`);
-  files["docProps/app.xml"] = strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>CSV Contract Workbench</Application><AppVersion>1.0</AppVersion></Properties>');
-  return zipSync(files, { level: 6 });
+  files.push({ path: "[Content_Types].xml", chunks: oneChunk(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>${overrides}</Types>`) });
+  files.push({ path: "_rels/.rels", chunks: oneChunk('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>') });
+  files.push({ path: "xl/workbook.xml", chunks: oneChunk(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView activeTab="0"/></bookViews><sheets>${sheets.map((sheet, index) => `<sheet name="${xml(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("")}</sheets><calcPr calcId="0" fullCalcOnLoad="1"/></workbook>`) });
+  files.push({ path: "xl/_rels/workbook.xml.rels", chunks: oneChunk(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`) });
+  files.push({ path: "xl/styles.xml", chunks: oneChunk(styles()) });
+  sheets.forEach((sheet, index) => files.push({ path: `xl/worksheets/sheet${index + 1}.xml`, chunks: () => worksheetChunks(sheet) }));
+  files.push({ path: "docProps/core.xml", chunks: oneChunk(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${xml(title)}</dc:title><dc:creator>Validation Workbench</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${timestamp}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${timestamp}</dcterms:modified></cp:coreProperties>`) });
+  files.push({ path: "docProps/app.xml", chunks: oneChunk('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Validation Workbench</Application><AppVersion>1.0</AppVersion></Properties>') });
+  return files;
 }
 
-/** Build a workbook from retained evidence without querying the source again. */
-export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions): Uint8Array {
+function workbookSheets(runs: BadRowsRun[], options: BadRowsWorkbookOptions): SheetDefinition[] {
   const used = new Set<string>();
   const readmeName = safeSheetName("Read Me", used);
   const sheets: SheetDefinition[] = [overviewSheet(runs, options, used)];
   const ruleSummary = rulesSheet(runs, options, used);
   if (ruleSummary) sheets.push(ruleSummary);
   let badRowCount = 0;
+  let retainedGroupCount = 0;
   let aggregateCount = 0;
   const aggregates: Array<Array<EvidenceValue | undefined>> = [];
+  const retainedGroups = new Map<string, Array<EvidenceValue | undefined>>();
   const targetSheets: SheetDefinition[] = [];
   const groupedTargets = new Map<string, { label: string; entries: Array<{ run: BadRowsRun; index: number }> }>();
   runs.forEach((run, runIndex) => {
@@ -360,7 +516,12 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
     const matrix = matrixRows(run);
     aggregateCount += matrix.aggregateIssues.length;
     for (const issue of matrix.aggregateIssues) aggregates.push([run.member ?? "", runLabel(run, runIndex), issueCheckId(issue), issue.message, issue.actual, issue.expected]);
+    for (const group of matrix.groups) {
+      const values = JSON.stringify(group.values);
+      retainedGroups.set(JSON.stringify([run.member ?? "", runLabel(run, runIndex), group.checkId, values]), [run.member ?? "", runLabel(run, runIndex), group.checkId, values]);
+    }
   });
+  retainedGroupCount = retainedGroups.size;
   const sortedTargets = [...groupedTargets.values()].sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }));
   for (const target of sortedTargets) {
     const entries = [...target.entries].sort((left, right) => testLabel(left.run, left.index, options).localeCompare(testLabel(right.run, right.index, options), undefined, { sensitivity: "base" }) || left.index - right.index);
@@ -369,8 +530,7 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
     for (const { run, index } of entries) {
       const test = testLabel(run, index, options);
       const matrix = matrixRows(run);
-      const configured = options.checkCatalog?.(run, index).map(check => check.id) ?? options.checkIds?.(run, index) ?? [];
-      for (const checkId of unique([...configured, ...matrix.rows.flatMap(row => [...row.failed])])) checkIds.push(`${test}\u0000${checkId}`);
+      for (const checkId of unique(matrix.rows.flatMap(row => [...row.failed]))) checkIds.push(`${test}\u0000${checkId}`);
       for (const item of matrix.rows) {
         const valuesKey = Object.entries(item.values).sort(([left], [right]) => left.localeCompare(right)).map(([column, value]) => [column, value]);
         const key = JSON.stringify([item.source, item.row ?? null, valuesKey]);
@@ -387,21 +547,22 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
     const sourceColumns = unique(matrixRowsForTarget.flatMap(row => Object.keys(row.values)));
     const relatedColumns = unique(matrixRowsForTarget.flatMap(row => Object.keys(row.related)));
     const distinctCheckIds = unique(checkIds);
-    const headers = ["Test files", "Source", "Source row", ...sourceColumns, ...relatedColumns, ...distinctCheckIds.map(id => {
+    const headers = ["Test files", "Source", "Source row / identity", ...sourceColumns, ...relatedColumns, ...distinctCheckIds.map(id => {
       const [test, check] = id.split("\u0000");
       return `Check - ${test} - ${check}`;
     })];
     const checkStart = 3 + sourceColumns.length + relatedColumns.length;
     targetSheets.push({
       name: safeSheetName(`Bad - ${target.label}`, used), headers, checkStart, freezeColumns: 3,
-      rows: matrixRowsForTarget.map(row => [[...row.tests].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" })).join(", "), row.source, row.row,
+      rows: matrixRowsForTarget.map(row => [[...row.tests].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" })).join(", "), row.source, row.row ?? "Identity unavailable",
         ...sourceColumns.map(column => row.values[column]), ...relatedColumns.map(column => row.related[column]), ...distinctCheckIds.map(id => row.failed.has(id) ? false : undefined)])
     });
   }
   const readmeRows: Array<Array<EvidenceValue | undefined>> = [
-    ["Workbook", options.title], ["Exported UTC", new Date().toISOString()], ["Target results", runs.length], ["Targets with bad rows", targetSheets.length], ["Retained bad rows", badRowCount],
+    ["Workbook", options.title], ["Exported UTC", new Date().toISOString()], ["Target results", runs.length], ["Targets with bad rows", targetSheets.length], ["Retained bad rows", badRowCount], ["Retained failing groups", retainedGroupCount],
     ["Package layout", "Overview summarizes every test and target. Rules explains configured checks. Each Bad sheet consolidates retained failing rows for one target across all test files. Aggregate Findings contains findings without a primary row."],
-    ["Aggregate-only findings", aggregateCount], ["Matrix meaning", "FALSE (red) means this check failed the retained row. Blank means not failed in retained evidence, not applicable, or not provably evaluated for that row."],
+    ["Aggregate-only findings", aggregateCount], ["Rules matrix", "PASS and FAIL require an explicit retained rule or group outcome. SAMPLED is incomplete. NOT RUN means execution did not occur. UNKNOWN means the available result cannot prove this rule's outcome."],
+    ["Matrix meaning", "FALSE (red) means this check failed the retained row. Blank means not failed in retained evidence, not applicable, or not provably evaluated for that row. Identity unavailable is shown explicitly when retained evidence has no source row."],
     ["Merged rows", "A source row is merged across test files only when its source label, row number, and source values match. Check columns include the test file name so repeated rule IDs remain separate."],
     ["Data handling", "Sheets can contain every retained source and joined value. Protect this workbook like the source data."],
     ["Evidence boundary", "The workbook uses retained run evidence and does not query the source again. Limited evidence remains limited."],
@@ -409,7 +570,42 @@ export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions)
   ];
   sheets.push(...targetSheets);
   if (aggregates.length) sheets.push({ name: safeSheetName("Aggregate Findings", used), headers: ["Member", "Target", "Check", "Message", "Actual", "Expected"], rows: aggregates });
-  if (!targetSheets.length && !aggregates.length) sheets.push({ name: safeSheetName("No bad rows", used), headers: ["Status"], rows: [["No retained bad-row evidence was available in the selected results."]] });
+  if (retainedGroups.size) sheets.push({ name: safeSheetName("Group Findings", used), headers: ["Test file", "Target", "Check", "Retained group context"], rows: [...retainedGroups.values()], wrapColumns: [3] });
+  if (!targetSheets.length && !aggregates.length && !retainedGroups.size) sheets.push({ name: safeSheetName("No bad rows", used), headers: ["Status"], rows: [["No retained bad-row or group evidence was available in the selected results."]] });
   sheets.push({ name: readmeName, headers: ["Item", "Details"], rows: readmeRows, readme: true });
-  return workbookPackage(sheets, options.title);
+  return sheets;
+}
+
+function joined(chunks: Iterable<Uint8Array>, consume: (bytes: number) => void): Uint8Array {
+  const values: Uint8Array[] = [];
+  for (const value of chunks) { consume(value.length); values.push(value); }
+  const total = values.reduce((sum, value) => sum + value.length, 0);
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const value of values) { output.set(value, offset); offset += value.length; }
+  return output;
+}
+
+/** Build a reusable package plan. Worksheet XML is generated row-by-row when each part is consumed. */
+export function createBadRowsXlsxPlan(runs: BadRowsRun[], options: BadRowsWorkbookOptions): BadRowsXlsxPlan {
+  const logical = workbookSheets(runs, options);
+  const sheets = physicalSheets(logical, options.limits);
+  const timestamp = new Date().toISOString();
+  const parts = workbookParts(sheets, options.title, timestamp);
+  return { title: options.title, sheets: sheets.length, rows: logical.reduce((sum, sheet) => sum + sheet.rows.length, 0), parts: function* () { yield* parts; } };
+}
+
+/** Build an in-memory workbook for browser and small-export compatibility. */
+export function badRowsXlsx(runs: BadRowsRun[], options: BadRowsWorkbookOptions): Uint8Array {
+  const plan = createBadRowsXlsxPlan(runs, options);
+  const files: Record<string, Uint8Array> = {};
+  const limit = options.syncUncompressedByteLimit ?? 64 * 1024 * 1024;
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError("syncUncompressedByteLimit must be a positive safe integer.");
+  let uncompressedBytes = 0;
+  const consume = (bytes: number) => {
+    uncompressedBytes += bytes;
+    if (uncompressedBytes > limit) throw new Error(`In-memory Excel export exceeds the ${limit.toLocaleString()}-byte serialization budget; use the desktop or standalone streamed export.`);
+  };
+  for (const part of plan.parts()) files[part.path] = joined(part.chunks(), consume);
+  return zipSync(files, { level: 6 });
 }

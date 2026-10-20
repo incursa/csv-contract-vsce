@@ -3,7 +3,7 @@ import { dirname, resolve, relative, isAbsolute, sep } from "node:path";
 import { isAlias, visit, Document } from "yaml";
 import Ajv from "ajv/dist/2020";
 import contractSchema from "../../schemas/csvtest.schema.json";
-import { effectiveContract, loadSuite, parseSuite, yamlDocument, type SuiteIO, type SuiteConnection } from "../core/suite";
+import { effectiveContract, loadSuite, parseSuite, yamlDocument, type LoadedSuite, type SuiteIO, type SuiteConnection } from "../core/suite";
 import type { CsvContract } from "../core/model";
 
 export const fileSuiteIO: SuiteIO = {
@@ -54,6 +54,11 @@ function rebaseTargets(doc: Document, from: string, to: string): string[] {
     doc.setIn(["sqlServer", "targets", index, "baseline", "ref"], relative(dirname(to), absolute).split(sep).join("/") || absolute);
     dependencies.push(`schema baseline: ${absolute}`);
   }
+  for (const [index, use] of (value.rulePacks ?? []).entries()) if (use.ref) {
+    const absolute = resolve(dirname(from), use.ref);
+    doc.setIn(["rulePacks", index, "ref"], relative(dirname(to), absolute).split(sep).join("/") || absolute);
+    dependencies.push(`rule pack: ${absolute}`);
+  }
   return dependencies;
 }
 function comparable(contract: CsvContract, source: string, defaults?: SuiteConnection): string {
@@ -61,7 +66,30 @@ function comparable(contract: CsvContract, source: string, defaults?: SuiteConne
   for (const target of copy.targets ?? []) if (target.path !== undefined) target.path = resolve(dirname(source), target.path);
   if (copy.baseline && "ref" in copy.baseline) copy.baseline.ref = resolve(dirname(source), copy.baseline.ref);
   for (const target of copy.sqlServer?.targets ?? []) if (target.baseline && "ref" in target.baseline) target.baseline.ref = resolve(dirname(source), target.baseline.ref);
+  for (const use of copy.rulePacks ?? []) use.ref = resolve(dirname(source), use.ref);
   return JSON.stringify(copy);
+}
+function virtualSuiteIO(files: { path: string; text: string }[]): SuiteIO {
+  const key = (path: string) => process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
+  const virtual = new Map(files.map((file) => [key(file.path), file.text]));
+  return {
+    read: (path) => virtual.has(key(path)) ? Promise.resolve(virtual.get(key(path))!) : fileSuiteIO.read(path),
+    resolve: fileSuiteIO.resolve,
+    canonical: (path) => virtual.has(key(path)) ? Promise.resolve(key(path)) : fileSuiteIO.canonical!(path)
+  };
+}
+async function assertExecutableSemantics(expected: LoadedSuite, source: string, files: { path: string; text: string }[]): Promise<void> {
+  const actual = await loadSuite(source, virtualSuiteIO(files));
+  const failed = actual.members.filter((member) => member.error);
+  if (failed.length) throw new Error(failed.map((member) => `${member.id}: ${member.error}`).join("\n"));
+  if (actual.members.length !== expected.members.length) throw new Error("YAML conversion changed suite membership; no output was written.");
+  for (const [index, member] of actual.members.entries()) {
+    const before = expected.members[index];
+    if (member.id !== before.id || !member.contract || !before.contract ||
+        comparable(member.contract, member.source) !== comparable(before.contract, before.source)) {
+      throw new Error(`${member.id}: YAML conversion changed contract semantics; no output was written.`);
+    }
+  }
 }
 async function ensureWritable(paths: string[], force: boolean): Promise<void> {
   if (force) return;
@@ -96,20 +124,19 @@ export async function combineSuite(source: string, output: string, options: { fo
   }
   if (dependencies.length && !options.allowExternal) throw new Error(`Bundle is not portable; dependencies remain (use --allow-external to preserve their locations):\n${dependencies.join("\n")}`);
   const rendered = doc.toString({ lineWidth: 0 });
-  const roundTrip = parseSuite(rendered);
-  for (const [index, member] of roundTrip.members.entries()) {
-    if (comparable(member.contract!, output, suite.defaults) !== comparable(loaded.members[index].contract!, loaded.members[index].source)) {
-      throw new Error(`${member.id}: YAML conversion changed contract semantics; no output was written.`);
-    }
-  }
+  await assertExecutableSemantics(loaded, output, [{ path: output, text: rendered }]);
   await ensureWritable([output], !!options.force);
   await writeFile(output, rendered, { flag: options.force ? "w" : "wx" });
   return { output, members: suite.members.length, portable: !dependencies.length, dependencies };
 }
 export async function splitSuite(source: string, directory: string, force = false) {
   source = resolve(source); directory = resolve(directory);
+  const genericNames = /\.validationsuite\.ya?ml$/i.test(source);
   const text = await readFile(source, "utf8");
   const suite = parseSuite(text);
+  const loaded = await loadSuite(source, fileSuiteIO);
+  const failed = loaded.members.filter((member) => member.error);
+  if (failed.length) throw new Error(failed.map((member) => `${member.id}: ${member.error}`).join("\n"));
   const doc = yamlDocument(text);
   checkConversion(doc);
   const files: { path: string; text: string }[] = [];
@@ -117,22 +144,20 @@ export async function splitSuite(source: string, directory: string, force = fals
     if (!member.contract) throw new Error(`${member.id}: split requires every member to be inline; combine first.`);
     checkContract(member.contract, member.id, suite.defaults);
     // Prefix avoids reserved Windows filenames and case-folded IDs cannot overwrite one another.
-    const filename = `member-${index + 1}-${member.id}.csvtest.yaml`;
+    const filename = `member-${index + 1}-${member.id}.${genericNames ? "validation" : "csvtest"}.yaml`;
     const path = resolve(directory, filename);
     const contractDoc = new Document();
     contractDoc.contents = doc.getIn(["members", index, "contract"], true) as Document["contents"];
     rebaseTargets(contractDoc, source, path);
     const rendered = contractDoc.toString({ lineWidth: 0 });
-    if (comparable(yamlDocument(rendered).toJS() as CsvContract, path, suite.defaults) !== comparable(member.contract, source, suite.defaults)) {
-      throw new Error(`${member.id}: YAML conversion changed contract semantics; no output was written.`);
-    }
     files.push({ path, text: rendered });
     doc.deleteIn(["members", index, "contract"]);
     doc.setIn(["members", index, "ref"], `./${filename}`);
   }
-  const master = resolve(directory, `${suite.id}.csvsuite.yaml`);
+  const master = resolve(directory, `${suite.id}.${genericNames ? "validationsuite" : "csvsuite"}.yaml`);
   files.push({ path: master, text: doc.toString({ lineWidth: 0 }) });
   if (files.some((f) => f.path.toLowerCase() === source.toLowerCase())) throw new Error("Split would overwrite its source; choose another output directory.");
+  await assertExecutableSemantics(loaded, master, files);
   await ensureWritable(files.map((f) => f.path), force);
   await mkdir(directory, { recursive: true });
   for (const file of files) await writeFile(file.path, file.text, { flag: force ? "w" : "wx" });

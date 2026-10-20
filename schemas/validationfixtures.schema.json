@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://incursa.dev/schemas/validationfixtures.schema.json",
+  "title": "Synthetic validation fixtures",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id", "contract", "cases"],
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "$ref": "#/$defs/id" },
+    "contract": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ref", "sha256"],
+          "properties": {
+            "ref": { "type": "string", "minLength": 1 },
+            "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inline"],
+          "properties": { "inline": { "type": "object" } }
+        }
+      ]
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/case" }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "nonNegative": { "type": "integer", "minimum": 0 },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "selected": { "$ref": "#/$defs/nonNegative" },
+        "passed": { "$ref": "#/$defs/nonNegative" },
+        "failed": { "$ref": "#/$defs/nonNegative" }
+      }
+    },
+    "groupOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "groups": { "$ref": "#/$defs/nonNegative" },
+        "passed": { "$ref": "#/$defs/nonNegative" },
+        "failed": { "$ref": "#/$defs/nonNegative" }
+      }
+    },
+    "expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["valid"],
+      "properties": {
+        "valid": { "type": "boolean" },
+        "rowCount": { "$ref": "#/$defs/nonNegative" },
+        "issueCount": { "$ref": "#/$defs/nonNegative" },
+        "errorCount": { "$ref": "#/$defs/nonNegative" },
+        "warningCount": { "$ref": "#/$defs/nonNegative" },
+        "issueCodes": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "issueRuleIds": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "ruleOutcomes": { "type": "array", "items": { "$ref": "#/$defs/outcome" } },
+        "groupOutcomes": { "type": "array", "items": { "$ref": "#/$defs/groupOutcome" } }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "csv", "expect"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "description": { "type": "string" },
+        "csv": { "type": "string" },
+        "expect": { "$ref": "#/$defs/expect" }
+      }
+    }
+  }
+}

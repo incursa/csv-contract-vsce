@@ -21,6 +21,8 @@ export interface CrossCheck {
   /** Optional reusable row-set shaping applied before the cross-check. Multiple selections are unioned. */
   fromSelections?: CrossSelection[];
   toSelections?: CrossSelection[];
+  /** Explicit opt-in for bounded client-side evaluation across SQL Server connections. */
+  crossConnection?: { enabled: true; maxRows?: number };
 }
 export type CrossNormalizer = "trim" | "lowercase" | "trimLeadingZeros";
 export interface CrossKey { from: string; to: string; normalizers?: CrossNormalizer[] }
@@ -54,9 +56,18 @@ export interface CrossPredicateLeaf {
 }
 export type CrossPredicate = CrossPredicateLeaf | { all: CrossPredicate[] } | { any: CrossPredicate[] };
 export interface SqlCrossPlan { mode: "sql"; check: CrossCheck; from: ResolvedSqlServerTarget; to: ResolvedSqlServerTarget; participants: Record<string, ResolvedSqlServerTarget>; sql: string; detailSql?: string }
+export interface SqlCrossConnectionParticipant { member: string; contract: CsvContract; target: ResolvedSqlServerTarget; columns: string[] }
+export interface SqlCrossConnectionPlan {
+  mode: "sql-cross-connection";
+  check: CrossCheck;
+  from: SqlCrossConnectionParticipant;
+  to: SqlCrossConnectionParticipant;
+  participants: Record<string, SqlCrossConnectionParticipant>;
+  maxRows?: number;
+}
 export interface CsvCrossParticipant { contract: CsvContract; source: string; target: CsvTarget }
 export interface CsvCrossPlan { mode: "csv"; check: CrossCheck; from: CsvCrossParticipant; to: CsvCrossParticipant; participants: Record<string, CsvCrossParticipant> }
-export type CrossPlan = SqlCrossPlan | CsvCrossPlan;
+export type CrossPlan = SqlCrossPlan | CsvCrossPlan | SqlCrossConnectionPlan;
 export type CrossExecutor = (plan: CrossPlan, signal?: AbortSignal) => Promise<ValidationResult>;
 export interface CrossPlanOptions { targetName?: string }
 export function planCrossCheck(check: CrossCheck, members: { id: string; source?: string; contract?: CsvContract; error?: string }[], options: CrossPlanOptions = {}): CrossPlan {
@@ -84,7 +95,21 @@ export function planCrossCheck(check: CrossCheck, members: { id: string; source?
   const from = scoped(left.target!, "cross_from"), to = scoped(right.target!, "cross_to");
   const participants = Object.fromEntries(Object.entries(required).map(([id, participant], index) => [id, scoped(participant.target!, `cross_required_${index}`)]));
   const connection = JSON.stringify(from.integratedConnection ?? from.connection);
-  if ([to, ...Object.values(participants)].some(target => JSON.stringify(target.integratedConnection ?? target.connection) !== connection)) throw new Error(`Cross-check ${check.id}: targets must use the same connection and database.`);
+  const differentConnection = [to, ...Object.values(participants)].some(target => JSON.stringify(target.integratedConnection ?? target.connection) !== connection);
+  if (check.crossConnection?.enabled) {
+    const columns = crossConnectionColumns(check);
+    return {
+      mode: "sql-cross-connection",
+      check,
+      from: { member: check.from, contract: left.contract, target: left.target!, columns: columns.from },
+      to: { member: check.to, contract: right.contract, target: right.target!, columns: columns.to },
+      participants: Object.fromEntries(Object.entries(required).map(([id, participant]) => [id, {
+        member: id, contract: participant.contract, target: participant.target!, columns: columns.participants[id] ?? []
+      }])),
+      maxRows: check.crossConnection.maxRows
+    };
+  }
+  if (differentConnection) throw new Error(`Cross-check ${check.id}: targets must use the same connection and database unless crossConnection.enabled is explicitly set.`);
   const object = (t: ResolvedSqlServerTarget) => {
     const name = `${sqlIdentifier(t.schema)}.${sqlIdentifier(t.table)}`;
     return t.scope ? `(SELECT * FROM ${name} WHERE CONVERT(nvarchar(max), ${sqlIdentifier(physicalSqlServerColumn(t, t.scope.column))}) = CONVERT(nvarchar(max), @${t.scope.parameter}))` : name;
@@ -171,6 +196,43 @@ export function planCrossCheck(check: CrossCheck, members: { id: string; source?
     detailSql = `SELECT TOP (100) (SELECT a.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS PrimaryRowJson, CASE WHEN b.[__csv_contract_match] = 1 THEN (SELECT b.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) END AS RelatedRowJson FROM ${fromObject} AS a ${lookup} WHERE ${failure};`;
   }
   return { mode: "sql", check, from, to, participants, sql, detailSql: check.evidence === "aggregate" ? undefined : detailSql };
+}
+
+/** Returns the smallest logical-column projection needed for client-side cross-check evaluation. */
+export function crossConnectionColumns(check: CrossCheck): { from: string[]; to: string[]; participants: Record<string, string[]> } {
+  const from = new Set<string>(), to = new Set<string>();
+  const participants = new Map<string, Set<string>>();
+  const addPredicate = (predicate: CrossPredicate | undefined, left = from, right = to): void => {
+    for (const leaf of predicateLeaves(predicate)) {
+      (leaf.side === "from" ? left : right).add(leaf.column);
+      if (leaf.other) (leaf.other.side === "from" ? left : right).add(leaf.other.column);
+    }
+  };
+  for (const key of check.keys ?? []) { from.add(key.from); to.add(key.to); }
+  if (check.valueColumns) { from.add(check.valueColumns.from); to.add(check.valueColumns.to); }
+  for (const mapping of check.valueMappings ?? []) { from.add(mapping.from); to.add(mapping.to); }
+  for (const order of check.lookup?.orderBy ?? []) to.add(order.column);
+  addPredicate(check.when);
+  addPredicate(check.expect);
+  const selectionColumns = (selections: CrossSelection[] | undefined, side: "from" | "to") => {
+    const base = side === "from" ? from : to;
+    for (const selection of selections ?? []) {
+      addPredicate(selection.where, side === "from" ? base : from, side === "to" ? base : to);
+      addPredicate(selection.having, side === "from" ? base : from, side === "to" ? base : to);
+      for (const column of selection.partitionBy ?? []) base.add(column);
+      for (const order of selection.orderBy ?? []) base.add(order.column);
+      for (const required of selection.requires ?? []) {
+        const requiredColumns = participants.get(required.member) ?? new Set<string>();
+        participants.set(required.member, requiredColumns);
+        for (const key of required.keys) { base.add(key.from); requiredColumns.add(key.to); }
+        addPredicate(required.where, base, requiredColumns);
+      }
+    }
+  };
+  selectionColumns(check.fromSelections, "from");
+  selectionColumns(check.toSelections, "to");
+  const sorted = (values: Set<string>) => [...values].sort((a, b) => a.localeCompare(b));
+  return { from: sorted(from), to: sorted(to), participants: Object.fromEntries([...participants].map(([id, values]) => [id, sorted(values)])) };
 }
 
 function normalizedSql(expression: string, normalizers: CrossNormalizer[] = []): string {
@@ -367,12 +429,15 @@ export function evaluateCsvCrossCheck(plan: CsvCrossPlan, fromCsv: ParsedCsv, to
     if ("any" in predicate) return predicate.any.some(item => evaluate(item, from, to));
     const actual = value(predicate, from, to);
     const expected = predicate.other ? (predicate.other.side === "from" ? from : to)[predicate.other.column] ?? "" : String(predicate.value ?? "");
-    const numeric = (compare: (a: number, b: number) => boolean) => actual.trim() !== "" && expected.trim() !== "" && Number.isFinite(Number(actual)) && Number.isFinite(Number(expected)) && compare(Number(actual), Number(expected));
+    const numeric = (compare: (comparison: number) => boolean) => {
+      const left = exactDecimal(actual), right = exactDecimal(expected);
+      return left !== undefined && right !== undefined && compare(compareExactDecimal(left, right));
+    };
     if (predicate.valueType === "number") {
       switch (predicate.operator) {
-        case "equals": return numeric((a, b) => a === b); case "notEquals": return numeric((a, b) => a !== b);
-        case "greaterThan": return numeric((a, b) => a > b); case "greaterThanOrEqual": return numeric((a, b) => a >= b);
-        case "lessThan": return numeric((a, b) => a < b); case "lessThanOrEqual": return numeric((a, b) => a <= b);
+        case "equals": return numeric(value => value === 0); case "notEquals": return numeric(value => value !== 0);
+        case "greaterThan": return numeric(value => value > 0); case "greaterThanOrEqual": return numeric(value => value >= 0);
+        case "lessThan": return numeric(value => value < 0); case "lessThanOrEqual": return numeric(value => value <= 0);
         default: throw new Error(`Unsupported numeric CSV relationship operator '${predicate.operator}'.`);
       }
     }
@@ -382,8 +447,8 @@ export function evaluateCsvCrossCheck(plan: CsvCrossPlan, fromCsv: ParsedCsv, to
       case "isNull": return nullValue(predicate.side, actual); case "notNull": return !nullValue(predicate.side, actual);
       case "isBlank": return actual.trim() === ""; case "notBlank": return actual.trim() !== "";
       case "equalsColumn": return actual === expected; case "notEqualsColumn": return actual !== expected;
-      case "greaterThan": return numeric((a, b) => a > b); case "greaterThanOrEqual": return numeric((a, b) => a >= b);
-      case "lessThan": return numeric((a, b) => a < b); case "lessThanOrEqual": return numeric((a, b) => a <= b);
+      case "greaterThan": return numeric(value => value > 0); case "greaterThanOrEqual": return numeric(value => value >= 0);
+      case "lessThan": return numeric(value => value < 0); case "lessThanOrEqual": return numeric(value => value <= 0);
       case "dateOnOrAfter": return Date.parse(actual) >= Date.parse(expected); case "dateOnOrBefore": return Date.parse(actual) <= Date.parse(expected);
       case "dateAfter": return Date.parse(actual) > Date.parse(expected); case "dateBefore": return Date.parse(actual) < Date.parse(expected);
       default: throw new Error(`Unsupported CSV relationship operator '${predicate.operator}'.`);
@@ -416,6 +481,20 @@ export function evaluateCsvCrossCheck(plan: CsvCrossPlan, fromCsv: ParsedCsv, to
     const failures = Math.abs(fromRows.length - toRows.length);
     return crossResult(check, failures, failures ? { samples: [], aggregate: { fromRows: fromRows.length, toRows: toRows.length } } : undefined);
   }
+  if (check.kind === "equalTotal") {
+    const columns = check.valueColumns!;
+    const aggregate = (rows: Record<string, string>[], column: string, side: "from" | "to") => rows.reduce((state, row) => {
+      const raw = row[column] ?? "";
+      if (nullValue(side, raw)) { if (check.nulls === "fail") state.invalid = true; return state; }
+      const parsed = exactDecimal(raw);
+      if (!parsed) state.invalid = true; else state.total = addExactDecimal(state.total, parsed);
+      return state;
+    }, { total: { coefficient: 0n, scale: 0 } as ExactDecimal, invalid: false });
+    const left = aggregate(fromRows, columns.from, "from"), right = aggregate(toRows, columns.to, "to");
+    const tolerance = exactDecimal(check.tolerance ?? "0");
+    const failures = tolerance && !left.invalid && !right.invalid && compareExactDecimal(absExactDecimal(addExactDecimal(left.total, { coefficient: -right.total.coefficient, scale: right.total.scale })), tolerance) <= 0 ? 0 : 1;
+    return crossResult(check, failures, failures ? { samples: [], aggregate: { fromTotal: formatExactDecimal(left.total), toTotal: formatExactDecimal(right.total), fromInvalid: left.invalid, toInvalid: right.invalid } } : undefined);
+  }
   if (!check.keys?.length) throw new Error(`Cross-check ${check.id}: keys are required for CSV execution.`);
   const index = new Map<string, Record<string, string>[]>();
   for (const row of toRows) { const id = key(row, check.keys, "to"); const rows = index.get(id) ?? []; rows.push(row); index.set(id, rows); }
@@ -436,19 +515,7 @@ export function evaluateCsvCrossCheck(plan: CsvCrossPlan, fromCsv: ParsedCsv, to
     if (failed) retain(row, matches);
     return failed;
   }).length;
-  else if (check.kind === "equalTotal") {
-    const columns = check.valueColumns!;
-    const aggregate = (rows: Record<string, string>[], column: string, side: "from" | "to") => rows.reduce((state, row) => {
-      const raw = row[column] ?? "";
-      if (nullValue(side, raw)) { if (check.nulls === "fail") state.invalid = true; return state; }
-      const parsed = Number(raw);
-      if (!Number.isFinite(parsed)) state.invalid = true; else state.total += parsed;
-      return state;
-    }, { total: 0, invalid: false });
-    const left = aggregate(fromRows, columns.from, "from"), right = aggregate(toRows, columns.to, "to");
-    failures = !left.invalid && !right.invalid && Math.abs(left.total - right.total) <= Number(check.tolerance ?? "0") ? 0 : 1;
-    if (failures) return crossResult(check, failures, { samples: [], aggregate: { fromTotal: left.total, toTotal: right.total, fromInvalid: left.invalid, toInvalid: right.invalid } });
-  } else failures = fromRows.filter(row => {
+  else failures = fromRows.filter(row => {
     if (!hasKeys(row)) { if (check.nulls === "fail") retain(row); return check.nulls === "fail"; }
     const matches = [...(index.get(key(row, check.keys!, "from")) ?? [])];
     if (check.lookup?.orderBy.length && matches.length > 1) matches.sort((a, b) => compareLookupRows(a, b, check.lookup!.orderBy));
@@ -460,15 +527,50 @@ export function evaluateCsvCrossCheck(plan: CsvCrossPlan, fromCsv: ParsedCsv, to
   }).length;
   return crossResult(check, failures, failures ? { samples: evidenceSamples, aggregate: { failureCount: failures }, totalSamples: failures, limited: evidenceSamples.length < failures } : undefined);
 }
+
+interface ExactDecimal { coefficient: bigint; scale: number }
+function exactDecimal(candidate: string): ExactDecimal | undefined {
+  if (candidate.length > 1024) return undefined;
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(candidate.trim());
+  if (!match) return undefined;
+  const exponent = Number(match[4] ?? "0");
+  if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > 100) return undefined;
+  const fraction = match[3] ?? "";
+  let coefficient = BigInt(`${match[1]}${match[2]}${fraction}`);
+  let scale = fraction.length - exponent;
+  if (scale < 0) { coefficient *= 10n ** BigInt(-scale); scale = 0; }
+  return { coefficient, scale };
+}
+function alignExactDecimal(value: ExactDecimal, scale: number): bigint {
+  return value.coefficient * 10n ** BigInt(scale - value.scale);
+}
+function compareExactDecimal(left: ExactDecimal, right: ExactDecimal): number {
+  const scale = Math.max(left.scale, right.scale), a = alignExactDecimal(left, scale), b = alignExactDecimal(right, scale);
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+function addExactDecimal(left: ExactDecimal, right: ExactDecimal): ExactDecimal {
+  const scale = Math.max(left.scale, right.scale);
+  return { coefficient: alignExactDecimal(left, scale) + alignExactDecimal(right, scale), scale };
+}
+function absExactDecimal(value: ExactDecimal): ExactDecimal {
+  return value.coefficient < 0n ? { ...value, coefficient: -value.coefficient } : value;
+}
+function formatExactDecimal(value: ExactDecimal): string {
+  const negative = value.coefficient < 0n, digits = (negative ? -value.coefficient : value.coefficient).toString().padStart(value.scale + 1, "0");
+  const rendered = value.scale ? `${digits.slice(0, -value.scale)}.${digits.slice(-value.scale)}` : digits;
+  return negative ? `-${rendered}` : rendered;
+}
 function compareLookupRows(left: Record<string, string>, right: Record<string, string>, order: NonNullable<CrossCheck["lookup"]>["orderBy"]): number {
   for (const item of order) {
-    const parse = (value: string): string | number | null => {
+    const parse = (value: string): string | number | ExactDecimal | null => {
       if (item.type === "string") return value;
-      const parsed = item.type === "date" ? Date.parse(value) : value.trim() === "" ? Number.NaN : Number(value);
+      if (item.type === "number") return exactDecimal(value) ?? null;
+      const parsed = Date.parse(value);
       return Number.isFinite(parsed) ? parsed : null;
     };
     const a = parse(left[item.column] ?? ""), b = parse(right[item.column] ?? "");
-    const compared = a === null && b === null ? 0 : a === null ? -1 : b === null ? 1 : a < b ? -1 : a > b ? 1 : 0;
+    const compared = a === null && b === null ? 0 : a === null ? -1 : b === null ? 1 :
+      typeof a === "object" && typeof b === "object" ? compareExactDecimal(a, b) : a < b ? -1 : a > b ? 1 : 0;
     if (compared) return (item.direction ?? "asc") === "desc" ? -compared : compared;
   }
   return 0;

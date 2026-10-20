@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { stringify } from "yaml";
-import { effectiveContract, generateSuiteSql, loadSuite, parseSuite, runSuite } from "../src/core/suite";
+import { effectiveContract, generateSuiteSql, loadSuite, parseSuite, runSuite, yamlDocument } from "../src/core/suite";
 import { combineSuite, fileSuiteIO, splitSuite } from "../src/node/suite-files";
 import { validateCsv } from "../src/core/contract";
 import type { CsvContract } from "../src/core/model";
@@ -43,6 +44,29 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
   await writeFile(master, stringify({ suiteVersion: 1, id: "hcm", metadata: { revision: "001" }, members: [{ id: "employees", ref: "./contracts/a.yaml" }, { id: "departments", ref: "./contracts/b.yaml" }] }));
   return { root, master };
 }
+async function rulePackFixture(t: { after(fn: () => Promise<void>): void }) {
+  const root = await mkdtemp(join(tmpdir(), "contract-suite-rule-pack-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, "contracts"), { recursive: true });
+  await mkdir(join(root, "rules"), { recursive: true });
+  await mkdir(join(root, "suites"), { recursive: true });
+  const packText = stringify({ version: 1, id: "common", definitions: [{ id: "checks", fragment: {
+    rules: [{ id: "from-pack", expect: { column: "A", operator: "notBlank" } }]
+  } }] });
+  const pack = join(root, "rules", "common.rulepack.yaml");
+  const sha256 = createHash("sha256").update(packText).digest("hex");
+  await writeFile(pack, packText);
+  const base = { version: 1, schema: { columns: { A: { presence: "required" } } } };
+  const referenced = { ...base, rulePacks: [{ id: "common", ref: "../rules/common.rulepack.yaml", sha256, definition: "checks" }] };
+  await writeFile(join(root, "contracts", "referenced.validation.yaml"), stringify(referenced));
+  const inline = { ...base, rulePacks: [{ id: "common", ref: "../rules/common.rulepack.yaml", sha256, definition: "checks" }] };
+  const master = join(root, "suites", "mega.validationsuite.yaml");
+  await writeFile(master, stringify({ suiteVersion: 1, id: "mega", members: [
+    { id: "referenced", ref: "../contracts/referenced.validation.yaml" },
+    { id: "inline", contract: inline }
+  ] }));
+  return { root, master, pack, sha256 };
+}
 test("combine/split preserves heterogeneous contracts, metadata, literals, order, comments and generated checks", async (t) => {
   const { root, master } = await fixture(t);
   const bundle = join(root, "portable.csvsuite.yaml");
@@ -63,6 +87,82 @@ test("combine/split preserves heterogeneous contracts, metadata, literals, order
   assert.equal(sql.batches.length, 2);
   assert.equal(sql.sql.match(/^GO$/gm)?.length, 2);
   assert.doesNotMatch(sql.sql, /t\.\*/);
+});
+test("combine preserves referenced and inline pinned rule-pack bindings and rebases them", async (t) => {
+  const { root, master, pack, sha256 } = await rulePackFixture(t);
+  const output = join(root, "exports", "nested", "portable.validationsuite.yaml");
+  await mkdir(join(root, "exports", "nested"), { recursive: true });
+  await assert.rejects(combineSuite(master, output), /not portable.*allow-external/s);
+  assert.equal(await readFile(output, "utf8").then(() => true, () => false), false);
+  const result = await combineSuite(master, output, { allowExternal: true });
+  assert.equal(result.portable, false);
+  assert.equal(result.dependencies.filter((dependency) => dependency.includes("rule pack:")).length, 2);
+  const bundled = parseSuite(await readFile(output, "utf8"));
+  for (const member of bundled.members) {
+    assert.equal(member.ref, undefined);
+    assert.equal(member.contract?.rules, undefined);
+    assert.equal(member.contract?.rulePacks?.[0].sha256, sha256);
+    assert.equal(resolve(output, "..", member.contract!.rulePacks![0].ref), pack);
+  }
+  const original = await loadSuite(master, fileSuiteIO);
+  const reloaded = await loadSuite(output, fileSuiteIO);
+  assert.deepEqual(reloaded.members.map((member) => member.contract), original.members.map((member) => member.contract));
+});
+test("CLI --allow-external explicitly permits preserved rule-pack dependencies", async (t) => {
+  const { root, master } = await rulePackFixture(t);
+  const cli = resolve("dist/cli/csv-contract.cjs");
+  const rejectedOutput = join(root, "rejected.validationsuite.yaml");
+  const rejected = spawnSync(process.execPath, [cli, "combine", "--spec", master, "--out", rejectedOutput], { encoding: "utf8" });
+  assert.equal(rejected.status, 2);
+  assert.match(rejected.stderr, /not portable.*allow-external/s);
+  assert.equal(await readFile(rejectedOutput, "utf8").then(() => true, () => false), false);
+
+  const allowedOutput = join(root, "allowed.validationsuite.yaml");
+  const allowed = spawnSync(process.execPath, [cli, "combine", "--spec", master, "--out", allowedOutput, "--allow-external"], { encoding: "utf8" });
+  assert.equal(allowed.status, 0, allowed.stderr);
+  assert.equal(JSON.parse(allowed.stdout).portable, false);
+  assert.deepEqual((await loadSuite(allowedOutput, fileSuiteIO)).members.map((member) => member.error), [undefined, undefined]);
+});
+test("combine followed by split preserves pinned rule-pack bindings and executable semantics", async (t) => {
+  const { root, master, pack, sha256 } = await rulePackFixture(t);
+  const bundle = join(root, "portable.validationsuite.yaml");
+  await combineSuite(master, bundle, { allowExternal: true });
+  const split = await splitSuite(bundle, join(root, "split"));
+  const original = await loadSuite(master, fileSuiteIO);
+  const restored = await loadSuite(split.master, fileSuiteIO);
+  assert.deepEqual(restored.members.map((member) => member.contract), original.members.map((member) => member.contract));
+  for (const path of split.files.filter((file) => file !== split.master)) {
+    const restoredContract = yamlDocument(await readFile(path, "utf8")).toJS() as CsvContract;
+    assert.equal(restoredContract.rules, undefined);
+    assert.equal(restoredContract.rulePacks?.[0].sha256, sha256);
+    assert.equal(resolve(path, "..", restoredContract.rulePacks![0].ref), pack);
+  }
+});
+test("combine and split reject stale rule-pack pins without writing output", async (t) => {
+  const { root, master } = await rulePackFixture(t);
+  const text = await readFile(master, "utf8");
+  await writeFile(master, text.replace(/[a-f0-9]{64}/g, "f".repeat(64)));
+  const output = join(root, "stale.validationsuite.yaml");
+  await assert.rejects(combineSuite(master, output, { allowExternal: true }), /Pinned hash mismatch/);
+  assert.equal(await readFile(output, "utf8").then(() => true, () => false), false);
+
+  const valid = await rulePackFixture(t);
+  const bundle = join(valid.root, "portable.validationsuite.yaml");
+  await combineSuite(valid.master, bundle, { allowExternal: true });
+  const bundledText = await readFile(bundle, "utf8");
+  await writeFile(bundle, bundledText.replace(/[a-f0-9]{64}/g, "f".repeat(64)));
+  const splitDirectory = join(valid.root, "stale-split");
+  await assert.rejects(splitSuite(bundle, splitDirectory), /Pinned hash mismatch/);
+  assert.equal(await readFile(splitDirectory, "utf8").then(() => true, () => false), false);
+});
+test("split preserves the generic validation naming family", async (t) => {
+  const { root, master } = await fixture(t);
+  const bundle = join(root, "portable.validationsuite.yaml");
+  await combineSuite(master, bundle);
+  const split = await splitSuite(bundle, join(root, "generic-split"));
+  assert.match(split.master, /hcm\.validationsuite\.yaml$/);
+  assert.ok(split.files.filter((path) => path !== split.master).every((path) => /\.validation\.yaml$/.test(path)));
+  assert.equal((await loadSuite(split.master, fileSuiteIO)).members.length, 2);
 });
 test("connection defaults are atomic and target overrides contract overrides suite", () => {
   const c = contract();

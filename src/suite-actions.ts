@@ -1,4 +1,5 @@
 import { yamlDocument, type SuiteConnection, type SuiteRun } from "./core/suite";
+import type { SuiteTargetOverride } from "./core/suite-target-policy";
 import { rowsToCsv } from "./comparison/evidence";
 
 /** Edit only the selected connection mapping; retain YAML nodes and comments elsewhere. */
@@ -7,6 +8,30 @@ export function updateSuiteConnection(text: string, path: (string | number)[], s
   doc.deleteIn([...path, "connection"]);
   doc.deleteIn([...path, "integratedConnection"]);
   for (const [key, value] of Object.entries(settings)) doc.setIn([...path, key], value);
+  return doc.toString();
+}
+
+/** Update one suite environment policy without rewriting unrelated YAML nodes or comments. */
+export function updateSuiteEnvironmentPolicy(text: string, environment: string, enabled?: boolean): string {
+  const doc = yamlDocument(text);
+  const path = ["targetPolicy", "sqlServer", "environments", environment];
+  if (enabled === undefined) doc.deleteIn(path);
+  else doc.setIn(path, enabled);
+  return doc.toString();
+}
+
+/** Update or reset one member target override while leaving referenced child contracts untouched. */
+export function updateSuiteTargetOverride(text: string, memberIndex: number, target: string, enabled?: boolean): string {
+  const doc = yamlDocument(text);
+  const path = ["members", memberIndex, "targetOverrides"];
+  const current = doc.getIn(path) as { toJSON?: () => unknown } | undefined;
+  const overrides = current?.toJSON?.();
+  const list = Array.isArray(overrides) ? overrides.filter((item): item is SuiteTargetOverride =>
+    !!item && typeof item === "object" && typeof (item as SuiteTargetOverride).target === "string") : [];
+  const next = list.filter(item => item.target !== target);
+  if (enabled !== undefined) next.push({ target, enabled });
+  if (next.length) doc.setIn(path, next);
+  else doc.deleteIn(path);
   return doc.toString();
 }
 

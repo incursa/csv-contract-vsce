@@ -5,7 +5,7 @@ import { renderSuiteWorkbench, type SuiteRunProgress } from "../src/suite-workbe
 import type { LoadedSuite } from "../src/core/suite";
 import { runSuite, yamlDocument } from "../src/core/suite";
 import { errorDetails } from "../src/core/error-details";
-import { suiteErrorsCsv, updateSuiteConnection } from "../src/suite-actions";
+import { suiteErrorsCsv, updateSuiteConnection, updateSuiteEnvironmentPolicy, updateSuiteTargetOverride } from "../src/suite-actions";
 
 const suite: LoadedSuite = { id: "hcm", source: "file:///suite.csvsuite.yaml", isSuite: true, members: [
   { id: "employees", source: "file:///employees.yaml", contract: { version: 1, schema: { columns: { EmployeeId: { presence: "required", constraints: { notNull: true } } } }, sqlServer: { connection: "local", schema: "staging", table: "Employees" } } },
@@ -33,6 +33,47 @@ test("suite Workbench shows independent members, filters, and sends actions only
   document.querySelector<HTMLButtonElement>('[data-action="member"][data-index="1"]')!.click();
   assert.deepEqual(JSON.parse(JSON.stringify(messages)), [{ type: "run" }, { type: "member", index: 1 }]);
   dom.window.close();
+});
+
+test("suite Workbench shows effective target policy provenance and emits explicit policy edits", () => {
+  const messages: unknown[] = [];
+  const policySuite = { id: "policy", source: "file:///suite.csvsuite.yaml", isSuite: true,
+    targetPolicy: { sqlServer: { environments: { dev: true, prod: false } } },
+    members: [{ id: "workers", source: "file:///workers.csvtest.yaml", targetOverrides: [{ target: "prod", enabled: true }], contract: {
+      version: 1, schema: { columns: { WorkerId: { presence: "required" } } }, sqlServer: { connection: "local", targets: [
+        { id: "dev", environment: "dev", schema: "staging", table: "Workers", enabled: false },
+        { id: "prod", environment: "prod", schema: "dbo", table: "Workers", enabled: false }
+      ] }
+    } }] } as LoadedSuite;
+  const dom = new JSDOM(renderSuiteWorkbench({ suite: policySuite, references: ["./workers.csvtest.yaml"] }, "test"), {
+    runScripts: "dangerously",
+    beforeParse(window) { Object.assign(window, { acquireVsCodeApi: () => ({ postMessage: (message: unknown) => messages.push(message), getState: () => undefined, setState: () => {} }) }); }
+  });
+  const document = dom.window.document;
+  assert.match(document.body.textContent!, /suite-policy/);
+  assert.match(document.body.textContent!, /member-override/);
+  assert.match(document.body.textContent!, /dev[\s\S]*Enabled/);
+  assert.match(document.querySelector('[data-member="workers"] .target-policy')!.textContent!, /prod[\s\S]*ENABLED/);
+  document.querySelector<HTMLButtonElement>('[data-action="environment-policy"][data-environment="prod"][data-enabled="true"]')!.click();
+  document.querySelector<HTMLButtonElement>('[data-action="target-override"][data-target="prod"][data-enabled=""]')!.click();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages)), [
+    { type: "environment-policy", environment: "prod", enabled: true },
+    { type: "target-override", index: 0, target: "prod", enabled: null }
+  ]);
+  dom.window.close();
+});
+
+test("suite target policy YAML edits preserve unrelated content and never edit child references", () => {
+  const text = `version: 1\nid: policy\n# keep this suite comment\nmetadata:\n  owner: payroll\ntargetPolicy:\n  sqlServer:\n    environments:\n      dev: true\nmembers:\n  - id: workers\n    ref: ./workers.csvtest.yaml\n    targetOverrides:\n      - target: prod\n        enabled: false\n`;
+  const environmentChanged = updateSuiteEnvironmentPolicy(text, "prod", false);
+  const overrideChanged = updateSuiteTargetOverride(environmentChanged, 0, "prod", true);
+  const reset = updateSuiteTargetOverride(overrideChanged, 0, "prod", undefined);
+  assert.match(environmentChanged, /# keep this suite comment/);
+  assert.match(environmentChanged, /owner: payroll/);
+  assert.match(environmentChanged, /prod: false/);
+  assert.match(overrideChanged, /target: prod\s+enabled: true/);
+  assert.doesNotMatch(reset, /targetOverrides/);
+  assert.match(reset, /ref: \.\/workers\.csvtest\.yaml/);
 });
 
 test("suite run view rolls up a 17-file suite and keeps target progress compact", () => {
@@ -146,7 +187,7 @@ test("suite Workbench shows graded health without changing failure status", asyn
     issues: [{ level: "row", code: "VALUE_INVALID", testId: "value-valid", message: "Review this value." }] }));
   const dom = new JSDOM(renderSuiteWorkbench({ suite, runs: report.runs, resultColorMode: "graded" }, "test"));
   assert.match(dom.window.document.querySelector(".overview .badge")!.textContent!, /FAIL · (Limited|Moderate|High) impact/);
-  assert.match(dom.window.document.querySelector(".overview .badge")!.getAttribute("title")!, /Health score \d+\/100/);
+  assert.match(dom.window.document.querySelector(".overview .badge")!.getAttribute("title")!, /Health heuristic score \d+\/100/);
   assert.equal(dom.window.document.querySelectorAll(".health-perfect").length, 0);
   assert.match(dom.window.document.body.textContent!, /FAIL · (Limited|Moderate|High) impact/);
   dom.window.close();

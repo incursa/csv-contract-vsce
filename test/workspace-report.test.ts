@@ -88,6 +88,6 @@ test("graded reports reserve perfect styling and put numeric health in hover det
   });
   assert.match(html, /FAIL · (Limited|Moderate|High) impact/);
   assert.match(html, /PASS · Clean/);
-  assert.match(html, /Health score \d+\/100/);
+  assert.match(html, /Health heuristic score \d+\/100/);
   assert.match(html, /report-status--(?:attention|concerning|critical)/);
 });

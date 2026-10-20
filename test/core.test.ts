@@ -101,7 +101,7 @@ test("weights row-test failures and rejects importance outside the documented ra
   assert.equal(result.valid, false);
   assert.equal(result.issues.find((issue) => issue.testId === "email-lowercase")?.importance, 0.25);
 
-  assert.throws(() => parseContract(`version: 1\nschema:\n  columns:\n    A: { presence: required }\nrules:\n  - id: invalid\n    importance: 2\n    expect: { column: A, operator: notBlank }\n`), /Invalid contract|importance must be a finite number from 0 to 1/);
+  assert.throws(() => parseContract(`version: 1\nschema:\n  columns:\n    A: { presence: required }\nrules:\n  - id: invalid\n    importance: 11\n    expect: { column: A, operator: notBlank }\n`), /Invalid contract|importance must be a finite number from 0\.1 through 10/);
 });
 
 test("conditional warning rules use numeric predicates without failing the contract", () => {

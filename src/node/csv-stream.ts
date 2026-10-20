@@ -20,6 +20,7 @@ export interface CsvStreamOptions {
   maxRecords?: number;
   progressInterval?: number;
   onProgress?: (progress: CsvStreamProgress) => void;
+  signal?: AbortSignal;
 }
 
 class CsvChunkParser {
@@ -114,6 +115,7 @@ export async function* readCsvRecords(
   physical: CsvPhysicalOptions,
   options: CsvStreamOptions = {}
 ): AsyncGenerator<CsvRecord, CsvStreamProgress> {
+  options.signal?.throwIfAborted();
   if ([...physical.delimiter].length !== 1 || [...physical.quote].length !== 1) {
     throw new Error("Streaming CSV validation requires one-character delimiter and quote values.");
   }
@@ -123,9 +125,13 @@ export async function* readCsvRecords(
   let acceptedRecords = 0;
   let lastProgress = 0;
   const maxRecords = options.maxRecords ?? Number.POSITIVE_INFINITY;
+  const abort = (): void => { stream.destroy(options.signal?.reason); };
+  options.signal?.addEventListener("abort", abort, { once: true });
   try {
     for await (const chunk of stream) {
+      options.signal?.throwIfAborted();
       for (const fields of parser.push(chunk)) {
+        options.signal?.throwIfAborted();
         recordNumber += 1;
         if (!physical.allowBlankRows && fields.length === 1 && fields[0].trim().length === 0) continue;
         acceptedRecords += 1;
@@ -143,7 +149,9 @@ export async function* readCsvRecords(
         }
       }
     }
+    options.signal?.throwIfAborted();
     for (const fields of parser.finish()) {
+      options.signal?.throwIfAborted();
       recordNumber += 1;
       if (!physical.allowBlankRows && fields.length === 1 && fields[0].trim().length === 0) continue;
       acceptedRecords += 1;
@@ -152,6 +160,7 @@ export async function* readCsvRecords(
     }
     return { bytesRead: stream.bytesRead, recordsRead: acceptedRecords };
   } finally {
+    options.signal?.removeEventListener("abort", abort);
     stream.destroy();
   }
 }

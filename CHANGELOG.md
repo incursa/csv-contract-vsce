@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+## 0.27.0
+
+- Require an `asInvoker` Windows executable manifest and verify actual process elevation, integrity, and Administrators SID state during portable-runner packaging.
+- Run file validation and reports with a standard user token, using current-user temporary files; never install drivers or request elevation. Windows-auth SQL still requires an already-provisioned compatible ODBC driver.
+- Stream desktop, CLI, and standalone Excel exports to disk with cancellation and atomic publication; shard oversized sheets at Excel row and column limits.
+- Default Excel exports to aggregate-only evidence. Detailed desktop/CLI exports require explicit opt-in; browser fallback serialization/downloads have memory caps.
+- Preview local rule-pack pin updates, validate candidate dependencies, show truthful semantic comparisons, and apply only the reviewed hash without rewriting unrelated YAML.
+- Preserve the existing extension identity and version-1 validation file formats.
+
+## 0.26.0
+
+- Add a portable Windows runner with a loopback-only UI, explicit target confirmation, cancellation, and the existing CLI engine.
+- Add aggregate-first offline HTML reports and versioned, validated review packages with SHA-256 definition provenance and redaction.
+- Open and compare saved review packages without re-querying sources; incomplete or incompatible comparisons remain indeterminate.
+- Add bounded explicit check outcomes, optional importance weighting, and clearer Excel target/check matrices.
+- Add suite environment target policies, per-member overrides, provenance, and stable run-work identities.
+- Add pinned local rule packs, dependency explanations, and synthetic acceptance fixtures for complex rules.
+- Extend SQL schema baselines with permission-aware foreign-key and filtered-index metadata.
+- Add explicit, bounded cross-connection checks and improve CSV/SQL cancellation and resource cleanup.
+- Retain version-1 validation definitions, legacy file-name compatibility, and the existing extension identity.
+
+## 0.25.0
+
+- Present the installed extension as Validation Workbench while preserving the existing extension ID, command IDs, settings, and file formats.
+- Add first-class `*.validation.yaml` and `*.validationsuite.yaml` names alongside the fully supported `*.csvtest.yaml` and `*.csvsuite.yaml` compatibility names.
+- Select groups for child-contract validation with composable filtered row-count and distinct-value-count conditions.
+- Add a validation capability catalog and expand AI authoring guidance for choosing row, group, ordered, lifecycle, and suite test scopes.
+
 ## 0.24.0
 
 - Reuse one logical suite member across identically named CSV or SQL targets with a suite `targetMatrix`.

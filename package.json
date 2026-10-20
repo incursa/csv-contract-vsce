@@ -1,8 +1,8 @@
 {
   "name": "csv-contract-vsce",
-  "displayName": "CSV Contract Workbench",
-  "description": "Design and run reusable YAML contracts for CSV files and SQL Server tables.",
-  "version": "0.24.0",
+  "displayName": "Validation Workbench",
+  "description": "Design and run reusable YAML validations for files and SQL Server tables.",
+  "version": "0.27.0",
   "publisher": "incursa",
   "license": "Apache-2.0",
   "engines": {
@@ -41,96 +41,112 @@
   "contributes": {
     "commands": [
       {
+        "command": "csv-contract-vsce.updateRulePackPin",
+        "title": "Preview and Update Rule-Pack Pin",
+        "category": "Validation",
+        "enablement": "!isWeb"
+      },
+      {
+        "command": "csv-contract-vsce.openReviewPackage",
+        "title": "Open Saved Review Package",
+        "category": "Validation"
+      },
+      {
+        "command": "csv-contract-vsce.compareReviewPackages",
+        "title": "Compare Saved Review Packages",
+        "category": "Validation"
+      },
+      {
         "command": "csv-contract-vsce.createFromCsv",
         "title": "Create Contract from CSV",
-        "category": "CSV Contract"
+        "category": "Validation"
       },
       {
         "command": "csv-contract-vsce.runContract",
         "title": "Run Contract",
-        "category": "CSV Contract"
+        "category": "Validation"
       },
       {
         "command": "csv-contract-vsce.openWorkbench",
         "title": "Open Workbench",
-        "category": "CSV Contract"
+        "category": "Validation"
       },
       {
         "command": "csv-contract-vsce.openExplorer",
         "title": "Open Workspace Tests",
-        "category": "CSV Contract"
+        "category": "Validation"
       },
       {
         "command": "csv-contract-vsce.runSelectedContracts",
         "title": "Run Selected Workspace Contracts",
-        "category": "CSV Contract",
+        "category": "Validation",
         "icon": "$(run-all)"
       },
       {
         "command": "csv-contract-vsce.showWorkspaceReport",
         "title": "Show Workspace Report",
-        "category": "CSV Contract",
+        "category": "Validation",
         "icon": "$(output)"
       },
       {
         "command": "csv-contract-vsce.refreshExplorer",
         "title": "Refresh Workspace Tests",
-        "category": "CSV Contract",
+        "category": "Validation",
         "icon": "$(refresh)"
       },
       {
         "command": "csv-contract-vsce.openTargetInVsCode",
         "title": "Open Target in VS Code",
-        "category": "CSV Contract",
+        "category": "Validation",
         "icon": "$(go-to-file)"
       },
       {
         "command": "csv-contract-vsce.openTargetExternally",
         "title": "Open Target Externally",
-        "category": "CSV Contract",
+        "category": "Validation",
         "icon": "$(link-external)"
       },
       {
         "command": "csv-contract-vsce.compareCsv",
         "title": "Compare CSV Files Semantically",
-        "category": "CSV Contract"
+        "category": "Validation"
       },
       {
         "command": "csv-contract-vsce.generateSqlServerValidation",
         "title": "Generate SQL Server Staging Validation",
-        "category": "CSV Contract"
+        "category": "Validation"
       },
       {
         "command": "csv-contract-vsce.importSqlServerSchema",
         "title": "Import SQL Server Table Schema",
-        "category": "CSV Contract"
+        "category": "Validation"
       },
       {
         "command": "csv-contract-vsce.configureSqlServerConnection",
         "title": "Configure SQL Server Connection",
-        "category": "CSV Contract"
+        "category": "Validation"
       },
       {
         "command": "csv-contract-vsce.forgetSqlServerConnection",
         "title": "Forget SQL Server Connection",
-        "category": "CSV Contract"
+        "category": "Validation"
       },
       {
         "command": "csv-contract-vsce.addSqlServerTarget",
         "title": "Add SQL Server Table or View",
-        "category": "CSV Contract"
+        "category": "Validation"
       },
       {
         "command": "csv-contract-vsce.loadComparison",
         "title": "Load Comparison Setup",
-        "category": "CSV Contract"
+        "category": "Validation"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
           "id": "csvContractExplorer",
-          "title": "CSV Contract",
+          "title": "Validation",
           "icon": "resources/csv-contract.svg"
         }
       ]
@@ -144,6 +160,12 @@
       ]
     },
     "menus": {
+      "commandPalette": [
+        {
+          "command": "csv-contract-vsce.updateRulePackPin",
+          "when": "!isWeb"
+        }
+      ],
       "view/title": [
         {
           "command": "csv-contract-vsce.runSelectedContracts",
@@ -177,7 +199,7 @@
     "customEditors": [
       {
         "viewType": "csv-contract-vsce.contractEditor",
-        "displayName": "CSV Contract Workbench",
+        "displayName": "Validation Workbench",
         "selector": [
           {
             "filenamePattern": "*.csvtest.yaml"
@@ -190,6 +212,18 @@
           },
           {
             "filenamePattern": "*.csvsuite.yml"
+          },
+          {
+            "filenamePattern": "*.validation.yaml"
+          },
+          {
+            "filenamePattern": "*.validation.yml"
+          },
+          {
+            "filenamePattern": "*.validationsuite.yaml"
+          },
+          {
+            "filenamePattern": "*.validationsuite.yml"
           }
         ],
         "priority": "default"
@@ -205,14 +239,42 @@
       },
       {
         "fileMatch": [
+          "*.validation.yaml",
+          "*.validation.yml"
+        ],
+        "url": "./schemas/validation.schema.json"
+      },
+      {
+        "fileMatch": [
           "*.csvsuite.yaml",
           "*.csvsuite.yml"
         ],
         "url": "./schemas/csvsuite.schema.json"
+      },
+      {
+        "fileMatch": [
+          "*.validationsuite.yaml",
+          "*.validationsuite.yml"
+        ],
+        "url": "./schemas/validationsuite.schema.json"
+      },
+      {
+        "fileMatch": [
+          "*.rulepack.yaml",
+          "*.rulepack.yml"
+        ],
+        "url": "./schemas/rulepack.schema.json"
+      },
+      {
+        "fileMatch": [
+          "*.validationfixtures.yaml",
+          "*.validationfixtures.yml"
+        ],
+        "url": "./schemas/validationfixtures.schema.json"
       }
     ],
     "configuration": {
-      "title": "CSV Contract",
+      "title": "Validation Workbench",
       "properties": {
         "csvContract.defaultNullValues": {
           "type": "array",
@@ -258,6 +320,9 @@
     }
   },
   "activationEvents": [
+    "onCommand:csv-contract-vsce.updateRulePackPin",
+    "onCommand:csv-contract-vsce.openReviewPackage",
+    "onCommand:csv-contract-vsce.compareReviewPackages",
     "onCustomEditor:csv-contract-vsce.contractEditor",
     "onCommand:csv-contract-vsce.createFromCsv",
     "onCommand:csv-contract-vsce.runContract",
@@ -294,6 +359,7 @@
     "benchmark": "npm run build:production && pwsh -NoProfile -File scripts/Test-CsvContractPerformance.ps1 -Rows 100000 -Columns 100",
     "vscode:prepublish": "npm run build:production",
     "package:vsix": "npm run build:production && vsce package --out csv-contract-vsce.vsix",
+    "package:standalone": "npm run build:production && node scripts/package-standalone.mjs",
     "publish:marketplace": "npm run build:production && vsce publish",
     "release:check": "npm run test:all && npm run brand:verify && npm run package:vsix",
     "cli": "node dist/cli/csv-contract.cjs",

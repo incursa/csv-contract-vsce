@@ -128,7 +128,7 @@ const server = createServer(async (request, response) => {
     response.end(await readFile("dist/web/webview.css"));
   } else {
     response.setHeader("content-type", "text/html");
-    response.end(`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'nonce-smoke';"><title>CSV Contract Workbench</title><link rel="stylesheet" href="/webview.css"><script nonce="smoke">window.__messages=[];window.acquireVsCodeApi=()=>({postMessage:m=>window.__messages.push(m)});</script></head><body><main id="app"></main><script nonce="smoke" src="/webview.js"></script></body></html>`);
+    response.end(`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'nonce-smoke';"><title>Validation Workbench</title><link rel="stylesheet" href="/webview.css"><script nonce="smoke">window.__messages=[];window.acquireVsCodeApi=()=>({postMessage:m=>window.__messages.push(m)});</script></head><body><main id="app"></main><script nonce="smoke" src="/webview.js"></script></body></html>`);
   }
 });
 
@@ -142,9 +142,9 @@ page.on("console", (message) => {
   if (message.type() === "error" || message.type() === "warning") consoleProblems.push(`${message.type()}: ${message.text()}`);
 });
 await page.goto(`http://127.0.0.1:${address.port}`);
-if ((await page.title()) !== "CSV Contract Workbench") throw new Error("Unexpected webview page title.");
+if ((await page.title()) !== "Validation Workbench") throw new Error("Unexpected webview page title.");
 await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message", { data: message })), state);
-await page.locator("text=CSV Contract Workbench").waitFor();
+await page.locator("text=Validation Workbench").waitFor();
 await page.locator('[data-column="CustomerId"]').click();
 if (await page.locator(".metrics").count() !== 1) throw new Error("Metric layout did not render.");
 const colorModeSelector = page.locator('[data-action="result-color-mode"]');
@@ -236,7 +236,7 @@ await page.evaluate((message) => window.dispatchEvent(new MessageEvent("message"
 if ((await page.locator(".results .finding-card").count()) !== 12) throw new Error("Finding list must include all retained issues.");
 const healthStatus = page.locator(".results .result-health__status").first();
 if (!/FAIL · (Limited|Moderate|High) impact/.test((await healthStatus.textContent()) ?? "")
-  || !/Health score \d+\/100/.test((await healthStatus.getAttribute("title")) ?? "")
+  || !/Health heuristic score \d+\/100/.test((await healthStatus.getAttribute("title")) ?? "")
   || await page.locator(".results .result-health--perfect").count()) {
   throw new Error("Graded results did not keep a failed run visibly distinct from a perfect pass.");
 }
@@ -530,7 +530,7 @@ await runMessage({ type: "runTargetComplete", index: 0, status: "PASS", rows: 10
 await runMessage({ type: "runTargetComplete", index: 1, status: "FAIL", rows: 2, health: { score: 74, band: "concerning", label: "FAIL" } });
 await runMessage({ type: "runState", running: false });
 if (!(await page.locator('.run-target').nth(1).textContent()).includes("FAIL · Moderate impact")
-  || !/Health score 74\/100/.test((await page.locator('.run-target').nth(1).locator('.run-target__status').getAttribute("title")) ?? "")
+  || !/Health heuristic score 74\/100/.test((await page.locator('.run-target').nth(1).locator('.run-target__status').getAttribute("title")) ?? "")
   || await page.locator('.run-target').nth(1).locator('.run-target__health-scale').count() !== 0) {
   throw new Error("Completed run progress did not show the graded category on its main bar.");
 }

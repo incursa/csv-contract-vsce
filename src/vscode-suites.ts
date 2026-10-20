@@ -14,12 +14,17 @@ import { configuredTargets, readTargetText } from "./vscode-targets";
 import { resolveSqlServerTargets } from "./core/sql-server-targets";
 import { parseCsv, validateCsv } from "./core/contract";
 import { renderSuiteWorkbench, type SuiteMemberProgress, type SuiteRunProgress, type SuiteTargetProgress } from "./suite-workbench";
-import { suiteErrorsCsv, updateSuiteConnection } from "./suite-actions";
-import { badRowsXlsx, contractCheckCatalog } from "./bad-rows-xlsx";
+import { suiteErrorsCsv, updateSuiteConnection, updateSuiteEnvironmentPolicy, updateSuiteTargetOverride } from "./suite-actions";
+import { contractCheckCatalog } from "./bad-rows-xlsx";
+import { confirmWorkbookEvidenceMode, exportValidationWorkbook } from "./vscode-workbook-export";
+import { hasCompleteReviewDefinition, reviewDefinitionText } from "./core/review-provenance";
 import { filterResultRuns } from "./results-view";
 import { errorDetails } from "./core/error-details";
 import type { SuiteConnection } from "./core/suite";
 import type { ResultColorMode } from "./core/result-health";
+import { isValidationSuitePath } from "./core/validation-files";
+import { createValidationReviewPackage } from "./core/review-package";
+import { renderValidationReportHtml } from "./validation-report";
 
 export async function editSuiteConnection(document: vscode.TextDocument, index?: number, standalone = false, memberId?: string, targetIndex?: number): Promise<void> {
   const suite = standalone ? { members: [] } : parseSuite(document.getText());
@@ -126,6 +131,19 @@ async function bulkConnections(document: vscode.TextDocument): Promise<void> {
   if (!await vscode.workspace.applyEdit(edit)) throw new Error("Could not apply bulk connection changes.");
 }
 
+async function applySuiteTextUpdate(document: vscode.TextDocument, update: (text: string) => string): Promise<void> {
+  const version = document.version;
+  const before = document.getText();
+  // Parse the current in-memory editor text first. Invalid dirty drafts must never be overwritten.
+  parseSuite(before);
+  const after = update(before);
+  if (after === before) return;
+  if (document.version !== version) throw new Error("The suite changed while editing its target policy. Please try again.");
+  const edit = new vscode.WorkspaceEdit();
+  edit.replace(document.uri, new vscode.Range(document.positionAt(0), document.positionAt(before.length)), after);
+  if (!await vscode.workspace.applyEdit(edit)) throw new Error("Could not update the suite target policy.");
+}
+
 function suiteProgressPlan(suite: LoadedSuite, selected?: string[]): SuiteRunProgress {
   const included = selected ? new Set(selected) : undefined;
   return {
@@ -171,6 +189,8 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
   let renderVersion = 0;
   let notice: string | undefined;
   let report: Awaited<ReturnType<typeof executeVscodeSuite>> | undefined;
+  let reportDefinitions: Array<{ source: string; text: string }> | undefined;
+  let pendingDefinitions: Array<{ source: string; text: string }> | undefined;
   let mergeMembers: string[] | undefined;
   let runView = false;
   let runProgress: SuiteRunProgress | undefined;
@@ -201,6 +221,13 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
     }
   };
   const scheduler = new LiveTests<{ suite: LoadedSuite; members?: string[] }, Awaited<ReturnType<typeof executeVscodeSuite>>>(async (snapshot, signal) => {
+    pendingDefinitions = snapshot.suite.members.every(member => member.contract && hasCompleteReviewDefinition(member.contract)) ? [
+      { source: document.uri.toString(), text: document.getText() },
+      ...snapshot.suite.members.filter(member => member.contract).map(member => ({
+        source: `${member.source}#suite-member=${encodeURIComponent(member.id)}`,
+        text: JSON.stringify({ member: member.id, contract: reviewDefinitionText(member.contract!), targetPolicy: snapshot.suite.targetPolicy, targetOverrides: member.targetOverrides }, null, 2)
+      }))
+    ] : undefined;
     running = true; runView = true; runProgress = suiteProgressPlan(snapshot.suite, snapshot.members); notice = "Executing selected scope…"; await render();
     const lastProgress = new Map<string, number>();
     const memberTarget = (target: Pick<import("./core/suite").SuiteRun, "member">, index: number): SuiteTargetProgress | undefined =>
@@ -231,6 +258,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
       });
     } finally { running = false; if (runProgress) runProgress.running = false; }
   }, result => {
+    const mergedSnapshot = !!mergeMembers?.length && !!report;
     if (mergeMembers?.length && report) {
       const selected = new Set(mergeMembers);
       const rerun = result.runs.filter(run => selected.has(run.member) || run.member.startsWith("cross:") && run.status !== "SKIPPED");
@@ -248,6 +276,8 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
         summary,
         members: result.members.map(member => ({ id: member.id, runs: combined.filter(run => run.member === member.id) })) };
     }
+    reportDefinitions = mergedSnapshot ? undefined : pendingDefinitions;
+    pendingDefinitions = undefined;
     mergeMembers = undefined;
     report = result; stale = false; affected.clear(); notice = `${result.status}: ${result.runs.length} work items; ${new Date().toISOString()}`;
     if (runProgress) {
@@ -312,7 +342,7 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
   const subscriptions = [watcher, watcher.onDidChange(uri => { void refresh(uri); }), watcher.onDidCreate(uri => { void refresh(uri); }), watcher.onDidDelete(uri => { void refresh(uri); }),
     vscode.workspace.onDidChangeTextDocument((event) => {
       if (/\.ya?ml$/i.test(event.document.uri.path)) void refresh(event.document.uri);
-    }), panel.webview.onDidReceiveMessage(async (message: { type?: string; index?: number; ruleId?: string; memberId?: string; memberIds?: string[]; resultFilter?: string; selectedIssues?: string[] }) => {
+    }), panel.webview.onDidReceiveMessage(async (message: { type?: string; index?: number; ruleId?: string; memberId?: string; memberIds?: string[]; resultFilter?: string; selectedIssues?: string[]; environment?: string; target?: string; enabled?: boolean | null }) => {
       try {
         if (["run", "selected", "failed"].includes(message.type ?? "") && !running) {
           mergeMembers = undefined;
@@ -340,6 +370,16 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
           scheduler.request();
         } else if (message.type === "suiteRunReady") { publishRunProgress(true);
         } else if (message.type === "show-results") { runView = false; await render();
+        } else if (message.type === "environment-policy" && message.environment && !running) {
+          await applySuiteTextUpdate(document, text => updateSuiteEnvironmentPolicy(text, message.environment!, message.enabled === null ? undefined : message.enabled));
+          notice = `${message.environment} now ${message.enabled === null ? "uses contract defaults" : message.enabled ? "is enabled by suite policy" : "is disabled by suite policy"}.`;
+          await refresh();
+        } else if (message.type === "target-override" && message.target && Number.isInteger(message.index) && !running) {
+          const parsed = parseSuite(document.getText());
+          if (message.index! < 0 || message.index! >= parsed.members.length) throw new Error("The selected suite member no longer exists.");
+          await applySuiteTextUpdate(document, text => updateSuiteTargetOverride(text, message.index!, message.target!, message.enabled === null ? undefined : message.enabled));
+          notice = `${message.target} ${message.enabled === null ? "now inherits suite or contract policy" : message.enabled ? "is enabled for this member" : "is disabled for this member"}.`;
+          await refresh();
         } else if (message.type === "color-mode") {
           const current = vscode.workspace.getConfiguration("csvContract").get<ResultColorMode>("resultColorMode", "binary");
           await vscode.workspace.getConfiguration("csvContract").update("resultColorMode", current === "graded" ? "binary" : "graded", vscode.ConfigurationTarget.Global);
@@ -375,21 +415,44 @@ export async function resolveSuiteEditor(document: vscode.TextDocument, panel: v
           const exportScope = { members: message.memberIds ?? "all", filter: message.resultFilter ?? "", selectedIssues: message.selectedIssues ?? [], stale, totals: "original scope; retained details may be filtered or selected" };
           const filtered = filterResultRuns(scoped, message.resultFilter ?? "", message.selectedIssues);
           const snapshot = { ...report, runs: filtered, members: report.members.map(member => ({ id: member.id, runs: filtered.filter(run => run.member === member.id) })).filter(member => member.runs.length), exportScope, stale };
-          const format = await vscode.window.showQuickPick(["CSV", "JSON", "Excel validation package"], { title: "Export suite errors and results" });
+          const format = await vscode.window.showQuickPick([
+            "HTML review report (aggregate-only)",
+            "Review package JSON (aggregate-only)",
+            "Detailed CSV (may contain sensitive evidence)",
+            "Detailed JSON (may contain sensitive evidence)",
+            "Excel validation package (aggregate-only)",
+            "Detailed Excel validation package (may contain sensitive evidence)"
+          ], { title: "Export suite errors and results", placeHolder: "Shared review formats are redacted by default; detailed compatibility exports may contain protected row evidence." });
           if (!format) return;
-          const extension = format === "CSV" ? "csv" : format === "JSON" ? "json" : "validation-package.xlsx";
-          const destination = await vscode.window.showSaveDialog({ title: "Export suite results", defaultUri: vscode.Uri.joinPath(document.uri, "..", `${snapshot.suite}.results.${extension}`), filters: format === "CSV" ? { CSV: ["csv"] } : format === "JSON" ? { JSON: ["json"] } : { "Excel workbooks": ["xlsx"] } });
+          const review = format.startsWith("HTML review") || format.startsWith("Review package") ? createValidationReviewPackage({
+            source: document.uri.toString(),
+            runs: scoped.map(run => ({ ...run, target: run.table ?? run.target ?? run.member })),
+            toolVersion: String(context?.extension.packageJSON.version ?? "unknown"),
+            ...(reportDefinitions ? { definitions: reportDefinitions,
+              definitionBindings: Object.fromEntries(scoped.filter(run => run.workId).map(run => [run.workId!,
+                run.member.startsWith("cross:") ? reportDefinitions!.map(item => item.source) :
+                  reportDefinitions!.filter(item => item.source === document.uri.toString() || item.source.endsWith(`#suite-member=${encodeURIComponent(run.member)}`)).map(item => item.source)
+              ])) } : {})
+          }, { evidence: { mode: "aggregate-only" } }) : undefined;
+          const isExcel = format.includes("Excel validation package");
+          const excelMode = format.startsWith("Detailed Excel") ? "detail" as const : "aggregate-only" as const;
+          if (isExcel && !await confirmWorkbookEvidenceMode(excelMode)) return;
+          const extension = format.startsWith("HTML review") ? "validation-report.html" : format.startsWith("Review package") ? "validation-review.json" :
+            format.startsWith("Detailed CSV") ? "csv" : format.startsWith("Detailed JSON") ? "json" : "validation-package.xlsx";
+          const destination = await vscode.window.showSaveDialog({ title: "Export suite results", defaultUri: vscode.Uri.joinPath(document.uri, "..", `${snapshot.suite}.results.${extension}`), filters: format.startsWith("HTML review") ? { HTML: ["html"] } : format.includes("JSON") ? { JSON: ["json"] } : format.startsWith("Detailed CSV") ? { CSV: ["csv"] } : { "Excel workbooks": ["xlsx"] } });
           if (!destination) return;
-          const content = format === "CSV" ? suiteErrorsCsv(snapshot.runs, exportScope) : format === "JSON" ? JSON.stringify({ schema: "incursa.csv-suite-results/v1", ...snapshot }, null, 2) + "\n"
-            : badRowsXlsx(scoped, { title: `${snapshot.suite} validation results`, checkCatalog: run => {
+          const content = format.startsWith("HTML review") ? renderValidationReportHtml(review!) : format.startsWith("Review package") ? JSON.stringify(review, null, 2) + "\n" :
+            format.startsWith("Detailed CSV") ? suiteErrorsCsv(snapshot.runs, exportScope) : format.startsWith("Detailed JSON") ? JSON.stringify({ schema: "incursa.csv-suite-results/v1", ...snapshot }, null, 2) + "\n"
+            : undefined;
+          if (isExcel) await exportValidationWorkbook(destination, scoped.map(run => ({ ...run, target: run.table ?? run.target ?? run.member })), { title: `${snapshot.suite} validation results`, checkCatalog: run => {
               if (run.member?.startsWith("cross:")) {
                 const id = run.member.slice("cross:".length).split("@", 1)[0];
                 return [{ id, category: "Cross-source check", description: `Validate the configured relationship or reconciliation between ${run.table ?? "suite sources"}.` }];
               }
               const member = currentSuite?.members.find(candidate => candidate.id === run.member);
               return member?.contract ? contractCheckCatalog(member.contract) : [];
-            } });
-          await vscode.workspace.fs.writeFile(destination, typeof content === "string" ? new TextEncoder().encode(content) : content);
+            } }, excelMode);
+          else await vscode.workspace.fs.writeFile(destination, new TextEncoder().encode(content!));
           notice = `Exported results to ${destination.fsPath}`;
           await render();
         }
@@ -450,8 +513,8 @@ async function executeLoadedSuite(suite: LoadedSuite, runner?: DesktopSqlServerR
   const parallelMembers = Number.isFinite(configuredConcurrency) ? Math.min(32, Math.max(1, Math.floor(configuredConcurrency))) : 4;
   const executeCross: CrossExecutor = async (plan, signal) => {
     signal?.throwIfAborted();
-    if (plan.mode === "sql") {
-      if (!controls.crossExecutor) throw new Error("SQL cross-table execution is unavailable in this host.");
+    if (plan.mode === "sql" || plan.mode === "sql-cross-connection") {
+      if (!controls.crossExecutor) throw new Error(`${plan.mode === "sql-cross-connection" ? "Cross-connection SQL" : "SQL cross-table"} execution is unavailable in this host.`);
       return controls.crossExecutor(plan, signal);
     }
     const read = async (participant: typeof plan.from) => {
@@ -499,7 +562,7 @@ export function registerSuiteDiagnostics(context: vscode.ExtensionContext): void
   const diagnostics = vscode.languages.createDiagnosticCollection("csvContractSuites");
   const revisions = new Map<string, number>();
   const validate = async (document: vscode.TextDocument): Promise<void> => {
-    if (!/\.csvsuite\.ya?ml$/i.test(document.uri.path)) return;
+    if (!isValidationSuitePath(document.uri.path)) return;
     const key = document.uri.toString();
     const revision = (revisions.get(key) ?? 0) + 1;
     revisions.set(key, revision);

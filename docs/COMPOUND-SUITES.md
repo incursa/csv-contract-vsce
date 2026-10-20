@@ -1,7 +1,8 @@
 # Compound contract suites
 
-Version 0.13 adds ordered, heterogeneous suites. Use `*.csvsuite.yaml` or
-`*.csvsuite.yml` for schema completion and Workspace Tests discovery. A suite
+Version 0.13 adds ordered, heterogeneous suites. Prefer `*.validationsuite.yaml` or
+`*.validationsuite.yml` for new suites. The legacy `*.csvsuite.yaml` and
+`*.csvsuite.yml` names have identical behavior and remain supported. A suite
 does not change the meaning of an individual version-1 contract. In particular,
 `sqlServer.targets` still applies **one** schema/rule set to equivalent objects;
 suite members can have entirely different schemas, rules and tables.

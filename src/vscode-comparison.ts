@@ -257,7 +257,7 @@ function showResultPanel(
         const temporary = file.with({ path: file.path + `.${Date.now()}.tmp` });
         try { await vscode.workspace.fs.writeFile(temporary, data); await vscode.workspace.fs.rename(temporary, file, { overwrite: true }); }
         finally { await vscode.workspace.fs.delete(temporary).then(undefined, () => undefined); }
-        void vscode.window.showInformationMessage(saved.vscodeOptions ? "Setup saved with VS Code legacy options. SSMS will explicitly reject unsupported rules." : "Portable comparison setup saved for SSMS and CSV Contract Workbench.");
+        void vscode.window.showInformationMessage(saved.vscodeOptions ? "Setup saved with VS Code legacy options. SSMS will explicitly reject unsupported rules." : "Portable comparison setup saved for SSMS and Validation Workbench.");
       } catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : "Could not save comparison."); }
     } else if (message.type === "diff") {
       await openNormalizedDiff(provider, result);
