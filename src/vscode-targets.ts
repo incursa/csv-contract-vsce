@@ -4,6 +4,7 @@ import type { CsvContract, CsvTarget } from "./core/model";
 const remoteTargetScheme = "csv-contract-target";
 
 export interface ResolvedTarget {
+  targetId?: string;
   label: string;
   source: vscode.Uri | string;
 }
@@ -51,16 +52,16 @@ export function relativeTargetPath(contractUri: vscode.Uri, targetUri: vscode.Ur
 }
 
 export function resolveConfiguredTarget(contractUri: vscode.Uri, target: CsvTarget): ResolvedTarget {
-  if (target.url !== undefined) return { label: target.url, source: target.url };
+  if (target.url !== undefined) return { label: target.url, source: target.url, targetId: target.id };
   const path = target.path;
   if (/^[a-z]:[\\/]/i.test(path) || path.startsWith("/")) {
     const uri = contractUri.scheme === "file"
       ? vscode.Uri.file(path)
       : contractUri.with({ path: path.replaceAll("\\", "/") });
-    return { label: path, source: uri };
+    return { label: path, source: uri, targetId: target.id };
   }
   const uri = vscode.Uri.joinPath(contractUri, "..", ...path.split(/[\\/]+/));
-  return { label: path, source: uri };
+  return { label: path, source: uri, targetId: target.id };
 }
 
 export function configuredTargets(contractUri: vscode.Uri, contract: CsvContract): ResolvedTarget[] {

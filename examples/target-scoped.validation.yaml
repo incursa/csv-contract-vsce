@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=../schemas/csvtest.schema.json
+version: 1
+metadata:
+  purpose: Demonstrate logical target IDs and target-scoped rules.
+schema:
+  columns:
+    EMPLOYEENUMBER: { presence: required }
+    COMPANY: { presence: required }
+sqlServer:
+  targets:
+    - { id: wzk, environment: dev, schema: dbo, table: WorkerWzk }
+    - { id: iea, environment: dev, schema: dbo, table: WorkerIea }
+    - { id: fnf, environment: dev, schema: dbo, table: WorkerFnf }
+rules:
+  - id: employee-number-required
+    expect: { column: EMPLOYEENUMBER, operator: notBlank }
+  - id: vista-company-required
+    targets: [wzk, iea]
+    expect: { column: COMPANY, operator: notBlank }

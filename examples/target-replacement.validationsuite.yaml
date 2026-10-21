@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=../schemas/csvsuite.schema.json
+suiteVersion: 1
+id: target-replacement-example
+members:
+  - id: workers
+    ref: ./target-scoped.validation.yaml
+    targetOverrideMode: replace
+    targetOverrides:
+      - target: wzk
+        replacement:
+          schema: export
+          table: Worker
+          connection: example-wzk
+      - target: iea
+        enabled: false
+        replacement:
+          schema: export
+          table: Worker
+          connection: example-iea

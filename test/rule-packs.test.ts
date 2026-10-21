@@ -56,7 +56,8 @@ test("merges pinned pack rules into an executable contract before local rules", 
     ref: "./workforce.rulepack.yaml",
     sha256: "PLACEHOLDER",
     definition: "workforce-boundaries",
-    parameters: { entityColumn: "EntityId" }
+    parameters: { entityColumn: "EntityId" },
+    targets: ["prod"]
   };
   binding.sha256 = (await fileRulePackIO(dirname(example)).read(example)).sha256;
   const contract = {
@@ -67,6 +68,7 @@ test("merges pinned pack rules into an executable contract before local rules", 
   } as CsvContract & { rulePacks: RulePackUse[] };
   const resolved = await resolveContractRulePacks(contract, resolve(dirname(example), "contract.validation.yaml"), fileSuiteIO);
   assert.deepEqual(resolved.contract.rules?.map(rule => rule.id), ["status-required", "local-rule"]);
+  assert.deepEqual(resolved.contract.rules?.map(rule => rule.targets), [["prod"], undefined]);
   assert.equal((resolved.contract as CsvContract & { rulePacks?: RulePackUse[] }).rulePacks, undefined);
   assert.equal(resolved.provenance.length, 2);
 });

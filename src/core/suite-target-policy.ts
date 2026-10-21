@@ -2,6 +2,7 @@ import type { CsvContract, SqlServerTableTarget } from "./model";
 import { resolveSqlServerTargets, type ResolvedSqlServerTarget } from "./sql-server-targets";
 
 export type SuiteTargetEnabledSource = "member-override" | "suite-policy" | "contract" | "default";
+export type SuiteTargetOverrideMode = "merge" | "replace";
 
 export interface SuiteSqlServerTargetPolicy {
   environments: Record<string, boolean>;
@@ -13,7 +14,9 @@ export interface SuiteTargetPolicy {
 
 export interface SuiteTargetOverride {
   target: string;
-  enabled: boolean;
+  enabled?: boolean;
+  /** Full physical target substituted for the named logical target. Its id is retained. */
+  replacement?: SqlServerTableTarget;
 }
 
 export interface SuiteTargetPolicyDiagnostic {
@@ -70,7 +73,8 @@ export function resolveSuiteSqlServerTargets(
   contract: CsvContract,
   targetPolicy?: SuiteTargetPolicy,
   targetOverrides: SuiteTargetOverride[] = [],
-  requireConnection = true
+  requireConnection = true,
+  targetOverrideMode: SuiteTargetOverrideMode = "merge"
 ): { targets: EffectiveSuiteSqlServerTarget[]; diagnostics: SuiteTargetPolicyDiagnostic[] } {
   const targets = configuredTargets(contract);
   const ids = new Map<string, number>();
@@ -85,11 +89,15 @@ export function resolveSuiteSqlServerTargets(
     }
   }
 
-  const overrides = new Map<string, boolean>();
+  const overrides = new Map<string, SuiteTargetOverride>();
   for (const override of targetOverrides) {
     if (!ids.has(override.target)) throw new Error(`Target override references unknown SQL Server target id '${override.target}'.`);
     if (overrides.has(override.target)) throw new Error(`Target override for '${override.target}' is duplicated.`);
-    overrides.set(override.target, override.enabled);
+    if (override.enabled === undefined && override.replacement === undefined) throw new Error(`Target override for '${override.target}' must set enabled or replacement.`);
+    if (override.replacement?.id !== undefined && override.replacement.id !== override.target) {
+      throw new Error(`Replacement target id '${override.replacement.id}' must match logical target id '${override.target}'.`);
+    }
+    overrides.set(override.target, override);
   }
 
   const environments = targetPolicy?.sqlServer?.environments ?? {};
@@ -98,11 +106,14 @@ export function resolveSuiteSqlServerTargets(
       throw new Error(`SQL Server target ${index + 1} must declare a stable id before suite environment policy '${target.environment}' can apply.`);
     }
   }
-  const effective = targets.map((target, index): EffectiveSuiteSqlServerTarget => {
+  const selected = targetOverrideMode === "replace" ? targets.filter(target => target.id !== undefined && overrides.has(target.id)) : targets;
+  const effective = selected.map((configured, index): EffectiveSuiteSqlServerTarget => {
+    const override = configured.id === undefined ? undefined : overrides.get(configured.id);
+    const target = override?.replacement ? { ...structuredClone(override.replacement), id: configured.id } : configured;
     let enabled: boolean;
     let enabledSource: SuiteTargetEnabledSource;
-    if (target.id !== undefined && overrides.has(target.id)) {
-      enabled = overrides.get(target.id)!;
+    if (override?.enabled !== undefined) {
+      enabled = override.enabled;
       enabledSource = "member-override";
     } else if (target.environment !== undefined && Object.hasOwn(environments, target.environment)) {
       enabled = environments[target.environment];
@@ -128,12 +139,12 @@ export function resolveSuiteSqlServerTargets(
 }
 
 /** Return a runtime-only clone whose enabled flags reflect the suite policy. */
-export function applySuiteTargetPolicy(contract: CsvContract, targetPolicy?: SuiteTargetPolicy, targetOverrides: SuiteTargetOverride[] = []): CsvContract {
+export function applySuiteTargetPolicy(contract: CsvContract, targetPolicy?: SuiteTargetPolicy, targetOverrides: SuiteTargetOverride[] = [], targetOverrideMode: SuiteTargetOverrideMode = "merge"): CsvContract {
   const copy = structuredClone(contract);
-  const effective = resolveSuiteSqlServerTargets(copy, targetPolicy, targetOverrides, false).targets;
+  const effective = resolveSuiteSqlServerTargets(copy, targetPolicy, targetOverrides, false, targetOverrideMode).targets;
   if (!copy.sqlServer || !effective.length) return copy;
   if (copy.sqlServer.targets?.length) {
-    copy.sqlServer.targets = copy.sqlServer.targets.map((target, index) => ({ ...target, enabled: effective[index].enabled }));
+    copy.sqlServer.targets = effective.map(entry => ({ ...entry.target, enabled: entry.enabled }));
   } else {
     copy.sqlServer.enabled = effective[0].enabled;
   }

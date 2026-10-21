@@ -7,6 +7,42 @@ does not change the meaning of an individual version-1 contract. In particular,
 `sqlServer.targets` still applies **one** schema/rule set to equivalent objects;
 suite members can have entirely different schemas, rules and tables.
 
+Every suite declares `suiteVersion: 1`; referenced contracts declare `version: 1`.
+
+## Replacing member targets
+
+Suite members inherit their contract targets when `targetOverrides` is absent. Use
+`targetOverrideMode: merge` to replace selected physical endpoints while retaining unmentioned
+targets. Use `replace` when the override list is the member's complete effective target set.
+Each entry is keyed by the contract's logical target ID, which is preserved after replacement;
+target-scoped rules therefore continue to follow the intended target.
+
+```yaml
+suiteVersion: 1
+id: payroll-production
+members:
+  - id: workers
+    ref: ../contracts/workers.validation.yaml
+    targetOverrideMode: replace
+    targetOverrides:
+      - target: wzk
+        replacement:
+          schema: export
+          table: Worker
+          connection: production-wzk
+      - target: iea
+        enabled: false
+        replacement:
+          schema: export
+          table: Worker
+          connection: production-iea
+```
+
+`enabled` may be used alone (the existing enablement override), `replacement` may be used alone,
+or both may be supplied. A replacement is a complete SQL target definition rather than a partial
+patch. It may omit `id`; if supplied, the ID must match `target`. Precedence remains member
+`enabled` override, suite environment policy, contract/replacement setting, then enabled by default.
+
 ## Referenced and inline forms
 
 ```yaml

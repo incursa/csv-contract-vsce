@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added stable logical target selectors to checks and pinned rule-pack bindings. Omitted selectors continue to mean all targets.
+- Added suite member SQL target replacement with `merge` and complete `replace` modes while preserving logical target IDs and target-specific rule behavior.
+- CSV targets may now declare stable IDs. Contracts/rule packs remain `version: 1`; suites remain `suiteVersion: 1` because the new fields are additive.
+
 ## 0.27.0
 
 - Require an `asInvoker` Windows executable manifest and verify actual process elevation, integrity, and Administrators SID state during portable-runner packaging.

@@ -89,7 +89,7 @@ function definitionFromSuite(path: string, suite: LoadedSuite): Omit<StandaloneD
       }
     }
     try {
-      for (const effective of resolveSuiteSqlServerTargets(member.contract, suite.targetPolicy, member.targetOverrides).targets) {
+      for (const effective of resolveSuiteSqlServerTargets(member.contract, suite.targetPolicy, member.targetOverrides, true, member.targetOverrideMode).targets) {
         const target = effective.resolvedTarget;
         targets.push({ id: targetId(member.id, "sql-server", effective.index), member: member.id, kind: "sql-server",
           label: target ? `${sqlServerConnectionLabel(target)}:${target.schema}.${target.table}` : `${effective.target.schema}.${effective.target.table}`,

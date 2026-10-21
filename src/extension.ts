@@ -34,6 +34,7 @@ import type { DesktopComparisonRunner } from "./vscode-comparison";
 import { generateSqlServerValidation } from "./core/sql-server-generator";
 import { mergeImportedSchema, parseSqlSchemaSource, type ImportedSqlTable } from "./core/sql-schema-import";
 import { hasSqlServerConnection, resolveSqlServerTargets, sqlServerTargetLabel, type ResolvedSqlServerTarget } from "./core/sql-server-targets";
+import { contractForTarget } from "./core/target-scoping";
 import { suggestSqlColumnMappings } from "./core/sql-server-column-mapping";
 import { issueRunsToCsv, parseValidationRunExport, validationRunExportJson } from "./issue-export";
 import { contractCheckCatalog } from "./bad-rows-xlsx";
@@ -222,7 +223,7 @@ async function generateSqlServerScript(requestedUri?: vscode.Uri): Promise<void>
       { title: "Generate SQL Server validation", placeHolder: "Choose the table for this script" }
     ))?.target;
     if (!target) return;
-    const generated = generateSqlServerValidation(contract, { target });
+    const generated = generateSqlServerValidation(contractForTarget(contract, target.id), { target });
     const filename = (specUri.path.split("/").pop() ?? "staging.validation.yaml").replace(validationDefinitionPattern, ".validation.sql");
     const outputUri = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.joinPath(specUri, "..", filename),
@@ -283,7 +284,7 @@ async function runContract(output: vscode.OutputChannel, sqlServerRunner?: Deskt
   output.clear();
   let valid = true;
   for (const target of targets) {
-    const result = validateCsv(contract, await readTargetText(target));
+    const result = validateCsv(contractForTarget(contract, target.targetId), await readTargetText(target));
     valid &&= result.valid;
     output.appendLine(`${result.valid ? "PASS" : "FAIL"} ${target.label}`);
     output.appendLine(`${result.rowCount} rows · ${result.columnCount} columns · ${result.errorCount} errors · ${result.warningCount} warnings`);
@@ -292,7 +293,7 @@ async function runContract(output: vscode.OutputChannel, sqlServerRunner?: Deskt
   }
   for (const target of sqlTargets) {
     if (!sqlServerRunner) throw new Error("Direct SQL Server validation requires the desktop extension host.");
-    const result = await sqlServerRunner(contract, target);
+    const result = await sqlServerRunner(contractForTarget(contract, target.id), target);
     valid &&= result.valid;
     output.appendLine(`${result.valid ? "PASS" : "FAIL"} ${sqlServerTargetLabel(target)}`);
     output.appendLine(`${result.rowCount} rows · ${result.columnCount} columns · ${result.errorCount} errors · ${result.warningCount} warnings`);
@@ -902,7 +903,7 @@ class ContractEditorProvider implements vscode.CustomTextEditorProvider {
         const targets = resolveSqlServerTargets(contract, false);
         const chosen = await vscode.window.showQuickPick(targets.map(target => ({ label: sqlServerTargetLabel(target), target })), { title: "Generate SQL from current draft" });
         if (chosen) {
-          const generated = generateSqlServerValidation(contract, { target: chosen.target });
+          const generated = generateSqlServerValidation(contractForTarget(contract, chosen.target.id), { target: chosen.target });
           await vscode.window.showTextDocument(await vscode.workspace.openTextDocument({ language: "sql", content: generated.sql }), { viewColumn: vscode.ViewColumn.Beside });
         }
       } else if (message.type === "editConnection") {

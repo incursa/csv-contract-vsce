@@ -21,6 +21,8 @@ export interface RulePackUse {
   sha256: string;
   definition: string;
   parameters?: Record<string, RulePackScalar>;
+  /** Stable logical target IDs on which every rule contributed by this binding executes. */
+  targets?: string[];
 }
 
 export interface RulePackFragment {
@@ -219,6 +221,22 @@ function merge(into: RulePackFragment, addition: RulePackFragment): void {
   }
 }
 
+function scopedFragment(fragment: RulePackFragment, targets?: string[]): RulePackFragment {
+  if (!targets?.length) return fragment;
+  const requested = new Set(targets);
+  const scoped: RulePackFragment = {};
+  for (const key of ["rules", "groupRules", "orderedRules", "groupTests"] as const) {
+    const items = fragment[key];
+    if (!items?.length) continue;
+    scoped[key] = items.map(item => {
+      const existing = (item as { targets?: string[] }).targets;
+      const effective = existing ? existing.filter(target => requested.has(target)) : [...targets];
+      return { ...item, targets: effective };
+    }).filter(item => item.targets.length > 0) as never;
+  }
+  return scoped;
+}
+
 function allIds(fragment: RulePackFragment): string[] {
   const ids: string[] = [];
   const scan = (value: unknown): void => {
@@ -283,7 +301,7 @@ async function resolveOne(source: string, definitionId: string, supplied: Record
     const childSource = await context.io.resolve(read.canonicalSource, use.ref);
     const childParameters = substitute(use.parameters ?? {}, parameters) as Record<string, RulePackScalar>;
     const child = await resolveOne(childSource, use.definition, childParameters, next, use.sha256, use.id);
-    merge(fragment, child.fragment);
+    merge(fragment, scopedFragment(child.fragment, use.targets));
     provenance.push(...child.provenance);
   }
   const localFragment = substitute(definition.fragment ?? {}, parameters) as RulePackFragment;
@@ -335,7 +353,7 @@ export async function resolveContractRulePacks(contract: CsvContract, source: st
     validateLocalRef(binding.ref);
     const referencedSource = await packIO.resolve(source, binding.ref);
     const resolved = await resolveOne(referencedSource, binding.definition, binding.parameters ?? {}, { io: packIO, active: [] }, binding.sha256, binding.id);
-    merge(fragment, resolved.fragment);
+    merge(fragment, scopedFragment(resolved.fragment, binding.targets));
     provenance.push(...resolved.provenance);
   }
   const local = { ...contract } as CsvContract & { rulePacks?: RulePackUse[] };

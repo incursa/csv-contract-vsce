@@ -1,5 +1,9 @@
 # CSV contract format
 
+Every validation definition carries a required format version. Contracts and rule packs use
+`version: 1`; suites use `suiteVersion: 1`. The target-scoping fields documented below are an
+additive version-1 feature: definitions without them retain the original all-target behavior.
+
 Version 0.14 adds optional versioned `baseline` definitions/references and ISO date
 predicates. See [Validator workflows](VALIDATOR-WORKFLOWS.md) for their complete
 format, interpretation policies, presets, live execution and migration notes.
@@ -197,6 +201,33 @@ Ordered checks also accept the same optional `importance` value.
 ## Group completeness rules
 
 `groupRules` select records with an optional `when`, partition them by the exact `groupBy` columns, and inspect one `require.column`. Use `require.values` for exact required values and/or `require.contains` when balance names contain qualifiers such as `Resident` or `Nonresident`.
+
+## Target-scoped checks and rule packs
+
+Give every target used by scoped rules a stable `id`. This applies to both entries under
+`sqlServer.targets` and CSV `targets`. A check with no `targets` property runs against every
+configured target. A non-empty `targets` list limits that check to the named logical targets:
+
+```yaml
+version: 1
+sqlServer:
+  targets:
+    - { id: wzk, schema: dbo, table: WorkerWzk }
+    - { id: iea, schema: dbo, table: WorkerIea }
+    - { id: fnf, schema: dbo, table: WorkerFnf }
+rules:
+  - id: employee-number-required
+    expect: { column: EMPLOYEENUMBER, operator: notBlank }
+  - id: vista-company-required
+    targets: [wzk, iea]
+    expect: { column: COMPANY, operator: notBlank }
+```
+
+`targets` is supported on `rowTests`, `rules`, `groupRules`, `orderedRules`, `groupTests`,
+SQL `conditionalRules`, and contract `rulePacks` bindings. A selector on a rule-pack binding
+applies to every rule contributed by that binding; rules inside the pack do not need to repeat it.
+Selectors name logical IDs, not array positions, display names, connection profiles, or table names.
+An unknown or duplicate target ID is a definition error.
 
 The streaming validator does not decide a group when it sees its first record because companion records may occur later. It writes normalized group observations to hash-partitioned temporary files during the CSV pass and evaluates each group after EOF, one partition at a time. This makes the result independent of input order without loading the CSV or all groups into memory.
 

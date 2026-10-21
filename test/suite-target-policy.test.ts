@@ -38,6 +38,48 @@ test("target policy precedence is deterministic, extensible, and non-mutating", 
   assert.deepEqual(diagnoseSuiteTargetPolicy({ sqlServer: { environments: { sandbox: true } } }, [contract]).map((item) => item.environment), ["sandbox"]);
 });
 
+test("member target replacements preserve logical identity and support merge or complete replacement", () => {
+  const contract = targetsContract();
+  const replacement = { schema: "stage", table: "SuiteRows", connection: "suite" };
+  const merged = resolveSuiteSqlServerTargets(contract, undefined, [{ target: "app-prod", replacement }], false, "merge");
+  assert.deepEqual(merged.targets.map(target => [target.id, target.target.schema, target.target.table]), [
+    ["app-dev", "dbo", "DevRows"], ["app-prod", "stage", "SuiteRows"], ["app-qa", "dbo", "QaRows"]
+  ]);
+  const replaced = resolveSuiteSqlServerTargets(contract, undefined, [
+    { target: "app-dev", replacement: { schema: "one", table: "OnlyDev", connection: "suite" } },
+    { target: "app-qa", replacement: { schema: "two", table: "OnlyQa", connection: "suite" }, enabled: false }
+  ], false, "replace");
+  assert.deepEqual(replaced.targets.map(target => [target.id, target.target.table, target.enabled]), [
+    ["app-dev", "OnlyDev", true], ["app-qa", "OnlyQa", false]
+  ]);
+  assert.deepEqual(contract, targetsContract());
+});
+
+test("target-scoped rules execute only for matching logical targets", async () => {
+  const contract = targetsContract();
+  contract.rules = [
+    { id: "global", expect: { column: "Id", operator: "notBlank" } },
+    { id: "prod-only", targets: ["app-prod"], expect: { column: "Id", operator: "equals", value: "prod" } }
+  ];
+  const observed = new Map<string, string[]>();
+  await runSuite({ id: "scoped", source: "inline", isSuite: true, members: [{ id: "app", source: "inline", contract }] },
+    async (definition, target) => {
+      observed.set(target.table, definition.rules?.map(rule => rule.id) ?? []);
+      return validateCsv(definition, "Id\nprod\n");
+    });
+  assert.deepEqual(observed.get("DevRows"), ["global"]);
+  assert.deepEqual(observed.get("QaRows"), ["global"]);
+  assert.equal(observed.has("ProdRows"), false);
+
+  contract.sqlServer!.targets![1].enabled = true;
+  await runSuite({ id: "scoped", source: "inline", isSuite: true, members: [{ id: "app", source: "inline", contract }] },
+    async (definition, target) => {
+      observed.set(target.table, definition.rules?.map(rule => rule.id) ?? []);
+      return validateCsv(definition, "Id\nprod\n");
+    });
+  assert.deepEqual(observed.get("ProdRows"), ["global", "prod-only"]);
+});
+
 test("target IDs and member overrides reject ambiguous or unknown identities", () => {
   const duplicate = targetsContract();
   duplicate.sqlServer!.targets![1].id = "app-dev";

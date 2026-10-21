@@ -141,7 +141,7 @@ export function renderSuiteWorkbench(state: SuiteWorkbenchState, nonce: string):
     let effectiveTargets = "";
     try {
       if (contract) {
-        const effective = resolveSuiteSqlServerTargets(contract, suite?.targetPolicy, member.targetOverrides, false);
+        const effective = resolveSuiteSqlServerTargets(contract, suite?.targetPolicy, member.targetOverrides, false, member.targetOverrideMode);
         targets = effective.targets.map((item, targetIndex) => {
           const target = item.resolvedTarget ?? item.target;
           const connection = item.resolvedTarget ? ` · ${sqlServerConnectionLabel(item.resolvedTarget)}` : "";

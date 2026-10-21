@@ -10,6 +10,7 @@ import { withMaterializedTarget } from "./node/target-source";
 import { generateSqlServerValidation } from "./core/sql-server-generator";
 import { mergeImportedSchema, parseSqlSchemaSource } from "./core/sql-schema-import";
 import { resolveSqlServerTargets } from "./core/sql-server-targets";
+import { contractForTarget } from "./core/target-scoping";
 import { loadSuite, runSuite, generateSuiteSql } from "./core/suite";
 import { fileSuiteIO, combineSuite, splitSuite } from "./node/suite-files";
 import { SqlServerValidationSession } from "./node/sql-server-validator";
@@ -266,7 +267,7 @@ async function generateSql(args: ParsedArgs): Promise<void> {
     const choices = targets.map((candidate) => candidate.name ?? `${candidate.schema}.${candidate.table}`).join(", ");
     throw new Error(args.table ? `SQL target '${args.table}' was not found. Available targets: ${choices}` : `The contract has multiple SQL targets; use --table. Available targets: ${choices}`);
   }
-  const generated = generateSqlServerValidation(contract, { target });
+  const generated = generateSqlServerValidation(contractForTarget(contract, target.id), { target });
   await writeFile(output, generated.sql, "utf8");
   console.log(`Created ${output} (${generated.ruleCount} SQL validation rules).`);
   for (const warning of generated.warnings) console.error(`WARNING: ${warning}`);

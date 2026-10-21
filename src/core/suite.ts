@@ -12,6 +12,7 @@ import { applySuiteTargetPolicy, diagnoseSuiteTargetPolicy, resolveSuiteSqlServe
 import Ajv from "ajv/dist/2020";
 import contractSchema from "../../schemas/csvtest.schema.json";
 import { resolveContractRulePacks, type RulePackProvenance } from "./rule-packs";
+import { contractForTarget, validateRuleTargetSelectors } from "./target-scoping";
 
 const validateContractShape = new Ajv({ strict: false, allErrors: true, validateFormats: false }).compile(contractSchema);
 
@@ -29,7 +30,7 @@ export interface ContractSuite {
   description?: string;
   metadata?: Record<string, unknown>;
   defaults?: SuiteConnection;
-  members: { id: string; ref?: string; contract?: CsvContract; name?: string; description?: string; metadata?: Record<string, unknown>; targetOverrides?: SuiteTargetOverride[] }[];
+  members: { id: string; ref?: string; contract?: CsvContract; name?: string; description?: string; metadata?: Record<string, unknown>; targetOverrideMode?: import("./suite-target-policy").SuiteTargetOverrideMode; targetOverrides?: SuiteTargetOverride[] }[];
 }
 export interface SuiteTargetMatrixEntry { id: string; name?: string; target: string }
 export interface SuiteIO {
@@ -43,6 +44,7 @@ export interface LoadedMember {
   source: string;
   contract?: CsvContract;
   targetOverrides?: SuiteTargetOverride[];
+  targetOverrideMode?: import("./suite-target-policy").SuiteTargetOverrideMode;
   rulePackProvenance?: RulePackProvenance[];
   error?: string;
 }
@@ -84,6 +86,22 @@ function connectionSettings(value: SuiteConnection, context: string): void {
     keys(value.integratedConnection, ["server", "database", "odbcDriver", "encrypt", "trustServerCertificate"], context);
     if (!value.integratedConnection.server?.trim() || !value.integratedConnection.database?.trim()) throw new Error(`${context}: integratedConnection requires server and database.`);
   }
+}
+function targetReplacement(value: unknown, context: string): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${context}: replacement must be a SQL Server target object.`);
+  const target = value as unknown as Record<string, unknown> & SuiteConnection;
+  keys(target, ["id", "environment", "enabled", "baseline", "name", "connection", "integratedConnection", "schema", "table", "objectType", "columnMap", "scope"], context);
+  if (target.connection !== undefined && (typeof target.connection !== "string" || !/^[A-Za-z0-9._-]+$/.test(target.connection))) throw new Error(`${context}: connection must be a profile name, never a connection string.`);
+  if (target.connection !== undefined && target.integratedConnection !== undefined) throw new Error(`${context}: choose connection or integratedConnection, not both.`);
+  if (target.integratedConnection) {
+    keys(target.integratedConnection, ["server", "database", "odbcDriver", "encrypt", "trustServerCertificate"], `${context} integratedConnection`);
+    if (!target.integratedConnection.server?.trim() || !target.integratedConnection.database?.trim()) throw new Error(`${context}: integratedConnection requires server and database.`);
+  }
+  if (typeof target.schema !== "string" || !target.schema.trim() || typeof target.table !== "string" || !target.table.trim()) throw new Error(`${context}: replacement requires schema and table.`);
+  if (target.id !== undefined && (typeof target.id !== "string" || !/^[a-z0-9][a-z0-9._-]*$/.test(target.id))) throw new Error(`${context}: replacement id is invalid.`);
+  if (target.environment !== undefined && (typeof target.environment !== "string" || !/^[a-z0-9][a-z0-9._-]*$/.test(target.environment))) throw new Error(`${context}: replacement environment is invalid.`);
+  if (target.enabled !== undefined && typeof target.enabled !== "boolean") throw new Error(`${context}: replacement enabled must be boolean.`);
+  if (target.objectType !== undefined && !["table", "view"].includes(String(target.objectType))) throw new Error(`${context}: replacement objectType must be table or view.`);
 }
 const crossPredicateOperators = new Set(["equals", "notEquals", "in", "notIn", "isNull", "notNull", "isBlank", "notBlank", "equalsColumn", "notEqualsColumn",
   "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual", "dateOnOrAfter", "dateOnOrBefore", "dateAfter", "dateBefore"]);
@@ -175,7 +193,7 @@ export function parseSuite(text: string): ContractSuite {
     if (!member || typeof member.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(member.id)) throw new Error(`Suite ${suite.id}: each member needs a stable id.`);
     if (ids.has(member.id)) throw new Error(`Suite ${suite.id}: duplicate member id '${member.id}'.`);
     ids.add(member.id);
-    keys(member, ["id", "ref", "contract", "name", "description", "metadata", "targetOverrides"], `Member ${member.id}`);
+    keys(member, ["id", "ref", "contract", "name", "description", "metadata", "targetOverrideMode", "targetOverrides"], `Member ${member.id}`);
     if ((member.ref !== undefined) === (member.contract !== undefined)) throw new Error(`Member ${member.id}: declare exactly one of ref or contract.`);
     if (member.ref !== undefined && (typeof member.ref !== "string" || !member.ref.trim())) throw new Error(`Member ${member.id}: ref must be a non-empty file path.`);
     if (member.targetOverrides !== undefined) {
@@ -183,13 +201,17 @@ export function parseSuite(text: string): ContractSuite {
       const overridden = new Set<string>();
       for (const override of member.targetOverrides) {
         if (!override || typeof override !== "object" || Array.isArray(override)) throw new Error(`Member ${member.id}: invalid target override.`);
-        keys(override, ["target", "enabled"], `Member ${member.id} target override`);
-        if (typeof override.target !== "string" || !/^[a-z0-9][a-z0-9._-]*$/.test(override.target) || typeof override.enabled !== "boolean" || overridden.has(override.target)) {
+        keys(override, ["target", "enabled", "replacement"], `Member ${member.id} target override`);
+        if (typeof override.target !== "string" || !/^[a-z0-9][a-z0-9._-]*$/.test(override.target) ||
+            override.enabled !== undefined && typeof override.enabled !== "boolean" || override.enabled === undefined && override.replacement === undefined || overridden.has(override.target)) {
           throw new Error(`Member ${member.id}: invalid or duplicate target override.`);
         }
+        if (override.replacement !== undefined) targetReplacement(override.replacement, `Member ${member.id} target override '${override.target}'`);
         overridden.add(override.target);
       }
     }
+    if (member.targetOverrideMode !== undefined && !["merge", "replace"].includes(member.targetOverrideMode)) throw new Error(`Member ${member.id}: targetOverrideMode must be merge or replace.`);
+    if (member.targetOverrideMode === "replace" && !member.targetOverrides?.length) throw new Error(`Member ${member.id}: replace mode requires targetOverrides.`);
   }
   if (suite.targetMatrix !== undefined) {
     if (!Array.isArray(suite.targetMatrix) || !suite.targetMatrix.length) throw new Error(`Suite ${suite.id}: targetMatrix must be a non-empty array.`);
@@ -259,6 +281,7 @@ export async function loadSuite(source: string, io: SuiteIO, ancestors: string[]
   if (!isSuiteText(text)) {
     const packs = await resolveContractRulePacks(parseContract(text), source, io);
     const resolvedContract = await resolveGroupContracts(packs.contract, source, io);
+    validateRuleTargetSelectors(resolvedContract);
     resolveSuiteSqlServerTargets(resolvedContract, undefined, [], false);
     return { id: source, source, isSuite: false, members: [{ id: source, source,
       contract: resolvedContract, ...(packs.provenance.length ? { rulePackProvenance: packs.provenance } : {}) }] };
@@ -299,9 +322,10 @@ export async function loadSuite(source: string, io: SuiteIO, ancestors: string[]
         rulePackProvenance = packs.provenance;
       }
       // Validate target identities and override references while retaining the unmodified child definition.
-      resolveSuiteSqlServerTargets(resolvedContract, suite.targetPolicy, member.targetOverrides, false);
+      validateRuleTargetSelectors(resolvedContract);
+      resolveSuiteSqlServerTargets(resolvedContract, suite.targetPolicy, member.targetOverrides, false, member.targetOverrideMode);
       members.push({ id: member.id, source: location, contract: resolvedContract, connectionOrigins,
-        ...(member.targetOverrides ? { targetOverrides: member.targetOverrides } : {}), ...(rulePackProvenance.length ? { rulePackProvenance } : {}) });
+        ...(member.targetOverrides ? { targetOverrides: member.targetOverrides } : {}), ...(member.targetOverrideMode ? { targetOverrideMode: member.targetOverrideMode } : {}), ...(rulePackProvenance.length ? { rulePackProvenance } : {}) });
     } catch (error) {
       members.push({ id: member.id, source: location, error: errorDetails(error) });
     }
@@ -374,7 +398,7 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
     try {
       if (member.error || !member.contract) throw new Error(member.error ?? "Contract was not loaded.");
       const evaluatedContract = resolveEvaluation(member.contract, startedAt);
-      const policyResolution = resolveSuiteSqlServerTargets(evaluatedContract, suite.targetPolicy, member.targetOverrides);
+      const policyResolution = resolveSuiteSqlServerTargets(evaluatedContract, suite.targetPolicy, member.targetOverrides, true, member.targetOverrideMode);
       const effectiveSqlTargets = policyResolution.targets;
       const targets = effectiveSqlTargets.filter((target) => target.enabled).map((target) => ({ ...target, resolvedTarget: target.resolvedTarget! }));
       const fileTargets = (validateFile ? member.contract.targets ?? [] : []).filter(target => target.enabled !== false);
@@ -392,10 +416,10 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
         const jobs = [
           ...targets.map((effective) => { const target = effective.resolvedTarget; const identity = { ...base, table: `${target.schema}.${target.table}`, target: target.name ?? `${target.schema}.${target.table}`, targetIndex: effective.index,
             ...(effective.id ? { targetId: effective.id } : {}), ...(effective.environment ? { environment: effective.environment } : {}), enabledSource: effective.enabledSource };
-            return { identity, targetIndex: effective.index, execute: () => validate(evaluatedContract, target, member.source, effective.index,
+            return { identity, targetIndex: effective.index, execute: () => validate(contractForTarget(evaluatedContract, effective.id), target, member.source, effective.index,
               progress => controls.onTargetProgress?.(identity, progress, effective.index)) }; }),
           ...fileTargets.map((target, fileIndex) => { const targetIndex = effectiveSqlTargets.length + fileIndex; const identity = { ...base, target: target.path ?? target.url, targetIndex }; return ({ identity, targetIndex,
-            execute: () => validateFile!(evaluatedContract, member.source, target, targetIndex,
+            execute: () => validateFile!(contractForTarget(evaluatedContract, target.id), member.source, target, targetIndex,
               progress => controls.onTargetProgress?.(identity, progress, targetIndex)) }); })
         ];
         const outcomes: SuiteRun[] = new Array(jobs.length);
@@ -436,7 +460,7 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
         try {
           controls.onTargetStart?.(identity, targetIndex);
           const started = Date.now();
-          const result = await validate(evaluatedContract, target, member.source, targetIndex,
+          const result = await validate(contractForTarget(evaluatedContract, effective.id), target, member.source, targetIndex,
             progress => controls.onTargetProgress?.(identity, progress, targetIndex));
           result.evaluatedAt = startedAt;
           memberRuns.push(controls.signal?.aborted ? { ...identity, status: "CANCELED", error: "Canceled during execution; result discarded." }
@@ -457,7 +481,7 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
         try {
           controls.onTargetStart?.(identity, targetIndex);
           const started = Date.now();
-          const result = await validateFile!(evaluatedContract, member.source, target, targetIndex,
+          const result = await validateFile!(contractForTarget(evaluatedContract, target.id), member.source, target, targetIndex,
             progress => controls.onTargetProgress?.(identity, progress, targetIndex));
           result.evaluatedAt = startedAt;
           memberRuns.push(controls.signal?.aborted ? { ...identity, status: "CANCELED", error: "Canceled during execution; result discarded." } : { ...identity, status: result.valid ? "PASS" : "FAIL", result, durationMs: Date.now() - started });
@@ -489,7 +513,7 @@ export async function runSuite(suite: LoadedSuite, validate: (contract: CsvContr
     }));
     outcomes.forEach(memberRuns => runs.push(...memberRuns));
   }
-  const policyMembers = suite.members.map((member) => member.contract ? { ...member, contract: applySuiteTargetPolicy(member.contract, suite.targetPolicy, member.targetOverrides) } : member);
+  const policyMembers = suite.members.map((member) => member.contract ? { ...member, contract: applySuiteTargetPolicy(member.contract, suite.targetPolicy, member.targetOverrides, member.targetOverrideMode) } : member);
   for (const { check, matrix } of (suite.crossChecks ?? []).flatMap(check => (suite.targetMatrix?.length ? suite.targetMatrix : [undefined]).map(matrix => ({ check, matrix })))) {
     const suffix = matrix ? `@${matrix.id}` : "";
     const base = { suite: suite.id, member: `cross:${check.id}${suffix}`, spec: suite.source, target: `${check.from} → ${check.to}${matrix ? ` (${matrix.name ?? matrix.id})` : ""}` };
@@ -527,14 +551,14 @@ export function generateSuiteSql(suite: LoadedSuite) {
   }
   const batches: GeneratedSuiteSqlBatch[] = suite.members.flatMap((member): GeneratedSuiteSqlBatch[] => {
     if (member.error || !member.contract) throw new Error(`${suite.id}/${member.id}: ${member.error ?? "Missing contract"}`);
-    const targets = resolveSuiteSqlServerTargets(member.contract, suite.targetPolicy, member.targetOverrides, false).targets.filter((target) => target.enabled)
+    const targets = resolveSuiteSqlServerTargets(member.contract, suite.targetPolicy, member.targetOverrides, false, member.targetOverrideMode).targets.filter((target) => target.enabled)
       .map((target) => ({ ...target, resolvedTarget: target.resolvedTarget! }));
     if (!targets.length) throw new Error(`${suite.id}/${member.id}: no SQL Server target.`);
     return targets.map((effective) => { const target = effective.resolvedTarget; return ({ member: member.id, table: `${target.schema}.${target.table}`, connection: target.connection, integratedConnection: target.integratedConnection,
       ...(effective.id ? { targetId: effective.id } : {}), ...(effective.environment ? { environment: effective.environment } : {}), enabledSource: effective.enabledSource,
-      ...generateSqlServerValidation(member.contract!, { target, includeDetailQueries: false, suite: { id: suite.id, member: member.id } }) }); });
+      ...generateSqlServerValidation(contractForTarget(member.contract!, effective.id), { target, includeDetailQueries: false, suite: { id: suite.id, member: member.id } }) }); });
   });
-  const policyMembers = suite.members.map((member) => member.contract ? { ...member, contract: applySuiteTargetPolicy(member.contract, suite.targetPolicy, member.targetOverrides) } : member);
+  const policyMembers = suite.members.map((member) => member.contract ? { ...member, contract: applySuiteTargetPolicy(member.contract, suite.targetPolicy, member.targetOverrides, member.targetOverrideMode) } : member);
   for (const { check, matrix } of (suite.crossChecks ?? []).flatMap(check => (suite.targetMatrix?.length ? suite.targetMatrix : [undefined]).map(matrix => ({ check, matrix })))) {
     const plan = planCrossCheck(check, policyMembers, matrix ? { targetName: matrix.target } : undefined);
     if (plan.mode !== "sql") throw new Error(`Standalone SQL generation cannot include CSV cross-check ${check.id}; run the suite instead.`);

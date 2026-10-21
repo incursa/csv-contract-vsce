@@ -44,6 +44,8 @@ export interface RowTest {
   importance?: number;
   /** User-facing explanation shown when this test fails. */
   message?: string;
+  /** Stable logical target IDs on which this check executes. Omit to execute on every target. */
+  targets?: string[];
   select: Record<string, string>;
   expect: RowExpectation;
 }
@@ -118,6 +120,7 @@ export interface ConditionalRule {
   /** User-facing explanation shown when this rule fails. */
   message?: string;
   severity?: RuleSeverity;
+  targets?: string[];
   when?: Predicate;
   expect: Predicate;
 }
@@ -135,6 +138,7 @@ export interface GroupRule {
   /** User-facing explanation shown when this rule fails. */
   message?: string;
   severity?: RuleSeverity;
+  targets?: string[];
   when?: Predicate;
   groupBy: string[];
   require: GroupValueRequirement;
@@ -162,6 +166,7 @@ export interface OrderedRelation extends OrderedCheck {
 export interface OrderedRule {
   id: string;
   importance?: number;
+  targets?: string[];
   partitionBy?: string[];
   orderBy: Array<{ column: string; type: "date" | "number" | "string"; format?: "yyyy/MM/dd" | "iso"; integer?: boolean; minimum?: number }>;
   duplicateOrder?: OrderedCheck;
@@ -191,6 +196,7 @@ export interface SqlConditionalRule {
   /** User-facing explanation shown when this rule fails. */
   message?: string;
   severity?: RuleSeverity;
+  targets?: string[];
   when?: SqlPredicate;
   expect: SqlPredicate;
 }
@@ -280,8 +286,8 @@ export interface SqlServerImportedSchema {
 }
 
 export type CsvTarget =
-  | { path: string; url?: never; enabled?: boolean; name?: string }
-  | { url: string; path?: never; enabled?: boolean; name?: string };
+  | { id?: string; path: string; url?: never; enabled?: boolean; name?: string }
+  | { id?: string; url: string; path?: never; enabled?: boolean; name?: string };
 
 export interface CsvContract {
   version: 1;
@@ -318,6 +324,7 @@ export interface GroupTest {
   importance?: number;
   /** User-facing explanation shown when the group count fails. */
   message?: string;
+  targets?: string[];
   groupBy: string[];
   /** Run the child contract only for groups whose aggregate selector matches. */
   select?: GroupSelection;
