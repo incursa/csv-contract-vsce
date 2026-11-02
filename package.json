@@ -360,7 +360,7 @@
     "vscode:prepublish": "npm run build:production",
     "package:vsix": "npm run build:production && vsce package --out csv-contract-vsce.vsix",
     "package:standalone": "npm run build:production && node scripts/package-standalone.mjs",
-    "publish:marketplace": "npm run build:production && vsce publish",
+    "publish:marketplace": "node scripts/publication-hold.mjs",
     "release:check": "npm run test:all && npm run brand:verify && npm run package:vsix",
     "cli": "node dist/cli/csv-contract.cjs",
     "watch": "node esbuild.mjs --watch"
