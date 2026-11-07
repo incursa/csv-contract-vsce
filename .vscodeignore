@@ -4,6 +4,8 @@
 .vscode-test-web/**
 node_modules/**
 artifacts/**
+docs/commercialization/**
+*.log
 src/**
 test/**
 scripts/webview-smoke.mjs

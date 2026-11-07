@@ -25,10 +25,14 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run release:check
+      - name: Enforce commercialization publication hold
+        run: node scripts/publication-hold.mjs
       - uses: softprops/action-gh-release@v3
         with:
           files: csv-contract-vsce.vsix
           generate_release_notes: true
+      - name: Enforce commercialization publication hold before Marketplace publication
+        run: node scripts/publication-hold.mjs
       - name: Publish to Visual Studio Marketplace
         shell: bash
         run: |
