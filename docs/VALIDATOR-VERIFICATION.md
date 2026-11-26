@@ -1,80 +1,36 @@
-# Validator 0.15 verification
+# Validator verification guide
 
-Local verification used Windows x64, Node 26.7.0, PowerShell Core 7.6.5,
-Playwright Chromium and the actual stable VS Code web extension host.
-The established tag release workflow repeats `npm run release:check` on Windows
-with Node 22 before publishing to Marketplace.
+Use this guide to reproduce the repository's validation gates. Release-specific run links, test counts, package versions, timestamps, and Marketplace observations belong in release notes or workflow records rather than this durable guide.
 
-Release [v0.15.0](https://github.com/incursa/csv-contract-vsce/releases/tag/v0.15.0)
-passed in [workflow run 34644555030](https://github.com/incursa/csv-contract-vsce/actions/runs/34644555030)
-from commit `81011a244f1f13854515c456cd9d73f3e1b1ae96`. The hosted gate repeated
-108 passing regressions, 25 PowerShell checks, rendered and actual host tests,
-and VSIX packaging. The Marketplace publish log confirms 0.15.0 was accepted.
-An independent `vsce show incursa.csv-contract-vsce --json` query confirmed 0.15.0 as the newest public version, updated September 11, 2026 at 20:45:42 UTC.
+## Required local checks
 
-## Local checks
+From a clean dependency install, run:
 
-- 108 regression tests passed; one opt-in acceptance test is skipped by default.
-- All 25 PowerShell checks passed.
-- Rendered desktop/narrow Workbench tests passed under production CSP, including
-  nested branch creation/reordering, literal preservation, selected issue export,
-  preset controls, inline member navigation and stale result navigation.
-- Actual VS Code host tests passed: explicit initial live execution, undoable inline
-  edits using nested typed predicates, coalesced save, invalid YAML suppression,
-  external reload, pause, automatic suite editor selection and unavailable-member errors.
-- `npm run release:check` passed, including branding and production VSIX packaging.
-- After the final integration fixes, the production regression bundles were rerun.
+```powershell
+npm ci
+npm run release:check
+```
 
-Rendered screenshots are saved outside the repository in the system temporary
-`csv-contract-webview-qa` directory. The nested rule editor and filtered selected
-result screenshots were visually inspected. The two pre-existing modified images
-under `images/` are preserved and excluded from the release commit.
+The release check covers the maintained regression suites, PowerShell checks, rendered Workbench behavior, VS Code host integration, branding, and VSIX packaging. Consult `package.json` and the workflow definitions for the exact commands used by a particular revision.
 
-## Offline SQL-only acceptance
+## Optional acceptance checks
 
-The opt-in acceptance test uses a fresh temporary copy of exactly 23 McKee contract
-definitions. It compares unchanged definitions, 1,303 generated SQL rules with no
-translation warnings, synthetic verdict parity, heterogeneous combine/split
-semantics and portable round trips. Per-run evaluation timestamps are verified
-against each report's start time and excluded only from cross-run semantic equality.
+Offline SQL acceptance uses temporary copies of synthetic or approved contract definitions. It must not modify the source fixture directory, introduce CSV targets into SQL-only definitions, contact a remote database, or read protected records unless the operator explicitly selects and authorizes those resources.
 
-Synthetic blank records intentionally fail most business assertions. They test
-parity, not database contents. The original acceptance directory is untouched;
-no CSV targets are introduced. No remote database, employee records, stored
-procedures, staging reloads, imports or database deployments are involved.
+Synthetic blank records exercise translation and verdict parity; they do not establish correctness against business data. Per-run timestamps may be excluded from cross-run semantic comparison only when the comparison records that exclusion.
 
-Mocked SQL tests cover complete summaries, real selected/pass/fail counts, bounded
-preview queries/examples, native date fallback, target baseline precedence,
-cancellation and retries. Pure plan tests cover independent scoped participants,
-identifier quoting, connection boundaries and decimal-total guards. Additional
-regressions cover relative evaluation, typed/precision/identity streaming parity,
-sampled incomplete status, history privacy and target baseline path round trips.
-Actual SQL Server execution of the new queries remains unverified without approval.
+## Database-backed validation
 
-[Roadmap status](VALIDATOR-ROADMAP.md) and [workflow documentation](VALIDATOR-WORKFLOWS.md)
-record the remaining boundaries. Linked templates remain optional future work;
-CSV targets share a contract baseline and cross-connection checks are unsupported.
-## SQL lifecycle follow-up — 0.15.2
+Mocked SQL tests cover planning, summaries, bounded previews, connection precedence, cancellation, retries, cleanup, quoting, and numeric guards without proving driver or database compatibility. Claims about SQL Server, ODBC, Windows authentication, stored procedures, or live data require an explicitly authorized run against the named environment.
 
-The SQL lifetime fix removes desktop extension-wide pools. Each operation awaits
-its own cleanup, and suite targets advance only after closure. Nine additional
-mocked lifecycle tests cover suite ordering, assertion failures, exceptions,
-cancellation, failed connection setup, delayed/all-pool cleanup, implicit
-transaction settings and driver destroy failures that the pool library can hide.
-The final production test run passed 117 tests (one offline acceptance opt-in skipped).
-`npm run release:check` passed, including PowerShell, rendered Workbench, actual
-VS Code host and production packaging. Remote database inspection was not performed.
-Real child-process tests verify that the parent waits beyond IPC delivery until
-process exit, and that cancellation terminates an unresponsive child before returning.
-The packaged worker's error path is exercised without database access. All nine
-lifecycle tests also passed under the installed VS Code Electron executable in
-Node mode, verifying the actual runtime's fork and termination behavior without
-opening a window or contacting SQL Server. The 0.15.1 workflow was canceled before
-publication after native ODBC pooling was discovered; 0.15.2 includes process isolation.
+Record database-backed evidence with the source definition revision, connection class, driver/authentication mode, scope, timestamps, redactions, and outcome. Never commit credentials or protected row data.
 
-Release source: `bdabef1a383114668e1afedeaf4c72faefd8be42`.
-[Release run 34653803212](https://github.com/incursa/csv-contract-vsce/actions/runs/34653803212)
-passed the same required checks on Windows and published version **0.15.2**
-successfully at `2026-09-11T22:30:39Z` (job `103441708997`).
-An independent public Marketplace query confirmed **0.15.2** as the newest
-version, with `lastUpdated` of `2026-09-11T22:38:31.717Z`.
+## Evidence interpretation
+
+- A passing local gate proves only the checked revision and environment.
+- A packaged VSIX check does not prove Marketplace publication.
+- A Marketplace query does not prove a later release remains latest.
+- Synthetic or mocked checks do not prove live database behavior.
+- Skipped or unavailable checks must be reported as unverified, not passing.
+
+See [Validator workflows](VALIDATOR-WORKFLOWS.md) for runtime semantics and [Validator design requirements](VALIDATOR-ROADMAP.md) for durable product rules.

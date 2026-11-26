@@ -1,65 +1,14 @@
-# Validator extension roadmap
+# Validator design requirements
 
-## October 12, 2026 local implementation
+This document records durable product rules for authoring, executing, and reviewing
+CSV and SQL validations. It is not a release-status page or backlog. Shipped behavior
+is described in the [README](../README.md), workflow contracts in
+[Validator workflows](VALIDATOR-WORKFLOWS.md), and release history in
+[CHANGELOG.md](../CHANGELOG.md).
 
-Version 0.26 adds the portable runner, aggregate-first review packages and reports,
-saved-run comparison, explicit bounded outcomes, suite target policies, pinned local
-reuse and fixtures, richer SQL baselines, and bounded cross-connection execution.
-See [parallel delivery and acceptance gates](PARALLEL-DELIVERY-PLAN.md) and the
-linked feature documents in the README for current behavior. The September status
-below is historical, not the current capability inventory.
-
-Remaining acceptance includes clean-machine executable testing, installed VS Code
-and live database workflows, driver/authentication compatibility, and downstream
-reviewer acceptance. Large Excel streaming/sharding and richer linked-template
-update UI are not implied by this increment. Definition snapshots with unresolved
-sidecar dependencies cannot prove cross-run equivalence and remain indeterminate.
-
-Discussion draft · September 10, 2026
-
-## Implementation status — September 11, 2026
-
-SQL lifecycle follow-up (0.15.2): desktop operations await owned connection closure before completion, including failed/canceled work. Windows integrated operations additionally await isolated worker exit to release native ODBC pools. Driver cleanup errors remain errors. No explicit transactions are opened; implicit transactions are disabled. See the verification and workflow documents for tests and limitations.
-
-Version 0.15.2 passed 117 regression tests and all required release checks, including
-rendered UI and actual VS Code host integration. Nine lifecycle tests also passed
-under the installed VS Code Electron runtime. [Release run 34653803212](https://github.com/incursa/csv-contract-vsce/actions/runs/34653803212)
-published successfully; the public Marketplace independently confirmed 0.15.2.
-
-The roadmap remains the specification. Work is being delivered in tested increments;
-this table distinguishes implemented code from outstanding acceptance work.
-
-| Area | Current increment | Still outstanding |
-| --- | --- | --- |
-| Shared editors | Shared standalone/referenced/inline editor; lossless YAML edits; nested branch add/remove/wrap/reorder; selector editing; shared results, connection and preflight controls | None for current editor scope |
-| Baselines | Versioned CSV/SQL/manual baselines; severity policies; before/after selective acceptance; SQL-target overrides; dependency rebasing; collation/unique-key membership and conservative impact labels | CSV targets share a contract baseline; foreign-key and filtered-index definitions are not captured |
-| Presets | Null, typed constant/list, relative/fixed ISO dates, numeric precision/ranges, patterns, conditional requirements, comparisons, composite uniqueness/null policies, population | SQL typed/date/precision policies use disclosed exact fallback |
-| Previews | Explicit selected CSV/SQL source; sample or complete scope; real selected/pass/fail counts; bounded passing/failing conditional examples; aggregate row/group results; distinct SAMPLED status | Samples are first/unordered rows, not statistical; complete SQL previews may read the scope into memory |
-| Live execution | Explicit enable/pause/cancel; initial execution; valid edits/reloads; serial debounce; dependency watchers; stale suppression; affected reruns; bounded SQL timeout/retry | In-flight pool acquisition and synchronous CSV work cannot be interrupted; later runs wait |
-| Connections/results | Shared/bulk connection editing; provenance; preflight; searchable failures; rule navigation; selected issue exports with run metadata; progress and selected reruns | Search covers retained details only |
-| History/templates/cross-table | Stable-rule aggregate history comparisons; configurable retention; parameterized ordinary-rule templates; independently scoped same-connection relational checks; coverage diagnostics | Linked templates remain optional future work; cross-connection checks are unsupported |
-
-Verified locally for 0.15.0: 108 passing regression tests (one opt-in acceptance test
-skipped by default), separately passing 23-contract McKee offline acceptance
-(1,303 SQL rules, no translation warnings), rendered desktop/narrow Workbench
-interactions and an actual VS Code host run. `npm run release:check` passed,
-including 25 PowerShell checks, branding and production VSIX packaging.
-Version 0.15.0 was published by [release run 34644555030](https://github.com/incursa/csv-contract-vsce/actions/runs/34644555030) from commit `81011a244f1f13854515c456cd9d73f3e1b1ae96`. An independent public Marketplace query confirmed 0.15.0 as the newest version.
-[Verification details](VALIDATOR-VERIFICATION.md) describe the evidence.
-No remote database was contacted. McKee acceptance used a temporary copy of the
-23 contract definitions and synthetic blank records; it did not read employee data
-or add CSV targets. The original fixture was not modified.
-
-Consequential format/default decisions and workflows are documented in
-[Validator workflows](VALIDATOR-WORKFLOWS.md), including the concrete implementation
-barriers for unfinished items. Outstanding entries above are not
-implemented substitutes or claims of roadmap completion.
-
-This document records the requested improvements and related proposals for CSV
-Contract Workbench. It is a product backlog, not a description of shipped features
-or a commitment to a release date. Version 0.13.2 already provides compound suites,
-suite connection editing, structured execution diagnostics, and CSV/JSON result
-export; the items below build on that foundation.
+Implementation and acceptance status belongs in issues and pull requests. A feature
+described here is not a support claim unless the README and capability catalog expose
+it as supported behavior.
 
 ## Direction and priorities
 
