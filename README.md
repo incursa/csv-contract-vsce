@@ -4,10 +4,7 @@
 
 Define reusable YAML validations for files and SQL Server tables, edit them visually in VS Code, and run the same validations interactively or in unattended workflows. New definitions can use the generic `*.validation.yaml` and `*.validationsuite.yaml` names. Existing `*.csvtest.yaml` and `*.csvsuite.yaml` files remain fully supported without migration.
 
-This project is built and verified by a dedicated Fleet worker.
-Pull request checks report the Fleet approval state.
-
-## Portable runner and review reports in 0.27
+## Portable runner and review reports
 
 The Windows standalone runner uses the same validation engine as VS Code. Open a
 definition or suite, confirm its targets, run or cancel, and download an offline
@@ -43,8 +40,9 @@ See [Standalone runner](docs/STANDALONE-RUNNER.md),
 [SQL baseline metadata](docs/SQL-BASELINE-METADATA.md), and
 [controlled cross-connection checks](docs/CROSS-CONNECTION-VALIDATION.md).
 
-The executable is an unsigned local build. SQL drivers, Windows authentication,
-and clean-machine acceptance are separate from synthetic/local verification.
+Locally built executables may be unsigned. SQL drivers and Windows authentication
+remain environment prerequisites; synthetic checks do not establish compatibility
+with a particular machine or database.
 
 ## Validator workflows
 
@@ -56,9 +54,9 @@ Suite controls include connection provenance and bulk editing, metadata prefligh
 selective reruns, searchable results, local history, bounded row evidence, and
 same-connection cross-table checks. Results can be reviewed historically in
 read-only mode and exported as JSON, CSV, or an Excel validation package. See
-[Validator workflows](docs/VALIDATOR-WORKFLOWS.md) for formats, defaults, examples
-and current limits; [roadmap status](docs/VALIDATOR-ROADMAP.md) identifies the
-remaining work. The [validation capability catalog](docs/VALIDATION-CAPABILITY-CATALOG.md)
+[Validator workflows](docs/VALIDATOR-WORKFLOWS.md) for formats, defaults, examples,
+and support boundaries; [validator design requirements](docs/VALIDATOR-ROADMAP.md)
+records the durable product rules. The [validation capability catalog](docs/VALIDATION-CAPABILITY-CATALOG.md)
 maps business questions to the supported row, group, ordered, lifecycle and cross-source
 test forms. Baselines change only through explicit reviewed acceptance.
 
@@ -204,8 +202,6 @@ Requires Visual Studio Code `^1.110.0`.
 4. Use the saved target, add more file paths or URLs, or choose temporary targets with **Select test CSV**.
 5. Select **Run tests** to validate every active target.
 
-Changes can be delivered by the Fleet worker.
-
 The Workbench opens a run view while targets execute in parallel. It shows rows read and groups validated for each target; once a target has been read, grouped checks show progress against its known row count. Workbench runs retain all available issue details for export by default. Set `csvContract.maxRetainedIssues` in VS Code settings to a positive number if you want a retention cap. The results table shows the first 500 matching details while export includes every retained detail. SQL aggregate checks report failure counts rather than one detail for every matching row.
 
 Generated contracts are deliberately conservative: they capture the observed columns and include sample row and cell assertions without guessing business rules. You decide which columns are required, unique, nullable, length-limited, or restricted to known values.
@@ -258,4 +254,4 @@ Use an ordered `*.csvsuite.yaml` master to reference contracts with different sc
 
 ## Save and reload comparisons
 
-Use **Save comparison setup** in comparison results and **CSV Contract: Load Comparison Setup** in the Command Palette. Shared keyed CSV setups can also run in SSMS Database Tools 0.27.5. See [the format and compatibility guide](docs/comparison-setups.md) for supported conversions, relative paths, SQL limitations and legacy options.
+Use **Save comparison setup** in comparison results and **CSV Contract: Load Comparison Setup** in the Command Palette. Shared keyed CSV setups can also run in compatible SSMS Database Tools releases. See [the format and compatibility guide](docs/comparison-setups.md) for supported conversions, relative paths, SQL limitations and legacy options.
